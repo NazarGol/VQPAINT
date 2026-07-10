@@ -1,16 +1,15 @@
-/* polotno M2.5 frontend.
+/* VQPAINT frontend (U0 layout: tool rail / inspector / status strip).
    View transform: screen = world * k + (px, py). Last-fetched view is a
    sprite pinned to its world rect; pan/zoom move it locally, a debounced
-   refetch swaps in fresh pixels.
-   Tools: place (soft square), brush (freeform mask), image (place a PNG
-   and VQGAN-ify it in), wand (select similar color, generate into it).
-   Right/middle drag always pans. */
+   refetch swaps in fresh pixels. The canvas/fetch/paint pipeline is
+   unchanged from earlier milestones — U0 is chrome only. */
 
 let WORLD = 8192;
 
 const app = new PIXI.Application({
-  resizeTo: window, background: 0x0e0e12, antialias: true,
+  resizeTo: window, background: 0x101014, antialias: true,
 });
+app.view.className = "pixi";
 document.body.appendChild(app.view);
 
 const viewSprite = new PIXI.Sprite(PIXI.Texture.EMPTY);
@@ -28,16 +27,24 @@ let k = 0.1, px = 40, py = 40;
 let fetchRect = null;
 let activeJobs = [];
 let mouse = { x: -1e9, y: -1e9 };
-let tool = "place";                 // 'place' | 'brush' | 'image' | 'wand'
-let strokes = [];                   // brush: [{r, pts:[{x,y}..]}] world coords
-let selection = null;               // wand: {bbox, mask_png}
-let importImg = null;               // image: {b64, w, h, texture}
-let bleedFromPt = null;             // [x, y] world or null
+let tool = "place";                 // 'place' | 'brush' | 'wand' | 'image'
+let strokes = [];
+let selection = null;               // {bbox, mask_png}
+let importImg = null;               // {b64, w, h, texture, name}
+let bleedFromPt = null;
 let pickingBleed = false;
+let spaceHeld = false;
 
 const $ = (id) => document.getElementById(id);
 const worldX = (sx) => (sx - px) / k;
 const worldY = (sy) => (sy - py) / k;
+
+const TOOL_HINTS = {
+  place: "— click canvas to paint",
+  brush: "— drag to mark, Enter to generate",
+  wand:  "— click a color to select",
+  image: "— click canvas to place",
+};
 
 function fitWorld() {
   k = Math.min(innerWidth, innerHeight) / WORLD * 0.92;
@@ -52,20 +59,18 @@ function redraw() {
     viewSprite.width = (fetchRect.x1 - fetchRect.x0) * k;
     viewSprite.height = (fetchRect.y1 - fetchRect.y0) * k;
   }
-  border.clear().lineStyle(1, 0x3a3a48, 1).drawRect(px, py, WORLD * k, WORLD * k);
+  border.clear().lineStyle(1, 0x2c2c34, 1).drawRect(px, py, WORLD * k, WORLD * k);
   if (bleedFromPt) {
     border.lineStyle(1.5, 0x6ab8e0, 0.9)
-          .drawCircle(px + bleedFromPt[0] * k, py + bleedFromPt[1] * k, 14)
-          .moveTo(px + bleedFromPt[0] * k - 20, py + bleedFromPt[1] * k)
-          .lineTo(px + bleedFromPt[0] * k + 20, py + bleedFromPt[1] * k);
+          .drawCircle(px + bleedFromPt[0] * k, py + bleedFromPt[1] * k, 14);
   }
 
   strokeGfx.clear();
   for (const s of strokes) {
-    strokeGfx.lineStyle({ width: 2 * s.r * k, color: 0x7fc97a, alpha: 0.3,
+    strokeGfx.lineStyle({ width: 2 * s.r * k, color: 0x8fbf98, alpha: 0.3,
                           cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND });
     if (s.pts.length === 1) {
-      strokeGfx.lineStyle(0).beginFill(0x7fc97a, 0.3)
+      strokeGfx.lineStyle(0).beginFill(0x8fbf98, 0.3)
         .drawCircle(px + s.pts[0].x * k, py + s.pts[0].y * k, s.r * k).endFill();
     } else {
       strokeGfx.moveTo(px + s.pts[0].x * k, py + s.pts[0].y * k);
@@ -86,7 +91,7 @@ function redraw() {
   for (const j of activeJobs) {
     if (!["running", "queued", "error"].includes(j.status)) continue;
     const [bx, by, bw, bh] = j.bbox;
-    const col = j.status === "error" ? 0xe06a6a : j.status === "running" ? 0xe8c46a : 0x8888c8;
+    const col = j.status === "error" ? 0xe06a6a : j.status === "running" ? 0xe0b56a : 0x8888c8;
     jobGfx.lineStyle(1.5, col, 0.9).drawRect(px + bx * k, py + by * k, bw * k, bh * k);
     const label = new PIXI.Text(
       j.status === "running" ? `${j.iter}/${j.iterations}` : j.status,
@@ -98,15 +103,16 @@ function redraw() {
   // cursor preview
   brushGfx.clear();
   imgSprite.visible = false;
-  if (mouse.x > -1e8) {
+  const overUI = document.querySelector("#inspector:hover, #rail:hover, #strip:hover, #jobs:hover");
+  if (mouse.x > -1e8 && !overUI) {
     if (pickingBleed) {
       brushGfx.lineStyle(1.5, 0x6ab8e0, 0.9).drawCircle(mouse.x, mouse.y, 14);
     } else if (tool === "place") {
       const s = +$("size").value * k;
-      brushGfx.lineStyle(1, 0x7fc97a, 0.55)
+      brushGfx.lineStyle(1, 0x8fbf98, 0.55)
               .drawRect(mouse.x - s / 2, mouse.y - s / 2, s, s);
     } else if (tool === "brush") {
-      brushGfx.lineStyle(1, 0x7fc97a, 0.8)
+      brushGfx.lineStyle(1, 0x8fbf98, 0.8)
               .drawCircle(mouse.x, mouse.y, +$("radius").value * k);
     } else if (tool === "image" && importImg) {
       const w = +$("size").value * k;
@@ -114,7 +120,7 @@ function redraw() {
       imgSprite.x = mouse.x - w / 2; imgSprite.y = mouse.y - h / 2;
       imgSprite.width = w; imgSprite.height = h;
       imgSprite.visible = true;
-      brushGfx.lineStyle(1, 0xe0c46a, 0.8)
+      brushGfx.lineStyle(1, 0xe0b56a, 0.8)
               .drawRect(mouse.x - w / 2, mouse.y - h / 2, w, h);
     } else if (tool === "wand") {
       brushGfx.lineStyle(1, 0xc98fe0, 0.9).drawCircle(mouse.x, mouse.y, 6);
@@ -157,12 +163,12 @@ async function fetchView() {
 let down = null, moved = false, panning = false, drawing = null;
 
 app.view.addEventListener("pointerdown", (e) => {
-  if (e.button === 1 || e.button === 2) {
+  if (e.button === 1 || e.button === 2 || spaceHeld) {
     panning = true; down = { x: e.clientX, y: e.clientY };
     return;
   }
   if (e.button !== 0) return;
-  if (pickingBleed) return;  // handled on pointerup
+  if (pickingBleed) return;
   if (tool === "brush") {
     drawing = { r: +$("radius").value, pts: [{ x: worldX(e.clientX), y: worldY(e.clientY) }] };
     strokes.push(drawing);
@@ -190,7 +196,7 @@ window.addEventListener("pointermove", (e) => {
     if (moved) { px += dx; py += dy; down = { x: e.clientX, y: e.clientY }; scheduleFetch(); }
   }
   $("coords").textContent =
-    `${Math.round(worldX(e.clientX))}, ${Math.round(worldY(e.clientY))} · zoom ${k.toFixed(2)}`;
+    `${Math.round(worldX(e.clientX))}, ${Math.round(worldY(e.clientY))} · ${k.toFixed(2)}×`;
   redraw();
 });
 window.addEventListener("pointerup", (e) => {
@@ -225,10 +231,26 @@ app.view.addEventListener("wheel", (e) => {
   redraw(); scheduleFetch();
 }, { passive: false });
 window.addEventListener("resize", () => { redraw(); scheduleFetch(); });
+
+// ---- keyboard -----------------------------------------------------
+
+const SIZE_KEY = { place: ["size", 32], brush: ["radius", 16], wand: ["tolerance", 2], image: ["size", 32] };
+
 window.addEventListener("keydown", (e) => {
-  if (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT") return;
+  if (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.code === "Space") { spaceHeld = true; e.preventDefault(); return; }
   if (e.key === "Escape") { clearPending(); pickingBleed = false; redraw(); }
-  if (e.key === "Enter" && (strokes.length || selection)) generatePending();
+  else if (e.key === "Enter" && (strokes.length || selection)) generatePending();
+  else if (e.key >= "1" && e.key <= "4") setTool(["place", "brush", "wand", "image"][+e.key - 1]);
+  else if (e.key === "[" || e.key === "]") {
+    const [id, step] = SIZE_KEY[tool];
+    const el = $(id);
+    el.value = +el.value + (e.key === "]" ? step : -step);
+    el.dispatchEvent(new Event("input"));
+  }
+});
+window.addEventListener("keyup", (e) => {
+  if (e.code === "Space") spaceHeld = false;
 });
 
 // ---- tools --------------------------------------------------------
@@ -236,11 +258,12 @@ window.addEventListener("keydown", (e) => {
 function setTool(t) {
   tool = t;
   for (const [id, name] of [["toolPlace", "place"], ["toolBrush", "brush"],
-                            ["toolImage", "image"], ["toolWand", "wand"]])
+                            ["toolWand", "wand"], ["toolImage", "image"]])
     $(id).classList.toggle("active", t === name);
-  $("brushRow").style.display = t === "brush" ? "flex" : "none";
-  $("wandRow").style.display = t === "wand" ? "flex" : "none";
-  $("imageRow").style.display = t === "image" ? "block" : "none";
+  document.querySelectorAll(".tool-group[data-tool]").forEach((g) => {
+    g.style.display = g.dataset.tool.split(" ").includes(t) ? "block" : "none";
+  });
+  $("toolTitle").innerHTML = `${t} <span class="hint">${TOOL_HINTS[t]}</span>`;
   if (t !== "brush" && t !== "wand") clearPending();
   redraw();
 }
@@ -248,9 +271,10 @@ $("toolPlace").onclick = () => setTool("place");
 $("toolBrush").onclick = () => setTool("brush");
 $("toolWand").onclick = () => setTool("wand");
 $("toolImage").onclick = () => {
-  if (tool === "image" && importImg) { setTool("place"); return; }
-  $("imageFile").click();
+  if (importImg) setTool("image");
+  else $("imageFile").click();
 };
+$("pickImage").onclick = () => $("imageFile").click();
 $("imageFile").addEventListener("change", async () => {
   const f = $("imageFile").files[0];
   if (!f) return;
@@ -261,8 +285,9 @@ $("imageFile").addEventListener("change", async () => {
   });
   const bmp = await createImageBitmap(f);
   if (importImg && importImg.texture) importImg.texture.destroy(true);
-  importImg = { b64, w: bmp.width, h: bmp.height, texture: PIXI.Texture.from(bmp) };
+  importImg = { b64, w: bmp.width, h: bmp.height, texture: PIXI.Texture.from(bmp), name: f.name };
   imgSprite.texture = importImg.texture;
+  $("imageName").textContent = f.name;
   $("imageFile").value = "";
   setTool("image");
 });
@@ -282,6 +307,13 @@ $("bleedFromClear").onclick = () => {
   $("bleedFromClear").style.display = "none";
   redraw();
 };
+
+$("presetDraft").onclick = () => setIters(80);
+$("presetRefine").onclick = () => setIters(350);
+function setIters(v) {
+  $("iters").value = v;
+  $("iters").dispatchEvent(new Event("input"));
+}
 
 function commonParams() {
   return {
@@ -328,21 +360,24 @@ async function wandSelect(wx, wy) {
     alert(err.detail || `select failed (${res.status})`);
     return;
   }
-  selection = await res.json();
+  await applySelection(await res.json());
+}
+
+async function applySelection(sel) {
+  selection = sel;
   strokes = [];
-  // tinted overlay from the mask
   const raw = await createImageBitmap(
-    await (await fetch(`data:image/png;base64,${selection.mask_png}`)).blob());
+    await (await fetch(`data:image/png;base64,${sel.mask_png}`)).blob());
   const c = document.createElement("canvas");
   c.width = raw.width; c.height = raw.height;
   const ctx = c.getContext("2d");
   ctx.drawImage(raw, 0, 0);
-  ctx.globalCompositeOperation = "multiply";
-  ctx.fillStyle = "#7fc97a";
-  ctx.fillRect(0, 0, c.width, c.height);
   const data = ctx.getImageData(0, 0, c.width, c.height);
-  for (let i = 0; i < data.data.length; i += 4)
-    data.data[i + 3] = data.data[i + 1] > 40 ? 110 : 0;
+  for (let i = 0; i < data.data.length; i += 4) {
+    const v = data.data[i];
+    data.data[i] = 0x8f; data.data[i + 1] = 0xbf; data.data[i + 2] = 0x98;
+    data.data[i + 3] = v > 40 ? 110 : 0;
+  }
   ctx.putImageData(data, 0, 0);
   const old = selSprite.texture;
   selSprite.texture = PIXI.Texture.from(c);
@@ -411,7 +446,7 @@ async function submitPaint(body) {
   return true;
 }
 
-// ---- jobs ---------------------------------------------------------
+// ---- jobs + status strip ------------------------------------------
 
 window.cancelJob = async (id) => { await fetch(`/job/${id}/cancel`, { method: "POST" }); pollJobs(); };
 
@@ -422,8 +457,18 @@ async function pollJobs() {
     const sig = (a) => JSON.stringify(a.map((j) => [j.id, j.status, j.iter]));
     const changed = sig(js) !== sig(activeJobs);
     activeJobs = js;
+    updateStrip();
     if (changed) { renderJobList(js); redraw(); }
   } catch (e) { /* server restarting */ }
+}
+
+function updateStrip() {
+  const running = activeJobs.filter((j) => j.status === "running");
+  const queued = activeJobs.filter((j) => j.status === "queued").length;
+  $("stripJob").textContent = running.length
+    ? `● ${running[0].iter}/${running[0].iterations} ${running[0].prompt?.slice(0, 36) || "(flow)"}` +
+      (queued ? ` · +${queued} queued` : "")
+    : (queued ? `${queued} queued` : "");
 }
 
 function renderJobList(js) {
@@ -440,10 +485,26 @@ function renderJobList(js) {
     </div>`).join("");
 }
 
+async function pollInfo() {
+  try {
+    const info = await (await fetch("/canvas_info")).json();
+    if (info.world !== WORLD) { WORLD = info.world; $("worldSize").value = WORLD; redraw(); }
+    $("stripSave").textContent = info.last_save
+      ? `${info.dirty ? "◌ unsaved · " : ""}saved ${info.last_save.slice(-6)}`
+      : "◌ never saved";
+  } catch (e) { /* offline */ }
+}
+
 setInterval(() => {
   if (activeJobs.some((j) => j.status === "running")) scheduleFetch(0);
 }, 1500);
 setInterval(pollJobs, 500);
+setInterval(pollInfo, 4000);
+
+$("saveNow").onclick = async () => {
+  await fetch("/save", { method: "POST" });
+  pollInfo();
+};
 
 // ---- settings -----------------------------------------------------
 
@@ -481,12 +542,9 @@ $("exportFull").onclick = () => { location.href = exportUrl("full"); };
 // ---- boot ---------------------------------------------------------
 
 (async () => {
-  try {
-    const info = await (await fetch("/canvas_info")).json();
-    WORLD = info.world;
-    $("worldSize").value = WORLD;
-  } catch (e) { /* defaults */ }
+  await pollInfo();
   fitWorld();
+  setTool("place");
   redraw();
   fetchView();
   pollJobs();

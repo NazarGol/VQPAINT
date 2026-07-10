@@ -490,7 +490,9 @@ def index():
 
 @app.get("/canvas_info")
 def canvas_info():
-    return {"world": world, "work_max": WORK_MAX, "max_world": MAX_WORLD, "engine_f": 16}
+    vs = statestore.versions(STATE_DIR)
+    return {"world": world, "work_max": WORK_MAX, "max_world": MAX_WORLD, "engine_f": 16,
+            "last_save": vs[0] if vs else None, "dirty": dirty.is_set()}
 
 
 @app.post("/canvas_size")
