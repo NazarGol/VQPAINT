@@ -54,36 +54,62 @@ job_order: list = []
 job_queue: Queue = Queue()
 engine = None  # created inside the worker thread
 
-# ---- minimal persistence (full named-canvas manager comes with M3) ----
+# ---- crash-safe persistence (versioned, atomic; see statestore.py) ----
+import hashlib
+
+import statestore
+
 STATE_DIR = os.path.join(HERE, "state")
 dirty = threading.Event()
 
 
 def save_state():
-    os.makedirs(STATE_DIR, exist_ok=True)
     with buf_lock:
         c, a, wl = canvas.copy(), coverage.copy(), world
-    for name, arr in (("canvas", c), ("coverage", a)):
-        tmp = os.path.join(STATE_DIR, name + ".tmp.npy")
-        np.save(tmp, arr)
-        os.replace(tmp, os.path.join(STATE_DIR, name + ".npy"))
-    with open(os.path.join(STATE_DIR, "meta.json"), "w") as f:
-        json.dump({"world": wl, "saved": time.time()}, f)
+    return statestore.save(STATE_DIR, c, a, wl)
 
 
 def load_state():
     global canvas, coverage, world
+    got = statestore.load(STATE_DIR)
+    if got is None:
+        print("[state] no usable saved state, starting fresh", flush=True)
+        return
+    c, a, w, name = got
+    canvas, coverage, world = c, a, w
+    print(f"[state] loaded {w}x{w} canvas from {name} "
+          f"({(a > 0).mean() * 100:.1f}% painted)", flush=True)
+
+
+def _log_op(job):
+    """Append-only op log: full provenance of every completed op. Binary
+    payloads are deduplicated into state/blobs/ and referenced by hash."""
     try:
-        with open(os.path.join(STATE_DIR, "meta.json")) as f:
-            meta = json.load(f)
-        c = np.load(os.path.join(STATE_DIR, "canvas.npy"))
-        a = np.load(os.path.join(STATE_DIR, "coverage.npy"))
-        if c.shape[:2] == a.shape and c.shape[0] == meta["world"]:
-            canvas, coverage, world = c, a, meta["world"]
-            print(f"[state] loaded {world}x{world} canvas "
-                  f"({(a > 0).mean() * 100:.1f}% painted)", flush=True)
-    except FileNotFoundError:
-        pass
+        os.makedirs(STATE_DIR, exist_ok=True)
+        rec = {k: v for k, v in job["params"].items()
+               if k not in ("mask_png", "source_png") and v is not None}
+        for key in ("mask_png", "source_png"):
+            b64 = job["params"].get(key)
+            if b64:
+                raw = base64.b64decode(b64)
+                h = hashlib.sha1(raw).hexdigest()[:16]
+                bdir = os.path.join(STATE_DIR, "blobs")
+                os.makedirs(bdir, exist_ok=True)
+                bpath = os.path.join(bdir, h + ".png")
+                if not os.path.exists(bpath):
+                    with open(bpath, "wb") as f:
+                        f.write(raw)
+                        f.flush()
+                        os.fsync(f.fileno())
+                rec[key.replace("_png", "_ref")] = h
+        rec.update({"id": job["id"], "status": job["status"], "bbox": job["bbox"],
+                    "seed": job.get("seed"), "iter": job["iter"], "ts": time.time()})
+        with open(os.path.join(STATE_DIR, "oplog.jsonl"), "a") as f:
+            f.write(json.dumps(rec) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception as e:
+        print(f"[oplog] failed: {e}", flush=True)
 
 
 def autosaver():
@@ -426,6 +452,7 @@ def worker():
                 job["note"] = "retried with low-VRAM decoder"
                 _run_paint(job, force_ckpt=True)
             job["status"] = "stopped" if job.get("stop") else "done"
+            _log_op(job)
         except Exception as e:
             job["status"] = "error"
             job["error"] = f"{type(e).__name__}: {e}"
@@ -476,9 +503,22 @@ def canvas_size(req: SizeReq):
 
 @app.post("/save")
 def save_now():
-    save_state()
+    name = save_state()
     dirty.clear()
-    return {"saved": True}
+    return {"saved": True, "version": name}
+
+
+@app.get("/state/versions")
+def state_versions():
+    out = []
+    for v in statestore.versions(STATE_DIR):
+        try:
+            with open(os.path.join(STATE_DIR, v, "meta.json")) as f:
+                meta = json.load(f)
+            out.append({"version": v, "world": meta["world"], "saved": meta["saved"]})
+        except Exception:
+            out.append({"version": v, "world": None, "saved": None})
+    return out
 
 
 @app.post("/select")
