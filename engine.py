@@ -154,6 +154,7 @@ class Engine:
         cutn=32,
         cut_method="pooling",  # 'pooling' | 'original'
         checkpoint_decoder=False,
+        autocast=True,         # bf16 forward; z, Adam and losses stay fp32
     ):
         self.device = torch.device(device)
         # TF32 matmul + cudnn autotune: measurable speedup, imperceptible
@@ -163,6 +164,7 @@ class Engine:
         self.model = load_vqgan(vqgan_config, vqgan_ckpt).to(self.device)
         self.clip = clip.load(clip_model, jit=False)[0].eval().requires_grad_(False).to(self.device)
         self.checkpoint_decoder = checkpoint_decoder
+        self.autocast = autocast and self.device.type == "cuda"
 
         self.cut_size = self.clip.visual.input_resolution
         self.make_cutouts = self.make_cutouts_for(cutn, cut_method)
@@ -271,12 +273,15 @@ class Engine:
         opt = optim.Adam([z], lr=lr)
         for i in range(1, iterations + 1):
             opt.zero_grad(set_to_none=True)
-            out = self.synth(z)
-            batch = CLIP_NORMALIZE(mc(out))
-            embeds = self.clip.encode_image(batch).float()
+            # bf16 forward only: the recipe (loop, loss geometry, cutouts)
+            # is untouched; losses are computed in fp32
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.autocast):
+                out = self.synth(z)
+                batch = CLIP_NORMALIZE(mc(out))
+                embeds = self.clip.encode_image(batch).float()
             loss = spherical_dist(embeds, target)
             if pixel_hold is not None:
-                loss = loss + h_scale * (h_weight * (out - h_target).pow(2)).mean()
+                loss = loss + h_scale * (h_weight * (out.float() - h_target).pow(2)).mean()
             loss.backward()
             opt.step()
             with torch.no_grad():
@@ -285,8 +290,9 @@ class Engine:
             stopping = stop_flag() if stop_flag else False
             ev = {"i": i, "loss": loss.item()}
             if stopping or i == iterations or i % preview_every == 0 or i in snapshot_iters:
-                with torch.no_grad():
-                    ev["image"] = self.synth(z).detach().cpu()
+                with torch.no_grad(), \
+                     torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.autocast):
+                    ev["image"] = self.synth(z).float().detach().cpu()
             yield ev
             if stopping:
                 return

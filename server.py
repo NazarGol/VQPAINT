@@ -254,7 +254,7 @@ def _bleed_embed(ctx_np, drift):
 def _pick_checkpointing(ww, wh):
     """Plain decoder when VRAM clearly allows; checkpointed otherwise."""
     free, _ = torch.cuda.mem_get_info()
-    est_plain = (1.2 + 22e-6 * ww * wh) * 2**30  # GiB fit: 4.44 @ 384², ~7 @ 512²
+    est_plain = (1.2 + 20e-6 * ww * wh) * 2**30  # GiB fit (bf16): 4.10 @ 384², ~6.4 @ 512²
     return free < est_plain + 0.5 * 2**30
 
 
@@ -271,10 +271,11 @@ def _run_paint(job: dict, force_ckpt=False):
         orig = canvas[y0 : y0 + rh, x0 : x0 + rw].astype(np.float32) / 255.0
         cov = coverage[y0 : y0 + rh, x0 : x0 + rw].astype(np.float32) / 255.0
 
-    # working buffer (multiple of 16, ≤ WORK_MAX per side)
+    # working buffer quantized to multiples of 64 (few distinct shapes ->
+    # cudnn.benchmark autotune cache actually hits), ≤ WORK_MAX per side
     scale = min(1.0, WORK_MAX / max(rw, rh))
-    ww = min(WORK_MAX, max(64, int(round(rw * scale / 16)) * 16))
-    wh = min(WORK_MAX, max(64, int(round(rh * scale / 16)) * 16))
+    ww = min(WORK_MAX, max(64, int(round(rw * scale / 64)) * 64))
+    wh = min(WORK_MAX, max(64, int(round(rh * scale / 64)) * 64))
 
     engine.checkpoint_decoder = True if force_ckpt else _pick_checkpointing(ww, wh)
 
@@ -404,11 +405,13 @@ def _run_paint(job: dict, force_ckpt=False):
     a_out = a_new + a_old * (1.0 - a_new)
     safe = np.maximum(a_out, 1e-6)
 
-    def composite(img_tensor):
+    def composite(img_tensor, final=False):
         arr = img_tensor[0].permute(1, 2, 0).numpy()
         if (ww, wh) != (rw, rh):
             im = Image.fromarray((arr * 255 + 0.5).astype(np.uint8))
-            arr = np.asarray(im.resize((rw, rh), Image.LANCZOS), np.float32) / 255.0
+            # previews take the cheap resample; the committed image is LANCZOS
+            arr = np.asarray(im.resize((rw, rh), Image.LANCZOS if final else Image.BILINEAR),
+                             np.float32) / 255.0
         out = np.where(a_out > 1e-6,
                        (arr * a_new + orig * a_old * (1.0 - a_new)) / safe, orig)
         with buf_lock:
@@ -417,15 +420,19 @@ def _run_paint(job: dict, force_ckpt=False):
         dirty.set()
 
     iters = int(p["iterations"])
-    preview_every = max(4, min(25, iters // 40))
+    preview_every = max(8, min(30, iters // 25))
+    last_img = None
     for ev in engine.optimize(z, target, iters, lr=float(p["lr"]),
                               preview_every=preview_every, make_cutouts=mc,
                               stop_flag=lambda: job.get("stop", False),
                               pixel_hold=pixel_hold):
         if "image" in ev:
-            composite(ev["image"])
+            last_img = ev["image"]
+            composite(last_img)
         job["iter"] = ev["i"]
         job["loss"] = round(ev["loss"], 4)
+    if last_img is not None:
+        composite(last_img, final=True)
 
 
 def worker():

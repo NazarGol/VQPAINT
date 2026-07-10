@@ -46,6 +46,7 @@ def main():
     p.add_argument("--cut-method", default="pooling", choices=["pooling", "original"])
     p.add_argument("--checkpoint-decoder", action="store_true",
                    help="segment-wise gradient checkpointing in the VQGAN decoder (identical output, less VRAM, slower)")
+    p.add_argument("--no-autocast", action="store_true", help="disable bf16 autocast (fp32 forward)")
     p.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "out"))
     args = p.parse_args()
 
@@ -56,7 +57,8 @@ def main():
 
     t0 = time.time()
     engine = Engine(cutn=args.cutn, cut_method=args.cut_method,
-                    checkpoint_decoder=args.checkpoint_decoder)
+                    checkpoint_decoder=args.checkpoint_decoder,
+                    autocast=not args.no_autocast)
     print(f"[load] models loaded in {time.time()-t0:.1f}s", flush=True)
     vram_report("after-load")
 
