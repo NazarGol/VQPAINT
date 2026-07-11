@@ -246,6 +246,7 @@ class PaintReq(BaseModel):
     source_strength: float = 0.6       # how much of the source survives
     bleed_drift: float = 0.0           # seeded excursion in CLIP space
     bleed_from: list[float] | None = None  # [x, y]: bleed from elsewhere
+    edge_chaos: float = 0.5            # 0 = clean ramp, 1 = torn/wispy edge
 
 
 class LatentReq(BaseModel):
@@ -261,6 +262,7 @@ class LatentReq(BaseModel):
     pa: int = 2                        # shift dx | mirror axis | repeat block | neighbor k | bloom passes
     pb: int = 0                        # shift dy
     seed: int | None = None
+    edge_chaos: float = 0.5
 
 
 class RefineReq(BaseModel):
@@ -280,6 +282,7 @@ class RefineReq(BaseModel):
     hold: float = 0.3
     cut_method: str = "original"
     bleed_drift: float = 0.0
+    edge_chaos: float = 0.5
 
 
 class SizeReq(BaseModel):
@@ -301,6 +304,40 @@ class SelectClipReq(BaseModel):
     patch: int = 224                   # reference patch around the click
 
 
+def value_noise(h: int, w: int, seed: int, cells: int = 8, octaves: int = 4) -> np.ndarray:
+    """Hand-rolled fractal value noise in [0,1]: random grids upsampled
+    bicubically and summed over octaves. Deterministic per seed."""
+    rng = np.random.default_rng(seed)
+    out = np.zeros((h, w), np.float32)
+    total = 0.0
+    for o in range(octaves):
+        c = min(max(2, cells * 2 ** o), max(h, w))
+        g = (rng.random((c, c)) * 255).astype(np.uint8)
+        up = Image.fromarray(g).resize((w, h), Image.BICUBIC)
+        amp = 0.55 ** o
+        out += np.asarray(up, np.float32) / 255.0 * amp
+        total += amp
+    return out / total
+
+
+def chaos_mask(mask: np.ndarray, chaos: float, seed: int) -> np.ndarray:
+    """THE MASK IS THE BRUSH: tear the falloff band with value noise so no
+    region reads as a clean primitive. Interior stays 1, deep exterior 0;
+    only the ramp dissolves. chaos 0 = today's clean ramp."""
+    chaos = float(min(1.0, max(0.0, chaos)))
+    if chaos <= 0.0 or mask.max() <= 0:
+        return mask
+    h, w = mask.shape
+    n = value_noise(h, w, seed, cells=7, octaves=4)
+    band = np.clip(4.0 * mask * (1.0 - mask) * 1.6, 0.0, 1.0)  # ~1 across the ramp
+    torn = mask + chaos * 1.5 * band * (n - 0.5)
+    # high chaos also bites wisps out of the ramp itself
+    if chaos > 0.45:
+        n2 = value_noise(h, w, seed + 1, cells=17, octaves=3)
+        torn -= (chaos - 0.45) * 1.3 * band * (n2 < 0.4) * 0.8
+    return np.clip(torn, 0.0, 1.0)
+
+
 def _ramp(size: int, falloff: int) -> np.ndarray:
     ramp = np.ones(size, np.float32)
     f = int(max(0, min(falloff, size // 2)))
@@ -315,9 +352,11 @@ def soft_mask(w: int, h: int, falloff: int) -> np.ndarray:
     return np.minimum.outer(_ramp(h, falloff), _ramp(w, falloff))
 
 
-def _region_and_mask(p):
-    """-> (x0, y0, rw, rh, mask float32 [rh, rw] 0..1), clamped to world."""
+def _region_and_mask(p, seed=0):
+    """-> (x0, y0, rw, rh, mask float32 [rh, rw] 0..1), clamped to world.
+    Every mask's falloff band is noise-torn by edge_chaos (seeded per-op)."""
     falloff = int(p["falloff"])
+    chaos = float(p.get("edge_chaos", 0.5))
     if p.get("bbox"):
         bx, by, bw, bh = [int(v) for v in p["bbox"]]
         x0, y0 = max(0, bx), max(0, by)
@@ -333,11 +372,11 @@ def _region_and_mask(p):
             mask = mask[y0 - by : y1 - by, x0 - bx : x1 - bx]
         else:
             mask = soft_mask(bw, bh, falloff)[y0 - by : y1 - by, x0 - bx : x1 - bx]
-        return x0, y0, x1 - x0, y1 - y0, mask
+        return x0, y0, x1 - x0, y1 - y0, chaos_mask(mask, chaos, seed)
     s = max(64, min(int(p["size"]), world))
     x0 = max(0, min(int(round(p["x"] - s / 2)), world - s))
     y0 = max(0, min(int(round(p["y"] - s / 2)), world - s))
-    return x0, y0, s, s, soft_mask(s, s, falloff)
+    return x0, y0, s, s, chaos_mask(soft_mask(s, s, falloff), chaos, seed)
 
 
 def edge_fill(rgb, cov, device):
@@ -403,12 +442,11 @@ def _pick_checkpointing(ww, wh):
 
 def _run_paint(job: dict, force_ckpt=False):
     p = job["params"]
-    x0, y0, rw, rh, mask = _region_and_mask(p)
-    job["bbox"] = [x0, y0, rw, rh]
-
     seed = p["seed"] if p["seed"] is not None else int(torch.seed() % 2**31)
-    job["seed"] = seed
+    job["seed"] = p["seed"] = seed
     torch.manual_seed(seed)
+    x0, y0, rw, rh, mask = _region_and_mask(p, seed)
+    job["bbox"] = [x0, y0, rw, rh]
 
     with buf_lock:
         orig = canvas[y0 : y0 + rh, x0 : x0 + rw].astype(np.float32) / 255.0
@@ -595,11 +633,11 @@ def _run_refine(job: dict, force_ckpt=False):
     lx0, ly0, lw, lh = bx * s, by * s, bw * s, bh * s
 
     seed = p["seed"] if p["seed"] is not None else int(torch.seed() % 2**31)
-    job["seed"] = seed
+    job["seed"] = p["seed"] = seed
     torch.manual_seed(seed)
 
     falloff = int(p["falloff"]) * s
-    mask = soft_mask(lw, lh, falloff)
+    mask = chaos_mask(soft_mask(lw, lh, falloff), float(p.get("edge_chaos", 0.5)), seed)
 
     # context window (level px, aligned to 2^lvl)
     pad = max(96, min(lw, lh) // 2) // s * s
@@ -715,11 +753,11 @@ def _run_refine(job: dict, force_ckpt=False):
 
 def _run_latent(job: dict):
     p = job["params"]
-    x0, y0, rw, rh, mask = _region_and_mask(p)
-    job["bbox"] = [x0, y0, rw, rh]
     seed = p["seed"] if p["seed"] is not None else int(torch.seed() % 2**31)
-    job["seed"] = seed
+    job["seed"] = p["seed"] = seed
     torch.manual_seed(seed)
+    x0, y0, rw, rh, mask = _region_and_mask(p, seed)
+    job["bbox"] = [x0, y0, rw, rh]
 
     with buf_lock:
         orig = canvas[y0 : y0 + rh, x0 : x0 + rw].astype(np.float32) / 255.0

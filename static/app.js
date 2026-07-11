@@ -559,6 +559,7 @@ function commonParams() {
     cut_method: $("cutmethod").value,
     bleed_drift: +$("drift").value,
     bleed_from: bleedFromPt,
+    edge_chaos: +$("edgechaos").value,
   };
 }
 
@@ -570,6 +571,7 @@ function latentParams() {
     pb: +$("latPb").value,
     falloff: +$("falloff").value,
     seed: $("seed").value.trim() === "" ? null : +$("seed").value,
+    edge_chaos: +$("edgechaos").value,
   };
 }
 
@@ -601,6 +603,7 @@ async function refineAt(wx, wy) {
       iterations: c.iterations, seed: c.seed, lr: c.lr, cutn: c.cutn,
       start_noise: c.start_noise, w_text: c.w_text, w_img: c.w_img,
       hold: c.hold, cut_method: c.cut_method, bleed_drift: c.bleed_drift,
+      edge_chaos: c.edge_chaos,
     }),
   });
   if (!res.ok) {
@@ -919,6 +922,7 @@ for (const [id, out, fmt] of [
   ["wtext", "wtextVal", (v) => (+v).toFixed(2)], ["hold", "holdVal", (v) => (+v).toFixed(2)],
   ["drift", "driftVal", (v) => (+v).toFixed(2)], ["strength", "strengthVal", (v) => (+v).toFixed(2)],
   ["tolerance", "tolVal", (v) => v], ["similarity", "simVal", (v) => (+v).toFixed(2)],
+  ["edgechaos", "chaosVal", (v) => (+v).toFixed(2)],
   ["selRadius", "selRadVal", (v) => v],
 ]) {
   $(id).addEventListener("input", () => { $(out).textContent = fmt($(id).value); redraw(); });
