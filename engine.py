@@ -157,10 +157,12 @@ class Engine:
         autocast=True,         # bf16 forward; z, Adam and losses stay fp32
     ):
         self.device = torch.device(device)
-        # TF32 matmul + cudnn autotune: measurable speedup, imperceptible
-        # numeric change (well below the noise the recipe already injects)
+        # TF32 matmul: measurable speedup, imperceptible numeric change.
+        # cudnn.benchmark measured at ±0.0% steady-state on this card even
+        # with /64-quantized shapes — gated OFF so new region shapes don't
+        # pay an autotune stall.
         torch.set_float32_matmul_precision("high")
-        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.benchmark = False
         self.model = load_vqgan(vqgan_config, vqgan_ckpt).to(self.device)
         self.clip = clip.load(clip_model, jit=False)[0].eval().requires_grad_(False).to(self.device)
         self.checkpoint_decoder = checkpoint_decoder
