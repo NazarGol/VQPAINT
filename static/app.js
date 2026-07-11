@@ -45,7 +45,25 @@ const TOOL_HINTS = {
   wand:  "— select, then generate into it",
   image: "— click canvas to place",
   latent: "— instant token ops, click to apply",
+  refine: "— zoom in, click to add fine detail",
 };
+
+function refineLevel() {
+  const sel = +$("refineLevel").value;
+  if (sel > 0) return sel;
+  return Math.max(1, Math.min(4, Math.ceil(Math.log2(Math.max(1.01, k)))));
+}
+
+function refineMaxSize() { return Math.floor(2304 / 2 ** refineLevel()); }
+
+function updateRefineHint() {
+  if (tool !== "refine") return;
+  const lv = refineLevel(), s = 2 ** lv;
+  const max = refineMaxSize();
+  const size = Math.min(+$("size").value, max);
+  $("refineHint").textContent =
+    `${s}× — ${size} canvas px become ${size * s} fine px (max area ${max})`;
+}
 
 const LATENT_PARAMS = {
   spray:    { amount: true,  pa: null,          pb: false },
@@ -156,6 +174,11 @@ function redraw() {
       const s = +$("size").value * k;
       brushGfx.lineStyle(1, 0xc98fe0, 0.7)
               .drawRect(mouse.x - s / 2, mouse.y - s / 2, s, s);
+    } else if (tool === "refine") {
+      const s = Math.min(+$("size").value, refineMaxSize()) * k;
+      brushGfx.lineStyle(1, 0x6ab8e0, 0.8)
+              .drawRect(mouse.x - s / 2, mouse.y - s / 2, s, s);
+      updateRefineHint();
     }
   }
 }
@@ -270,6 +293,8 @@ window.addEventListener("pointerup", (e) => {
     similarSelect(wx, wy);
   } else if (tool === "latent") {
     submitLatent({ ...latentParams(), x: wx, y: wy, size: +$("size").value });
+  } else if (tool === "refine") {
+    refineAt(wx, wy);
   }
   down = null;
 });
@@ -303,7 +328,7 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "Space") { spaceHeld = true; e.preventDefault(); return; }
   if (e.key === "Escape") { clearPending(); pickingBleed = false; redraw(); }
   else if (e.key === "Enter" && (strokes.length || selection)) generatePending();
-  else if (e.key >= "1" && e.key <= "5") setTool(["place", "brush", "wand", "image", "latent"][+e.key - 1]);
+  else if (e.key >= "1" && e.key <= "6") setTool(["place", "brush", "wand", "image", "latent", "refine"][+e.key - 1]);
   else if (e.key === "[" || e.key === "]") {
     const [id, step] = sizeKeyFor();
     const el = $(id);
@@ -321,7 +346,7 @@ function setTool(t) {
   tool = t;
   for (const [id, name] of [["toolPlace", "place"], ["toolBrush", "brush"],
                             ["toolWand", "wand"], ["toolImage", "image"],
-                            ["toolLatent", "latent"]])
+                            ["toolLatent", "latent"], ["toolRefine", "refine"]])
     $(id).classList.toggle("active", t === name);
   document.querySelectorAll(".tool-group[data-tool]").forEach((g) => {
     g.style.display = g.dataset.tool.split(" ").includes(t) ? "block" : "none";
@@ -334,6 +359,31 @@ $("toolPlace").onclick = () => setTool("place");
 $("toolBrush").onclick = () => setTool("brush");
 $("toolWand").onclick = () => setTool("wand");
 $("toolLatent").onclick = () => setTool("latent");
+$("toolRefine").onclick = () => setTool("refine");
+$("refineLevel").addEventListener("change", updateRefineHint);
+
+async function refineAt(wx, wy) {
+  const lv = refineLevel();
+  const size = Math.min(+$("size").value, refineMaxSize());
+  const c = commonParams();
+  const ok = await fetch("/refine", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      bbox: [Math.round(wx - size / 2), Math.round(wy - size / 2), size, size],
+      level: lv,
+      prompt: c.prompt, falloff: Math.max(8, Math.round(c.falloff / 2)),
+      iterations: c.iterations, seed: c.seed, lr: c.lr, cutn: c.cutn,
+      start_noise: c.start_noise, w_text: c.w_text, w_img: c.w_img,
+      hold: c.hold, cut_method: c.cut_method, bleed_drift: c.bleed_drift,
+    }),
+  });
+  if (!ok.ok) {
+    const err = await ok.json().catch(() => ({}));
+    alert(err.detail || `refine failed (${ok.status})`);
+    return;
+  }
+  pollJobs();
+}
 
 $("latentOp").addEventListener("change", () => {
   const cfg = LATENT_PARAMS[$("latentOp").value];

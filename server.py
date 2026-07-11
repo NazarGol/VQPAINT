@@ -49,6 +49,95 @@ canvas = np.zeros((world, world, 3), np.uint8)
 coverage = np.zeros((world, world), np.uint8)
 buf_lock = threading.Lock()
 
+# ---- resolution pyramid: sparse finer levels above L0 -----------------
+# Level k stores pixels at 2^k per world unit, in sparse storage chunks.
+# Chunks are a STORAGE unit only — ops stay arbitrary-position masked
+# regions; no tile lattice ever reaches the image.
+CHUNK = 512
+MAX_LEVEL = 4
+
+
+class LevelStore:
+    def __init__(self, k):
+        self.k = k
+        self.scale = 2 ** k
+        self.rgb = {}    # (cy, cx) -> uint8 [CHUNK, CHUNK, 3]
+        self.alpha = {}  # (cy, cx) -> uint8 [CHUNK, CHUNK]
+
+    def _spans(self, x0, y0, w, h):
+        for cy in range(y0 // CHUNK, (y0 + h - 1) // CHUNK + 1):
+            for cx in range(x0 // CHUNK, (x0 + w - 1) // CHUNK + 1):
+                gx, gy = cx * CHUNK, cy * CHUNK
+                sx0, sy0 = max(x0, gx), max(y0, gy)
+                sx1, sy1 = min(x0 + w, gx + CHUNK), min(y0 + h, gy + CHUNK)
+                yield (cy, cx), (sy0 - gy, sy1 - gy, sx0 - gx, sx1 - gx), \
+                      (sy0 - y0, sy1 - y0, sx0 - x0, sx1 - x0)
+
+    def read(self, x0, y0, w, h):
+        rgb = np.zeros((h, w, 3), np.uint8)
+        a = np.zeros((h, w), np.uint8)
+        for key, (gy0, gy1, gx0, gx1), (dy0, dy1, dx0, dx1) in self._spans(x0, y0, w, h):
+            if key in self.alpha:
+                rgb[dy0:dy1, dx0:dx1] = self.rgb[key][gy0:gy1, gx0:gx1]
+                a[dy0:dy1, dx0:dx1] = self.alpha[key][gy0:gy1, gx0:gx1]
+        return rgb, a
+
+    def write(self, x0, y0, rgb, a):
+        h, w = a.shape
+        for key, (gy0, gy1, gx0, gx1), (dy0, dy1, dx0, dx1) in self._spans(x0, y0, w, h):
+            if key not in self.alpha:
+                self.rgb[key] = np.zeros((CHUNK, CHUNK, 3), np.uint8)
+                self.alpha[key] = np.zeros((CHUNK, CHUNK), np.uint8)
+            self.rgb[key][gy0:gy1, gx0:gx1] = rgb[dy0:dy1, dx0:dx1]
+            self.alpha[key][gy0:gy1, gx0:gx1] = a[dy0:dy1, dx0:dx1]
+
+    def chunks_touching(self, wx0, wy0, wx1, wy1):
+        """Existing chunk keys intersecting a WORLD-coordinate rect."""
+        s = self.scale
+        for (cy, cx) in self.alpha.keys():
+            gx0, gy0 = cx * CHUNK / s, cy * CHUNK / s
+            if gx0 < wx1 and gx0 + CHUNK / s > wx0 and gy0 < wy1 and gy0 + CHUNK / s > wy0:
+                yield (cy, cx)
+
+
+levels = {k: LevelStore(k) for k in range(1, MAX_LEVEL + 1)}
+
+
+def read_visible(level, lx0, ly0, lw, lh):
+    """What is VISIBLE in a level-k rect (level-pixel coords, aligned to
+    2^k): all coarser levels upsampled and overlaid, then level k itself.
+    Returns (rgb f32 0..1 composited, visible_alpha f32, fine_rgb f32,
+    fine_alpha f32)."""
+    s = 2 ** level
+    wx0, wy0, ww_, wh_ = lx0 // s, ly0 // s, lw // s, lh // s
+    with buf_lock:
+        base = canvas[wy0:wy0 + wh_, wx0:wx0 + ww_].copy()
+        a0 = coverage[wy0:wy0 + wh_, wx0:wx0 + ww_].copy()
+    up = Image.fromarray(base).resize((lw, lh), Image.BICUBIC)
+    ua = Image.fromarray(a0).resize((lw, lh), Image.BILINEAR)
+    # premultiplied accumulation, coarse -> fine
+    va = np.asarray(ua, np.float32) / 255.0
+    pm = (np.asarray(up, np.float32) / 255.0) * va[..., None]
+    for j in range(1, level + 1):
+        st = levels[j]
+        if not st.alpha:
+            continue
+        f = 2 ** (level - j)
+        jrgb, ja = st.read(lx0 // f, ly0 // f, lw // f, lh // f)
+        if not ja.any():
+            continue
+        if f > 1:
+            jrgb = np.asarray(Image.fromarray(jrgb).resize((lw, lh), Image.BICUBIC), np.uint8)
+            ja = np.asarray(Image.fromarray(ja).resize((lw, lh), Image.BILINEAR), np.uint8)
+        aj = ja.astype(np.float32)[..., None] / 255.0
+        pm = (jrgb.astype(np.float32) / 255.0) * aj + pm * (1.0 - aj)
+        va = aj[..., 0] + va * (1.0 - aj[..., 0])
+    fine = levels[level].read(lx0, ly0, lw, lh)
+    fine_rgb = fine[0].astype(np.float32) / 255.0
+    fine_a = fine[1].astype(np.float32) / 255.0
+    rgb = pm / np.maximum(va[..., None], 1e-6)
+    return np.clip(rgb, 0, 1), np.clip(va, 0, 1), fine_rgb, fine_a
+
 jobs: dict = {}
 job_order: list = []
 job_queue: Queue = Queue()
@@ -66,7 +155,10 @@ dirty = threading.Event()
 def save_state():
     with buf_lock:
         c, a, wl = canvas.copy(), coverage.copy(), world
-    return statestore.save(STATE_DIR, c, a, wl)
+        lv = {k: {key: (st.rgb[key].copy(), st.alpha[key].copy())
+                  for key in st.alpha}
+              for k, st in levels.items() if st.alpha}
+    return statestore.save(STATE_DIR, c, a, wl, lv)
 
 
 def load_state():
@@ -75,10 +167,17 @@ def load_state():
     if got is None:
         print("[state] no usable saved state, starting fresh", flush=True)
         return
-    c, a, w, name = got
+    c, a, w, lv, name = got
     canvas, coverage, world = c, a, w
+    nchunks = 0
+    for k, chunks in lv.items():
+        if 1 <= k <= MAX_LEVEL:
+            for key, (rgb, alpha) in chunks.items():
+                levels[k].rgb[key] = rgb
+                levels[k].alpha[key] = alpha
+                nchunks += 1
     print(f"[state] loaded {w}x{w} canvas from {name} "
-          f"({(a > 0).mean() * 100:.1f}% painted)", flush=True)
+          f"({(a > 0).mean() * 100:.1f}% painted, {nchunks} fine chunks)", flush=True)
 
 
 def _log_op(job):
@@ -160,6 +259,25 @@ class LatentReq(BaseModel):
     pa: int = 2                        # shift dx | mirror axis | repeat block | neighbor k | bloom passes
     pb: int = 0                        # shift dy
     seed: int | None = None
+
+
+class RefineReq(BaseModel):
+    """Raise a region's detail level: a masked paint op at 2^level px per
+    world unit, seeded by whatever is visible below."""
+    bbox: list[int]                    # [x0, y0, w, h] world px
+    level: int = 1                     # 1..MAX_LEVEL
+    prompt: str = ""
+    falloff: int = 32                  # world px (scaled to the level)
+    iterations: int = 250
+    seed: int | None = None
+    lr: float = 0.1
+    cutn: int = 32
+    start_noise: float = 0.0
+    w_text: float = 1.0
+    w_img: float = 0.6
+    hold: float = 0.3
+    cut_method: str = "original"
+    bleed_drift: float = 0.0
 
 
 class SizeReq(BaseModel):
@@ -458,6 +576,141 @@ def _run_paint(job: dict, force_ckpt=False):
         composite(last_img, final=True)
 
 
+def _run_refine(job: dict, force_ckpt=False):
+    """Masked paint op at a finer level: the region is seeded by whatever
+    is visible below it (parents upsampled + existing fine), HOLD pins the
+    seams — including across the resolution boundary, which is a known
+    glitch site and stays that way."""
+    p = job["params"]
+    lvl = int(p["level"])
+    s = 2 ** lvl
+    bx, by, bw, bh = [int(v) for v in p["bbox"]]
+    bx, by = max(0, bx), max(0, by)
+    bw, bh = min(bw, world - bx), min(bh, world - by)
+    if bw < 8 or bh < 8:
+        raise ValueError("refine area outside canvas or too small")
+    job["bbox"] = [bx, by, bw, bh]
+    lx0, ly0, lw, lh = bx * s, by * s, bw * s, bh * s
+
+    seed = p["seed"] if p["seed"] is not None else int(torch.seed() % 2**31)
+    job["seed"] = seed
+    torch.manual_seed(seed)
+
+    falloff = int(p["falloff"]) * s
+    mask = soft_mask(lw, lh, falloff)
+
+    # context window (level px, aligned to 2^lvl)
+    pad = max(96, min(lw, lh) // 2) // s * s
+    cx0, cy0 = max(0, lx0 - pad), max(0, ly0 - pad)
+    cx1 = min(world * s, lx0 + lw + pad)
+    cy1 = min(world * s, ly0 + lh + pad)
+    cw, ch = cx1 - cx0, cy1 - cy0
+
+    # downscale huge context reads before compositing
+    ctx_rgb, ctx_va, _, _ = read_visible(lvl, cx0, cy0, cw, ch)
+    _, _, fine_rgb, fine_a = read_visible(lvl, lx0, ly0, lw, lh)
+    reg_rgb = ctx_rgb[ly0 - cy0 : ly0 - cy0 + lh, lx0 - cx0 : lx0 - cx0 + lw]
+    reg_va = ctx_va[ly0 - cy0 : ly0 - cy0 + lh, lx0 - cx0 : lx0 - cx0 + lw]
+
+    scale = min(1.0, WORK_MAX / max(lw, lh))
+    ww = min(WORK_MAX, max(64, int(round(lw * scale / 64)) * 64))
+    wh = min(WORK_MAX, max(64, int(round(lh * scale / 64)) * 64))
+    engine.checkpoint_decoder = True if force_ckpt else _pick_checkpointing(ww, wh)
+
+    # INIT: encode what is visible (parent-seeded hallucination); re-roll
+    # only truly information-less tokens; user start_noise on top
+    has_vis = reg_va > 0.01
+    ty, tx = wh // engine.f, ww // engine.f
+    if has_vis.any():
+        cs = min(1.0, 768 / max(ch, cw))
+        cw2, ch2 = max(16, round(cw * cs)), max(16, round(ch * cs))
+        c_rgb = np.asarray(Image.fromarray((ctx_rgb * 255 + 0.5).astype(np.uint8))
+                           .resize((cw2, ch2), Image.LANCZOS), np.float32) / 255.0
+        c_va = np.asarray(Image.fromarray((ctx_va * 255 + 0.5).astype(np.uint8))
+                          .resize((cw2, ch2), Image.BILINEAR), np.float32) / 255.0
+        ctx_filled, ctx_info = edge_fill(c_rgb, c_va, engine.device)
+        wx0 = int(round((lx0 - cx0) * cs)); wy0 = int(round((ly0 - cy0) * cs))
+        wx1 = int(round((lx0 + lw - cx0) * cs)); wy1 = int(round((ly0 + lh - cy0) * cs))
+        init = ctx_filled[wy0:max(wy1, wy0 + 1), wx0:max(wx1, wx0 + 1)]
+        img = Image.fromarray((init * 255 + 0.5).astype(np.uint8)).resize((ww, wh), Image.LANCZOS)
+        t = torch.from_numpy(np.asarray(img, np.float32) / 255.0).permute(2, 0, 1)[None]
+        z = engine.z_from_pixels(t)
+        info_win = ctx_info[wy0:max(wy1, wy0 + 1), wx0:max(wx1, wx0 + 1)]
+        ii = Image.fromarray((np.clip(info_win, 0, 1) * 255).astype(np.uint8))
+        info_t = torch.from_numpy(np.asarray(ii.resize((tx, ty), Image.BILINEAR),
+                                             np.float32) / 255.0).to(engine.device)
+        p_reroll = ((0.25 - info_t) / 0.25).clamp(0, 1) * 0.95
+        noise = min(1.0, max(0.0, float(p["start_noise"])))
+        sel = (torch.rand(ty, tx, device=engine.device) < p_reroll) | \
+              (torch.rand(ty, tx, device=engine.device) < noise)
+        if bool(sel.any()):
+            zr = engine.z_from_random(tx, ty)
+            z[:, :, sel] = zr[:, :, sel]
+    else:
+        ctx_filled = None
+        z = engine.z_from_random(tx, ty)
+    z.requires_grad_(True)
+
+    targets = []
+    prompt = p["prompt"].strip()
+    if prompt and float(p["w_text"]) > 0:
+        targets.append((engine.embed_text(prompt), float(p["w_text"])))
+    if ctx_filled is not None and float(p["w_img"]) > 0:
+        targets.append((_bleed_embed(ctx_filled, p.get("bleed_drift", 0)),
+                        float(p["w_img"])))
+    if not targets:
+        raise ValueError("nothing to aim at: give a prompt or refine over existing paint")
+    target = engine.blend_targets(targets)
+    mc = engine.make_cutouts_for(int(p["cutn"]), p.get("cut_method", "original"))
+
+    pixel_hold = None
+    if float(p["hold"]) > 0 and has_vis.any():
+        m_w = np.asarray(Image.fromarray((mask * 255 + 0.5).astype(np.uint8))
+                         .resize((ww, wh), Image.BILINEAR), np.float32) / 255.0
+        v_w = np.asarray(Image.fromarray((reg_va * 255 + 0.5).astype(np.uint8))
+                         .resize((ww, wh), Image.BILINEAR), np.float32) / 255.0
+        o_w = np.asarray(Image.fromarray((reg_rgb * 255 + 0.5).astype(np.uint8))
+                         .resize((ww, wh), Image.LANCZOS), np.float32) / 255.0
+        pixel_hold = (torch.from_numpy(o_w).permute(2, 0, 1)[None],
+                      torch.from_numpy((1.0 - m_w) * v_w)[None, None],
+                      float(p["hold"]))
+
+    # composite into the LEVEL plane: straight-alpha OVER existing fine
+    a_new = mask[..., None]
+    a_old = fine_a[..., None]
+    a_out = a_new + a_old * (1.0 - a_new)
+    safe = np.maximum(a_out, 1e-6)
+    store = levels[lvl]
+
+    def composite(img_tensor, final=False):
+        arr = img_tensor[0].permute(1, 2, 0).numpy()
+        if (ww, wh) != (lw, lh):
+            im = Image.fromarray((arr * 255 + 0.5).astype(np.uint8))
+            arr = np.asarray(im.resize((lw, lh), Image.LANCZOS if final else Image.BILINEAR),
+                             np.float32) / 255.0
+        res = np.where(a_out > 1e-6,
+                       (arr * a_new + fine_rgb * a_old * (1.0 - a_new)) / safe, fine_rgb)
+        with buf_lock:
+            store.write(lx0, ly0, (np.clip(res, 0, 1) * 255 + 0.5).astype(np.uint8),
+                        (a_out[..., 0] * 255 + 0.5).astype(np.uint8))
+        dirty.set()
+
+    iters = int(p["iterations"])
+    preview_every = max(8, min(30, iters // 25))
+    last_img = None
+    for ev in engine.optimize(z, target, iters, lr=float(p["lr"]),
+                              preview_every=preview_every, make_cutouts=mc,
+                              stop_flag=lambda: job.get("stop", False),
+                              pixel_hold=pixel_hold):
+        if "image" in ev:
+            last_img = ev["image"]
+            composite(last_img)
+        job["iter"] = ev["i"]
+        job["loss"] = round(ev["loss"], 4)
+    if last_img is not None:
+        composite(last_img, final=True)
+
+
 def _run_latent(job: dict):
     p = job["params"]
     x0, y0, rw, rh, mask = _region_and_mask(p)
@@ -572,16 +825,17 @@ def worker():
         job["status"] = "running"
         job["started"] = time.time()
         try:
-            run = _run_latent if job["params"].get("op") else _run_paint
+            prm = job["params"]
+            run = (_run_latent if prm.get("op") else
+                   _run_refine if prm.get("level") else _run_paint)
             try:
                 run(job)
             except torch.OutOfMemoryError:
                 torch.cuda.empty_cache()
                 job["note"] = "retried with low-VRAM decoder"
-                if run is _run_paint:
-                    _run_paint(job, force_ckpt=True)
-                else:
+                if run is _run_latent:
                     raise
+                run(job, force_ckpt=True)
             job["status"] = "stopped" if job.get("stop") else "done"
             _log_op(job)
         except Exception as e:
@@ -695,6 +949,28 @@ def select(req: SelectReq):
         "mask_png": base64.b64encode(buf.getvalue()).decode(),
         "area": int(mask.sum()),
     }
+
+
+@app.post("/refine")
+def refine(req: RefineReq):
+    if not (1 <= req.level <= MAX_LEVEL):
+        raise HTTPException(400, f"level must be 1..{MAX_LEVEL}")
+    s = 2 ** req.level
+    if max(req.bbox[2], req.bbox[3]) * s > 2304:
+        raise HTTPException(400,
+            f"at {s}× the area must be ≤ {2304 // s} world px per side — zoom in further")
+    job = {
+        "id": uuid.uuid4().hex[:12],
+        "status": "queued",
+        "iter": 0,
+        "params": {**req.model_dump()},
+        "bbox": req.bbox,
+        "created": time.time(),
+    }
+    jobs[job["id"]] = job
+    job_order.append(job["id"])
+    job_queue.put(job)
+    return {"job_id": job["id"], "bbox": job["bbox"]}
 
 
 @app.post("/latent_op")
@@ -834,8 +1110,9 @@ def _job_public(j):
         "prompt": j["params"]["prompt"], "seed": j.get("seed"),
         "loss": j.get("loss"), "error": j.get("error"), "note": j.get("note"),
         "kind": ("latent " + j["params"]["op"]) if j["params"].get("op") else
-                ("image" if j["params"].get("source_png") else
-                 ("brush" if j["params"].get("mask_png") else "region")),
+                (f"refine {2 ** j['params']['level']}×" if j["params"].get("level") else
+                 ("image" if j["params"].get("source_png") else
+                  ("brush" if j["params"].get("mask_png") else "region"))),
     }
 
 
@@ -876,6 +1153,39 @@ def view(x0: float, y0: float, x1: float, y1: float, w: int, h: int):
         dh = max(1, round((cy1 - cy0) * sy))
         img = img.resize((dw, dh), Image.NEAREST if sx >= 1.0 else Image.LANCZOS)
         out.paste(img, (round((cx0 - x0) * sx), round((cy0 - y0) * sy)))
+
+        # LOD: overlay finer levels chunk by chunk, coarse -> fine
+        base = np.asarray(out, np.float32)
+        touched = False
+        for lvl in range(1, MAX_LEVEL + 1):
+            st = levels[lvl]
+            s = st.scale
+            for (cy, cxk) in list(st.chunks_touching(ix0, iy0, ix1, iy1)):
+                crgb = st.rgb[(cy, cxk)]
+                ca = st.alpha[(cy, cxk)]
+                # chunk rect in world, clipped to the view rect
+                gwx0, gwy0 = cxk * CHUNK / s, cy * CHUNK / s
+                vx0, vy0 = max(gwx0, x0), max(gwy0, y0)
+                vx1 = min(gwx0 + CHUNK / s, x1)
+                vy1 = min(gwy0 + CHUNK / s, y1)
+                if vx1 <= vx0 or vy1 <= vy0:
+                    continue
+                # source pixels inside the chunk
+                px0 = int((vx0 - gwx0) * s); px1 = max(px0 + 1, int((vx1 - gwx0) * s))
+                py0 = int((vy0 - gwy0) * s); py1 = max(py0 + 1, int((vy1 - gwy0) * s))
+                # destination in output px
+                dx0 = int((vx0 - x0) * sx); dx1 = max(dx0 + 1, int(round((vx1 - x0) * sx)))
+                dy0 = int((vy0 - y0) * sy); dy1 = max(dy0 + 1, int(round((vy1 - y0) * sy)))
+                dx1 = min(dx1, w); dy1 = min(dy1, h)
+                if dx1 <= dx0 or dy1 <= dy0:
+                    continue
+                rs = (dx1 - dx0, dy1 - dy0)
+                up_ = np.asarray(Image.fromarray(crgb[py0:py1, px0:px1]).resize(rs, Image.LANCZOS if rs[0] < px1 - px0 else Image.NEAREST), np.float32)
+                ua_ = np.asarray(Image.fromarray(ca[py0:py1, px0:px1]).resize(rs, Image.BILINEAR), np.float32)[..., None] / 255.0
+                base[dy0:dy1, dx0:dx1] = up_ * ua_ + base[dy0:dy1, dx0:dx1] * (1.0 - ua_)
+                touched = True
+        if touched:
+            out = Image.fromarray((base + 0.5).astype(np.uint8))
 
     buf = io.BytesIO()
     out.save(buf, "PNG")

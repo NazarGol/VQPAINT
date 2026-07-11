@@ -48,8 +48,9 @@ def prune(state_dir, keep=KEEP):
         shutil.rmtree(os.path.join(state_dir, v), ignore_errors=True)
 
 
-def save(state_dir, canvas, coverage, world):
-    """Returns the new version name. Atomic; safe to call concurrently."""
+def save(state_dir, canvas, coverage, world, levels=None):
+    """Returns the new version name. Atomic; safe to call concurrently.
+    levels: optional {k: {(cy, cx): (rgb, alpha)}} sparse pyramid chunks."""
     global _last_ver
     with _save_lock:
         os.makedirs(state_dir, exist_ok=True)
@@ -65,6 +66,17 @@ def save(state_dir, canvas, coverage, world):
         for fname, arr in (("canvas.npy", canvas), ("coverage.npy", coverage)):
             with open(os.path.join(tmp, fname), "wb") as f:
                 np.save(f, arr)
+                f.flush()
+                os.fsync(f.fileno())
+        for k, chunks in (levels or {}).items():
+            if not chunks:
+                continue
+            payload = {}
+            for (cy, cx), (rgb, alpha) in chunks.items():
+                payload[f"r_{cy}_{cx}"] = rgb
+                payload[f"a_{cy}_{cx}"] = alpha
+            with open(os.path.join(tmp, f"level{k}.npz"), "wb") as f:
+                np.savez(f, **payload)
                 f.flush()
                 os.fsync(f.fileno())
         with open(os.path.join(tmp, "meta.json"), "w") as f:
@@ -98,13 +110,25 @@ def _try_load(state_dir, name):
     if not (c.ndim == 3 and c.shape[2] == 3 and c.shape[:2] == a.shape
             and c.shape[0] == c.shape[1] == int(meta["world"])):
         raise ValueError(f"inconsistent shapes {c.shape} / {a.shape} / world {meta['world']}")
-    return c, a, int(meta["world"])
+    levels = {}
+    for e in os.listdir(d):
+        if e.startswith("level") and e.endswith(".npz"):
+            k = int(e[5:-4])
+            chunks = {}
+            with np.load(os.path.join(d, e)) as z:
+                for key in z.files:
+                    if not key.startswith("r_"):
+                        continue
+                    _, cy, cx = key.split("_")
+                    chunks[(int(cy), int(cx))] = (z[key], z[f"a_{cy}_{cx}"])
+            levels[k] = chunks
+    return c, a, int(meta["world"]), levels
 
 
 def load(state_dir):
-    """-> (canvas, coverage, world, version_name) or None. Never raises:
-    walks latest pointer, then all versions newest-first, then the legacy
-    single-file layout."""
+    """-> (canvas, coverage, world, levels, version_name) or None. Never
+    raises: walks latest pointer, then all versions newest-first, then
+    the legacy single-file layout."""
     cands = []
     try:
         with open(os.path.join(state_dir, "latest")) as f:
@@ -116,8 +140,8 @@ def load(state_dir):
             cands.append(v)
     for name in cands:
         try:
-            c, a, w = _try_load(state_dir, name)
-            return c, a, w, name
+            c, a, w, levels = _try_load(state_dir, name)
+            return c, a, w, levels, name
         except Exception as e:
             print(f"[state] version {name} unusable: {type(e).__name__}: {e}", flush=True)
     try:  # legacy flat layout (pre-versioning)
@@ -126,7 +150,7 @@ def load(state_dir):
         c = np.load(os.path.join(state_dir, "canvas.npy"))
         a = np.load(os.path.join(state_dir, "coverage.npy"))
         if c.ndim == 3 and c.shape[:2] == a.shape:
-            return c, a, int(meta["world"]), "legacy"
+            return c, a, int(meta["world"]), {}, "legacy"
     except Exception:
         pass
     return None

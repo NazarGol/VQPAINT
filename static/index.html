@@ -83,6 +83,7 @@
   <button id="toolWand" title="select — wand/rect/lasso, then generate into it (3)">⚲</button>
   <button id="toolImage" title="image — place a PNG/JPG and paint it in (4)">⇓</button>
   <button id="toolLatent" title="latent — instant token-space ops on existing paint: no prompt, no optimization, pure VQGAN material (5)">⌁</button>
+  <button id="toolRefine" title="refine — zoom in and raise a region's detail level: the engine repaints it finer, inventing detail consistent with what's there (6)">◈</button>
   <div class="sep"></div>
   <button id="saveNow" title="save a canvas version now">✓</button>
   <input type="file" id="imageFile" accept="image/*" style="display:none">
@@ -103,7 +104,19 @@
     </div>
   </div>
 
-  <div class="tool-group" data-tool="place image latent">
+  <div class="tool-group" data-tool="refine">
+    <label title="How many pixels each canvas pixel becomes: auto picks from your zoom. Refined detail lives in a finer layer bound to this spot — export and view always show the finest available.">detail level</label>
+    <select id="refineLevel">
+      <option value="0" selected>auto — from zoom</option>
+      <option value="1">2× — 1px becomes 2×2</option>
+      <option value="2">4×</option>
+      <option value="3">8×</option>
+      <option value="4">16×</option>
+    </select>
+    <div id="refineHint" style="color:var(--mut); font-size:12px; margin-top:6px"></div>
+  </div>
+
+  <div class="tool-group" data-tool="place image latent refine">
     <label title="Region side in canvas pixels (image tool: placed width). Any size — beyond 576 the engine works coarser and stretches, like a wide brush.">size <span class="val" id="sizeVal">512</span></label>
     <input type="range" id="size" min="128" max="2048" step="16" value="512">
   </div>
