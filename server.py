@@ -304,6 +304,17 @@ class SelectClipReq(BaseModel):
     patch: int = 224                   # reference patch around the click
 
 
+class GrowReq(BaseModel):
+    """Grow an organic generation region from a seed point — the image
+    decides its shape. Returns bbox + mask_png for the normal /paint path."""
+    x: float
+    y: float
+    reach: int = 320                   # size budget, world px
+    irregularity: float = 0.6          # 0 = round-ish blob, 1 = wild tendrils
+    flow: float = 0.65                 # 0 = ignore content, 1 = hug similar content
+    seed: int | None = None
+
+
 def value_noise(h: int, w: int, seed: int, cells: int = 8, octaves: int = 4) -> np.ndarray:
     """Hand-rolled fractal value noise in [0,1]: random grids upsampled
     bicubically and summed over octaves. Deterministic per seed."""
@@ -1034,6 +1045,88 @@ def latent_op(req: LatentReq):
     job_order.append(job["id"])
     job_queue.put(job)
     return {"job_id": job["id"], "bbox": job["bbox"]}
+
+
+@app.post("/grow")
+def grow(req: GrowReq):
+    """Organic region growth: a front spreads from the seed, its speed
+    modulated by value noise (irregularity) and — where paint exists — by
+    CLIP similarity to the seed patch (flow), so generation regions creep
+    along what is visually continuous instead of stamping shapes."""
+    if engine is None:
+        raise HTTPException(503, "engine still loading")
+    xi, yi = int(req.x), int(req.y)
+    if not (0 <= xi < world and 0 <= yi < world):
+        raise HTTPException(400, "seed outside canvas")
+    seed = req.seed if req.seed is not None else int(torch.seed() % 2**31)
+    reach = max(64, min(req.reach, 1024))
+    half = min(reach + 128, 1536)
+    x0, y0 = max(0, xi - half), max(0, yi - half)
+    x1, y1 = min(world, xi + half), min(world, yi + half)
+    W, H = x1 - x0, y1 - y0
+    dev = engine.device
+
+    # similarity field where content exists (reuses the select_clip sweep)
+    sim = np.full((H, W), 0.55, np.float32)  # neutral in virgin space
+    with buf_lock:
+        cov = coverage[y0:y1, x0:x1].astype(np.float32) / 255.0
+        rgb = canvas[y0:y1, x0:x1].astype(np.float32)
+    if req.flow > 0 and (cov > 0.05).mean() > 0.01:
+        disp = rgb * cov[..., None] + VIRGIN * (1.0 - cov[..., None])
+        t = torch.from_numpy(disp / 255.0).permute(2, 0, 1).to(dev)
+
+        def embed_batch(batch):
+            batch = F.interpolate(batch, size=224, mode="bilinear", align_corners=False)
+            with torch.no_grad():
+                e_ = engine.clip.encode_image(engine_mod.CLIP_NORMALIZE(batch)).float()
+            return F.normalize(e_, dim=-1)
+
+        p = 192
+        rx0 = max(0, min(xi - x0 - p // 2, W - p))
+        ry0 = max(0, min(yi - y0 - p // 2, H - p))
+        ref = embed_batch(t[:, ry0:ry0 + p, rx0:rx0 + p][None])
+        tile, stride = 192, 96
+        tiles = t.unfold(1, tile, stride).unfold(2, tile, stride)
+        ny, nx = tiles.shape[1], tiles.shape[2]
+        flat = tiles.permute(1, 2, 0, 3, 4).reshape(ny * nx, 3, tile, tile)
+        sims = []
+        for i in range(0, len(flat), 64):
+            sims.append((embed_batch(flat[i:i + 64]) @ ref.T).squeeze(1))
+        smap = torch.cat(sims).view(1, 1, ny, nx)
+        smap = F.interpolate(smap, size=(H, W), mode="bilinear", align_corners=False)[0, 0]
+        s_np = ((smap.cpu().numpy() - 0.5) / 0.45).clip(0, 1)  # cosine -> 0..1
+        painted = cov > 0.05
+        sim[painted] = s_np[painted]
+
+    # organic blob: Euclidean distance field, boundary radius modulated by
+    # noise lobes (tendrils/bays, never a square), dissimilar content
+    # inflating effective distance so growth resists crossing it
+    irr = float(min(1.0, max(0.0, req.irregularity)))
+    fl = float(min(1.0, max(0.0, req.flow)))
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    d = np.hypot(xx - (xi - x0), yy - (yi - y0))
+    n1 = value_noise(H, W, seed, cells=4, octaves=3)        # big lobes
+    n2 = value_noise(H, W, seed + 7, cells=11, octaves=3)   # edge detail
+    rf = reach * (0.45 + (1.0 - irr) * 0.25
+                  + irr * (1.1 * n1 + 0.45 * n2 - 0.55))
+    d_eff = d * (1.0 + fl * (1.0 - sim) * 1.6)
+    mask = np.clip((rf - d_eff) / (reach * 0.3), 0.0, 1.0)
+    mask = np.maximum(mask, (d < 20).astype(np.float32))    # seed always in
+    mask[mask < 0.04] = 0.0
+    ys, xs = np.nonzero(mask)
+    if len(ys) == 0:
+        raise HTTPException(404, "growth failed — try higher reach")
+    by0, by1 = int(ys.min()), int(ys.max()) + 1
+    bx0, bx1 = int(xs.min()), int(xs.max()) + 1
+    sub = (mask[by0:by1, bx0:bx1] * 255).astype(np.uint8)
+    buf = io.BytesIO()
+    Image.fromarray(sub).save(buf, "PNG")
+    return {
+        "bbox": [x0 + bx0, y0 + by0, bx1 - bx0, by1 - by0],
+        "mask_png": base64.b64encode(buf.getvalue()).decode(),
+        "area": int((mask > 0.5).sum()),
+        "seed": seed,
+    }
 
 
 @app.post("/select_clip")

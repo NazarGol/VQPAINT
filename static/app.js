@@ -48,6 +48,7 @@ const worldY = (sy) => (sy - py) / k;
 const TOOL_TITLES = {
   place: "Paint region", brush: "Paint area", wand: "Selection",
   image: "Place image", latent: "Latent op", refine: "Refine detail",
+  grow: "Grown region",
 };
 
 function refineLevel() {
@@ -235,6 +236,9 @@ function redraw() {
       imgSprite.width = w; imgSprite.height = h;
       imgSprite.visible = true;
       brushGfx.lineStyle(1, WARN, 0.7).drawRect(mouse.x - w / 2, mouse.y - h / 2, w, h);
+    } else if (tool === "grow") {
+      brushGfx.lineStyle(1, ACC, 0.4).drawCircle(mouse.x, mouse.y, +$("reach").value * k);
+      brushGfx.lineStyle(0).beginFill(ACC, 0.8).drawCircle(mouse.x, mouse.y, 3).endFill();
     } else if (tool === "wand") {
       brushGfx.lineStyle(1, 0x9a6bb8, 0.9).drawCircle(mouse.x, mouse.y, 6);
     } else if (tool === "latent") {
@@ -358,7 +362,8 @@ window.addEventListener("pointerup", (e) => {
   }
   if (!clicked) return;
   if (wx < 0 || wy < 0 || wx > WORLD || wy > WORLD) { clearPending(); return; }
-  if (tool === "wand" && selMode === "wand") wandSelect(wx, wy);
+  if (tool === "grow") growAt(wx, wy);
+  else if (tool === "wand" && selMode === "wand") wandSelect(wx, wy);
   else if (tool === "wand" && selMode === "similar") similarSelect(wx, wy);
   else if (tool === "image" && !importImg) $("imageFile").click();
   else if (["place", "refine", "image", "latent"].includes(tool)) {
@@ -389,6 +394,7 @@ $("zoomOut").onclick = () => zoomBy(0.8);
 
 function sizeKeyFor() {
   if (tool === "brush") return ["radius", 16];
+  if (tool === "grow") return ["reach", 32];
   if (tool === "wand") {
     if (selMode === "similar") return ["similarity", 0.02];
     if (selMode === "brushsel") return ["selRadius", 16];
@@ -402,7 +408,7 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "Space") { spaceHeld = true; e.preventDefault(); return; }
   if (e.key === "Escape") { clearPending(); pickingBleed = false; redraw(); }
   else if (e.key === "Enter" && (strokes.length || selection || pendingPt)) generatePending();
-  else if (e.key >= "1" && e.key <= "6") setTool(["place", "brush", "wand", "image", "latent", "refine"][+e.key - 1]);
+  else if (e.key >= "1" && e.key <= "7") setTool(["place", "brush", "wand", "image", "latent", "refine", "grow"][+e.key - 1]);
   else if (e.key === "[" || e.key === "]") {
     const [id, step] = sizeKeyFor();
     const el = $(id);
@@ -418,13 +424,14 @@ function setTool(t) {
   tool = t;
   for (const [id, name] of [["toolPlace", "place"], ["toolBrush", "brush"],
                             ["toolWand", "wand"], ["toolImage", "image"],
-                            ["toolLatent", "latent"], ["toolRefine", "refine"]])
+                            ["toolLatent", "latent"], ["toolRefine", "refine"],
+                            ["toolGrow", "grow"]])
     $(id).classList.toggle("active", t === name);
   document.querySelectorAll(".tool-group[data-tool]").forEach((g) => {
     g.style.display = g.dataset.tool.split(" ").includes(t) ? "block" : "none";
   });
   pendingPt = null;
-  if (!["brush", "wand", "latent"].includes(t)) { strokes = []; selection = null;
+  if (!["brush", "wand", "latent", "grow"].includes(t)) { strokes = []; selection = null;
     $("selOps").style.display = "none"; $("latApplySel").style.display = "none"; }
   redraw();
 }
@@ -433,6 +440,27 @@ $("toolBrush").onclick = () => setTool("brush");
 $("toolWand").onclick = () => setTool("wand");
 $("toolLatent").onclick = () => setTool("latent");
 $("toolRefine").onclick = () => setTool("refine");
+$("toolGrow").onclick = () => setTool("grow");
+
+let lastGrowPt = null;
+async function growAt(wx, wy) {
+  lastGrowPt = { x: wx, y: wy };
+  $("stripJob").textContent = "◌ growing region…";
+  const res = await fetch("/grow", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ x: wx, y: wy, reach: +$("reach").value,
+      irregularity: +$("irregularity").value, flow: +$("flow").value }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.detail || `grow failed (${res.status})`);
+    updateStrip();
+    return;
+  }
+  await applySelection(await res.json());
+  updateStrip();
+}
+$("regrow").onclick = () => { if (lastGrowPt) growAt(lastGrowPt.x, lastGrowPt.y); };
 $("toolImage").onclick = () => {
   if (importImg) setTool("image");
   else $("imageFile").click();
@@ -922,7 +950,8 @@ for (const [id, out, fmt] of [
   ["wtext", "wtextVal", (v) => (+v).toFixed(2)], ["hold", "holdVal", (v) => (+v).toFixed(2)],
   ["drift", "driftVal", (v) => (+v).toFixed(2)], ["strength", "strengthVal", (v) => (+v).toFixed(2)],
   ["tolerance", "tolVal", (v) => v], ["similarity", "simVal", (v) => (+v).toFixed(2)],
-  ["edgechaos", "chaosVal", (v) => (+v).toFixed(2)],
+  ["edgechaos", "chaosVal", (v) => (+v).toFixed(2)], ["reach", "reachVal", (v) => v],
+  ["irregularity", "irrVal", (v) => (+v).toFixed(2)], ["flow", "flowVal", (v) => (+v).toFixed(2)],
   ["selRadius", "selRadVal", (v) => v],
 ]) {
   $(id).addEventListener("input", () => { $(out).textContent = fmt($(id).value); redraw(); });
