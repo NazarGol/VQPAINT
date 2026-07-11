@@ -39,10 +39,10 @@ from pydantic import BaseModel
 
 import engine as engine_mod
 
-VIRGIN = 118          # display gray of never-painted canvas
+VIRGIN = 243          # display tone of never-painted canvas (paper-white theme)
 WORK_MAX = 576        # optimization buffer ceiling (VRAM-bound)
 MAX_WORLD = 24576
-VOID_RGB = (14, 14, 18)
+VOID_RGB = (244, 243, 240)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 

@@ -5,107 +5,150 @@
 <title>VQPAINT</title>
 <style>
   :root {
-    --bg: #101014; --panel: #16161b; --panel2: #1b1b21; --line: #26262c;
-    --txt: #d6d6dc; --mut: #8b8b96; --acc: #8fbf98; --warn: #e0b56a; --err: #e06a6a;
+    --paper: #f4f3f0; --card: #ffffff; --line: #e7e6e2; --line2: #d9d7d1;
+    --txt: #2b2a28; --mut: #8a8880; --acc: #2f9e63; --accfill: #e4f3ea;
+    --warn: #c98a2b; --err: #c74d4d;
+    --shadow: 0 1px 2px rgba(30,28,24,.06), 0 6px 24px rgba(30,28,24,.10);
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg);
-               font: 13px/1.45 system-ui, sans-serif; color: var(--txt); }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper);
+               font: 13px/1.5 system-ui, sans-serif; color: var(--txt); }
   canvas.pixi { position: fixed; inset: 0; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+          box-shadow: var(--shadow); }
 
-  /* ── left tool rail ─────────────────────────── */
-  #rail { position: fixed; top: 12px; left: 12px; width: 44px; z-index: 10;
-          background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-          padding: 6px 4px; display: flex; flex-direction: column; gap: 4px; }
-  #rail button { width: 36px; height: 36px; border: 0; border-radius: 8px;
-          background: transparent; color: var(--mut); font-size: 16px; cursor: pointer; }
-  #rail button:hover { background: var(--panel2); color: var(--txt); }
-  #rail button.active { background: var(--panel2); color: var(--acc);
-          box-shadow: inset 0 0 0 1px var(--acc); }
-  #rail .sep { height: 1px; background: var(--line); margin: 4px 6px; }
+  /* ── chrome ─────────────────────────────────── */
+  #chromeTL { position: fixed; top: 14px; left: 16px; z-index: 20; padding: 7px 13px;
+              display: flex; gap: 10px; align-items: baseline; }
+  #chromeTL b { font-weight: 600; letter-spacing: .01em; }
+  #chromeTL span { color: var(--mut); }
+  #chromeTR { position: fixed; top: 14px; right: 16px; z-index: 20; padding: 5px;
+              display: flex; gap: 4px; }
+  #zoomctl  { position: fixed; right: 16px; bottom: 52px; z-index: 20; padding: 3px;
+              display: flex; align-items: center; gap: 2px; }
+  #statusline { position: fixed; right: 16px; bottom: 14px; z-index: 20;
+              padding: 5px 11px; display: flex; gap: 14px; color: var(--mut);
+              font-family: var(--mono); font-size: 11.5px; }
+  #statusline .job { color: var(--warn); }
 
-  /* ── right inspector ────────────────────────── */
-  #inspector { position: fixed; top: 12px; right: 12px; bottom: 44px; width: 264px;
-          z-index: 10; background: var(--panel); border: 1px solid var(--line);
-          border-radius: 10px; padding: 14px; overflow-y: auto; }
-  #inspector h1 { font-size: 13px; font-weight: 600; color: var(--txt); margin: 0 0 10px; }
-  #inspector h1 .hint { color: var(--mut); font-weight: 400; font-size: 12px; }
-  label { display: block; margin-top: 10px; color: var(--mut); font-size: 11px;
+  button { background: transparent; color: var(--txt); border: 0; border-radius: 8px;
+           padding: 7px 12px; font: inherit; cursor: pointer; }
+  button:hover { background: #f1efeb; }
+  button.primary { background: var(--acc); color: #fff; font-weight: 600; }
+  button.primary:hover { background: #278a55; }
+  button.chip { border: 1px solid var(--line); border-radius: 99px;
+                padding: 3px 11px; font-size: 12px; }
+  button.chip.on, button.chip:active { border-color: var(--acc); color: var(--acc);
+                background: var(--accfill); }
+
+  /* ── toolbar ────────────────────────────────── */
+  #toolbar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+             z-index: 25; display: flex; align-items: center; gap: 2px; padding: 6px; }
+  #toolbar .tsep { width: 1px; height: 26px; background: var(--line); margin: 0 6px; }
+  #toolbar button { width: 42px; height: 42px; padding: 0; display: grid;
+             place-items: center; border-radius: 10px; color: #55534e; position: relative; }
+  #toolbar button svg { width: 21px; height: 21px; stroke: currentColor;
+             stroke-width: 1.7; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  #toolbar button.active { background: var(--accfill); color: var(--acc); }
+  #toolbar button:hover::after { content: attr(data-tip); position: absolute;
+             bottom: 52px; left: 50%; transform: translateX(-50%); white-space: nowrap;
+             background: #2b2a28; color: #fff; font-size: 11.5px; padding: 4px 9px;
+             border-radius: 6px; pointer-events: none; }
+
+  /* ── popover ────────────────────────────────── */
+  #popover { position: fixed; z-index: 30; width: 264px; padding: 13px;
+             display: none; }
+  #popover .arrow { position: absolute; width: 12px; height: 12px;
+             background: var(--card); border-left: 1px solid var(--line);
+             border-top: 1px solid var(--line); transform: rotate(45deg);
+             left: 50%; margin-left: -6px; bottom: -7px;
+             border-color: var(--line); border-right: 0; border-bottom: 0;
+             rotate: 225deg; }
+  #popover.below .arrow { bottom: auto; top: -7px; rotate: 45deg; }
+  #popTitle { font-weight: 600; margin-bottom: 6px; }
+  label { display: block; margin-top: 9px; color: var(--mut); font-size: 11px;
           text-transform: uppercase; letter-spacing: .06em; cursor: help; }
-  label .val { float: right; color: var(--txt); text-transform: none; }
-  textarea { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--txt);
-          border: 1px solid var(--line); border-radius: 6px; padding: 7px; resize: vertical;
-          min-height: 48px; font: inherit; margin-top: 4px; }
-  input[type=range] { width: 100%; accent-color: var(--acc); }
-  input[type=number], input[type=text] { width: 90px; background: var(--bg); color: var(--txt);
-          border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; font: inherit; }
-  select { width: 100%; background: var(--bg); color: var(--txt); border: 1px solid var(--line);
-          border-radius: 6px; padding: 5px; font: inherit; margin-top: 4px; }
-  button { background: var(--panel2); color: var(--txt); border: 1px solid var(--line);
-          border-radius: 6px; padding: 6px 11px; font: inherit; cursor: pointer; }
-  button:hover { border-color: var(--mut); }
-  button.primary { background: #2a3c2f; border-color: #3e5a46; color: #cfe8d5; }
-  button.chip { padding: 3px 9px; font-size: 12px; border-radius: 99px; }
-  button.chip.on { color: var(--acc); border-color: var(--acc); }
-  .row { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
-  details { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 6px; }
-  details summary { color: var(--mut); font-size: 11px; text-transform: uppercase;
-          letter-spacing: .06em; cursor: pointer; user-select: none; }
-  .global { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 6px; }
+  label .val { float: right; color: var(--txt); text-transform: none;
+               font-family: var(--mono); font-size: 11.5px; }
+  textarea { width: 100%; box-sizing: border-box; background: #faf9f7; color: var(--txt);
+          border: 1px solid var(--line); border-radius: 8px; padding: 8px; resize: vertical;
+          min-height: 46px; font: inherit; margin-top: 4px; }
+  textarea:focus, input:focus, select:focus { outline: 2px solid var(--accfill);
+          border-color: var(--acc); }
+  input[type=range] { width: 100%; height: 22px; accent-color: var(--acc); }
+  input[type=number], input[type=text] { width: 92px; background: #faf9f7;
+          color: var(--txt); border: 1px solid var(--line); border-radius: 8px;
+          padding: 6px 8px; font-family: var(--mono); font-size: 12px; }
+  select { width: 100%; background: #faf9f7; color: var(--txt);
+          border: 1px solid var(--line); border-radius: 8px; padding: 6px;
+          font: inherit; margin-top: 4px; }
+  .row { display: flex; gap: 6px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
   .tool-group { display: none; }
-  .tool-group.show { display: block; }
 
-  /* ── bottom status strip ────────────────────── */
-  #strip { position: fixed; left: 12px; right: 12px; bottom: 8px; height: 26px; z-index: 10;
-          background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-          display: flex; align-items: center; gap: 18px; padding: 0 12px;
-          font-size: 12px; color: var(--mut); }
-  #strip .job { color: var(--warn); }
-  #strip .save { margin-left: auto; }
-  #strip button { padding: 1px 8px; font-size: 11px; }
+  /* ── drawer ─────────────────────────────────── */
+  #drawer { position: fixed; left: 16px; bottom: 18px; z-index: 24; }
+  #drawerTab { padding: 8px 14px; border-radius: 12px; background: var(--card);
+          border: 1px solid var(--line); box-shadow: var(--shadow); color: var(--mut); }
+  #drawerBody { display: none; width: 250px; max-height: 62vh; overflow-y: auto;
+          padding: 13px; margin-bottom: 8px; }
+  #drawer.open #drawerBody { display: block; }
+  #drawer.open #drawerTab { color: var(--acc); border-color: var(--acc); }
+  .dsec { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 4px; }
 
-  /* ── queue cards ────────────────────────────── */
-  #jobs { position: fixed; bottom: 44px; left: 68px; width: 320px; z-index: 9;
-          max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 4px; }
-  .job { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-         padding: 6px 9px; font-size: 12px; }
-  .job .st-running { color: var(--warn); } .job .st-done { color: var(--acc); }
-  .job .st-queued { color: #8888c8; } .job .st-error { color: var(--err); }
+  /* ── job toasts ─────────────────────────────── */
+  #jobs { position: fixed; right: 16px; bottom: 92px; width: 280px; z-index: 18;
+          max-height: 40vh; overflow-y: auto; display: flex;
+          flex-direction: column-reverse; gap: 6px; }
+  .job { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+         box-shadow: var(--shadow); padding: 7px 10px; font-size: 12px; }
+  .job .st-running { color: var(--warn); font-family: var(--mono); }
+  .job .st-done { color: var(--acc); } .job .st-error { color: var(--err); }
+  .job .st-queued { color: var(--mut); font-family: var(--mono); }
   .job .st-cancelled, .job .st-stopped { color: var(--mut); }
-  .job .prompt { color: var(--mut); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .job button { float: right; padding: 1px 7px; font-size: 11px; margin-left: 6px; }
+  .job .prompt { color: var(--mut); overflow: hidden; text-overflow: ellipsis;
+         white-space: nowrap; }
+  .job button { float: right; padding: 1px 8px; font-size: 11px; margin-left: 6px;
+         border: 1px solid var(--line); border-radius: 6px; }
 </style>
 </head>
 <body>
 
-<div id="rail">
-  <button id="toolPlace" class="active" title="place — soft square region (1)">■</button>
-  <button id="toolBrush" title="brush — paint the area to generate (2)">✦</button>
-  <button id="toolWand" title="select — wand/rect/lasso, then generate into it (3)">⚲</button>
-  <button id="toolImage" title="image — place a PNG/JPG and paint it in (4)">⇓</button>
-  <button id="toolLatent" title="latent — instant token-space ops on existing paint: no prompt, no optimization, pure VQGAN material (5)">⌁</button>
-  <button id="toolRefine" title="refine — zoom in and raise a region's detail level: the engine repaints it finer, inventing detail consistent with what's there (6)">◈</button>
-  <div class="sep"></div>
+<div id="chromeTL" class="card"><b>VQPAINT</b><span id="worldLabel" class="mono">8192px</span></div>
+<div id="chromeTR" class="card">
+  <button id="exportQuick" title="download everything painted, refined areas at full detail">Export</button>
   <button id="saveNow" title="save a canvas version now">✓</button>
+</div>
+
+<div id="toolbar" class="card">
+  <button id="toolPlace" class="active" data-tip="place — soft square region (1)">
+    <svg viewBox="0 0 21 21"><rect x="4" y="4" width="13" height="13" rx="2.5"/></svg></button>
+  <button id="toolBrush" data-tip="brush — paint the area to generate (2)">
+    <svg viewBox="0 0 21 21"><path d="M14.5 3.5l3 3L9 15l-4 1 1-4z"/><path d="M12.5 5.5l3 3"/></svg></button>
+  <button id="toolRefine" data-tip="refine — add fine detail where you zoom (6)">
+    <svg viewBox="0 0 21 21"><circle cx="9.5" cy="9.5" r="5.5"/><path d="M13.7 13.7L18 18M7.5 9.5h4M9.5 7.5v4"/></svg></button>
+  <div class="tsep"></div>
+  <button id="toolWand" data-tip="select — wand / rect / lasso / similar (3)">
+    <svg viewBox="0 0 21 21"><path d="M12 9L4 17M14.5 3.5v3M18 7h-3M16.8 4.2l-2 2M14.5 9.3l-1.6-1.6"/></svg></button>
+  <button id="toolLatent" data-tip="latent — instant token ops, pure VQGAN (5)">
+    <svg viewBox="0 0 21 21"><path d="M11.5 3L6 12h4l-1.5 6L15 9h-4z"/></svg></button>
+  <div class="tsep"></div>
+  <button id="toolImage" data-tip="image — place a PNG/JPG and paint it in (4)">
+    <svg viewBox="0 0 21 21"><rect x="3.5" y="4.5" width="14" height="12" rx="2"/><circle cx="8" cy="9" r="1.4"/><path d="M4 15l4.5-4 3 2.5 3-3 3 3.5"/></svg></button>
   <input type="file" id="imageFile" accept="image/*" style="display:none">
 </div>
 
-<div id="inspector">
-  <h1 id="toolTitle">place <span class="hint">— click canvas to paint</span></h1>
+<div id="popover" class="card">
+  <div class="arrow"></div>
+  <div id="popTitle"></div>
 
-  <label title="What should grow here. LEAVE EMPTY to let the region flow purely out of its surroundings — the flow brush is the heart of the tool.">prompt</label>
-  <textarea id="prompt" placeholder="empty = flow from surroundings"></textarea>
-
-  <div class="tool-group" data-tool="place brush wand image" style="display:block">
-    <label title="How long it cooks. Low = soft and dreamy, high = crisp, very high = fried. ~2 iterations/sec.">iterations <span class="val" id="itersVal">200</span></label>
-    <input type="range" id="iters" min="10" max="1500" step="5" value="200">
-    <div class="row">
-      <button class="chip" id="presetDraft" title="fast feedback: 80 iterations">draft</button>
-      <button class="chip" id="presetRefine" title="full cook: 350 iterations">refine</button>
-    </div>
+  <div class="tool-group" data-tool="place brush wand image">
+    <label title="What should grow here. LEAVE EMPTY to let the region flow purely out of its surroundings.">prompt</label>
+    <textarea id="prompt" placeholder="empty = flow from surroundings"></textarea>
   </div>
 
   <div class="tool-group" data-tool="refine">
-    <label title="How many pixels each canvas pixel becomes: auto picks from your zoom. Refined detail lives in a finer layer bound to this spot — export and view always show the finest available.">detail level</label>
+    <label title="How many pixels each canvas pixel becomes: auto picks from your zoom.">detail level</label>
     <select id="refineLevel">
       <option value="0" selected>auto — from zoom</option>
       <option value="1">2× — 1px becomes 2×2</option>
@@ -116,30 +159,20 @@
     <div id="refineHint" style="color:var(--mut); font-size:12px; margin-top:6px"></div>
   </div>
 
-  <div class="tool-group" data-tool="place image latent refine">
-    <label title="Region side in canvas pixels (image tool: placed width). Any size — beyond 576 the engine works coarser and stretches, like a wide brush.">size <span class="val" id="sizeVal">512</span></label>
-    <input type="range" id="size" min="128" max="2048" step="16" value="512">
-  </div>
-
-  <div class="tool-group" data-tool="brush">
-    <label title="Brush radius in canvas pixels">radius <span class="val" id="radiusVal">96</span></label>
-    <input type="range" id="radius" min="16" max="512" step="8" value="96">
-  </div>
-
   <div class="tool-group" data-tool="wand">
     <div class="row">
       <button class="chip selmode on" data-mode="wand" title="click a color — selects the connected same-color area">wand</button>
-      <button class="chip selmode" data-mode="similar" title="click anything — selects everything that LOOKS like it (CLIP similarity), even far away">similar</button>
+      <button class="chip selmode" data-mode="similar" title="click anything — selects everything that LOOKS like it, even far away">similar</button>
       <button class="chip selmode" data-mode="rect" title="drag a rectangle">rect</button>
       <button class="chip selmode" data-mode="lasso" title="draw a freehand outline">lasso</button>
       <button class="chip selmode" data-mode="brushsel" title="paint the selection with a round brush">brush</button>
     </div>
     <div id="selParamTol">
-      <label title="How different a color can be and still join the wand selection">tolerance <span class="val" id="tolVal">18</span></label>
+      <label title="How different a color can be and still join the selection">tolerance <span class="val" id="tolVal">18</span></label>
       <input type="range" id="tolerance" min="2" max="80" step="1" value="18">
     </div>
     <div id="selParamSim" style="display:none">
-      <label title="How semantically close a region must look to join the selection. Lower grabs more.">similarity <span class="val" id="simVal">0.78</span></label>
+      <label title="How semantically close a region must look to join. Lower grabs more.">similarity <span class="val" id="simVal">0.78</span></label>
       <input type="range" id="similarity" min="0.5" max="0.95" step="0.01" value="0.78">
     </div>
     <div id="selParamRad" style="display:none">
@@ -147,28 +180,22 @@
       <input type="range" id="selRadius" min="16" max="512" step="8" value="96">
     </div>
     <div class="row" id="selOps" style="display:none">
-      <button class="chip" id="selGrow" title="expand the selection edge outward">grow</button>
-      <button class="chip" id="selShrink" title="pull the selection edge inward">shrink</button>
-      <button class="chip" id="selFeather" title="soften the selection edge">feather</button>
-      <button class="chip" id="selInvert" title="select everything in the box EXCEPT the current selection">invert</button>
+      <button class="chip" id="selGrow" title="expand the selection edge">grow</button>
+      <button class="chip" id="selShrink" title="pull the edge inward">shrink</button>
+      <button class="chip" id="selFeather" title="soften the edge">feather</button>
+      <button class="chip" id="selInvert" title="select everything in the box EXCEPT this">invert</button>
     </div>
   </div>
 
-  <div class="tool-group" data-tool="image">
-    <label title="How much of your image survives: low = ghost armature, high = recognizably yours. It always gets VQGAN-ified — that's the medium.">source strength <span class="val" id="strengthVal">0.60</span></label>
-    <input type="range" id="strength" min="0" max="1" step="0.05" value="0.6">
-    <div class="row"><button id="pickImage">choose image…</button><span id="imageName" style="color:var(--mut)"></span></div>
-  </div>
-
   <div class="tool-group" data-tool="latent">
-    <label title="What to do to the latent tokens under the region — these are instant, no AI steering, pure VQGAN material">operation</label>
+    <label title="Instant, no AI steering — pure VQGAN material">operation</label>
     <select id="latentOp">
       <option value="spray" selected>spray — scatter fresh random tokens</option>
       <option value="neighbor">neighbor swap — subtle wrongness</option>
       <option value="shift">shift — slide the tokens</option>
       <option value="mirror">mirror — flip the tokens</option>
       <option value="repeat">repeat — tile a token block</option>
-      <option value="bloom">bloom — encode/decode feedback drift</option>
+      <option value="bloom">bloom — feedback drift</option>
     </select>
     <div id="latAmountRow">
       <label title="Fraction of tokens affected">amount <span class="val" id="latAmountVal">50%</span></label>
@@ -176,27 +203,56 @@
     </div>
     <div class="row" id="latPaRow">
       <label style="margin:0" id="latPaLabel">param</label>
-      <input type="number" id="latPa" value="2" style="width:64px">
-      <input type="number" id="latPb" value="0" style="width:64px; display:none">
+      <input type="number" id="latPa" value="2" style="width:60px">
+      <input type="number" id="latPb" value="0" style="width:60px; display:none">
     </div>
     <div class="row">
       <button id="latApplySel" class="primary" style="display:none"
-              title="apply this operation inside the active selection">apply to selection</button>
+              title="apply inside the active selection">apply to selection</button>
     </div>
   </div>
 
-  <label title="How strongly the region absorbs the look of what surrounds it — palette, texture, motifs bleed in from the canvas itself. The glue between regions.">bleed <span class="val" id="wimgVal">0.60</span></label>
-  <input type="range" id="wimg" min="0" max="2" step="0.05" value="0.6">
-
-  <div class="row" id="brushActions" style="display:none">
-    <button id="genBrush" class="primary" title="generate in the marked area (Enter)">generate</button>
-    <button id="clearBrush" title="discard the marked area (Esc)">clear</button>
+  <div class="tool-group" data-tool="brush">
+    <label title="Brush radius in canvas pixels">radius <span class="val" id="radiusVal">96</span></label>
+    <input type="range" id="radius" min="16" max="512" step="8" value="96">
   </div>
 
-  <details id="advanced">
-    <summary>advanced</summary>
+  <div class="tool-group" data-tool="place image latent refine">
+    <label title="Region side in canvas pixels. Beyond 576 the engine works coarser and stretches — like a wide brush.">size <span class="val" id="sizeVal">512</span></label>
+    <input type="range" id="size" min="128" max="2048" step="16" value="512">
+  </div>
 
-    <label title="Width of the soft edge where new melts into old. The weirdness in this band is part of the medium.">falloff <span class="val" id="falloffVal">64</span></label>
+  <div class="tool-group" data-tool="image">
+    <label title="How much of your image survives: low = ghost armature, high = recognizably yours. It always gets VQGAN-ified.">source strength <span class="val" id="strengthVal">0.60</span></label>
+    <input type="range" id="strength" min="0" max="1" step="0.05" value="0.6">
+    <div class="row"><button id="pickImage" class="chip">choose image…</button>
+      <span id="imageName" style="color:var(--mut); font-size:12px"></span></div>
+  </div>
+
+  <div class="tool-group" data-tool="place brush wand refine image">
+    <label title="How long it cooks: low = soft and dreamy, high = crisp, very high = fried. ~2 it/s.">iterations <span class="val" id="itersVal">200</span></label>
+    <input type="range" id="iters" min="10" max="1500" step="5" value="200">
+    <div class="row">
+      <button class="chip" id="presetDraft" title="fast feedback: 80 iterations">draft</button>
+      <button class="chip" id="presetRefine" title="full cook: 350 iterations">refine</button>
+    </div>
+  </div>
+
+  <div class="tool-group" data-tool="place brush wand image">
+    <label title="How strongly the region absorbs the look of its surroundings — the glue between regions.">bleed <span class="val" id="wimgVal">0.60</span></label>
+    <input type="range" id="wimg" min="0" max="2" step="0.05" value="0.6">
+  </div>
+
+  <div class="row">
+    <button id="genBrush" class="primary" title="run it (Enter)">Generate</button>
+    <button id="clearBrush" title="discard (Esc)">✕</button>
+    <button id="advOpen" title="all the deeper knobs">Advanced ▸</button>
+  </div>
+</div>
+
+<div id="drawer">
+  <div id="drawerBody" class="card">
+    <label title="Width of the soft edge where new melts into old — the weirdness there is the medium.">falloff <span class="val" id="falloffVal">64</span></label>
     <input type="range" id="falloff" min="0" max="192" step="4" value="64">
 
     <label title="How hard the words pull, relative to bleed">prompt pull <span class="val" id="wtextVal">1.00</span></label>
@@ -208,57 +264,64 @@
     <label title="Fraction of the area's memory replaced with fresh noise before repainting">start noise <span class="val" id="noiseVal">0%</span></label>
     <input type="range" id="noise" min="0" max="100" step="5" value="0">
 
-    <label title="How boldly each step changes the image — higher is wilder and chunkier">step size <span class="val" id="lrVal">0.10</span></label>
+    <label title="How boldly each step changes the image">step size <span class="val" id="lrVal">0.10</span></label>
     <input type="range" id="lr" min="0.02" max="0.40" step="0.01" value="0.10">
 
-    <label title="Random peeks CLIP takes per step: more = steadier + denser detail, fewer = faster + looser">cutouts <span class="val" id="cutnVal">32</span></label>
+    <label title="Random peeks CLIP takes per step: more = steadier + denser, fewer = faster + wilder">cutouts <span class="val" id="cutnVal">32</span></label>
     <input type="range" id="cutn" min="8" max="64" step="4" value="32">
 
-    <label title="Patches = close-ups, detail everywhere (classic). Whole-frame = judges only the big picture.">cutouts style</label>
+    <label title="Patches = close-ups, detail everywhere. Whole-frame = judges only the big picture.">cutouts style</label>
     <select id="cutmethod">
       <option value="original" selected>patches — detail everywhere</option>
       <option value="pooling">whole-frame — global look</option>
     </select>
 
-    <label title="Lets the bleed wander: 0 = faithful to the neighborhood, higher = dreamlike divergence that still connects">bleed drift <span class="val" id="driftVal">0.00</span></label>
+    <label title="Lets the bleed wander: 0 = faithful, higher = dreamlike divergence that still connects">bleed drift <span class="val" id="driftVal">0.00</span></label>
     <input type="range" id="drift" min="0" max="1" step="0.05" value="0">
 
     <div class="row">
-      <button id="bleedFrom" title="Bleed from elsewhere: click this, then click a canvas spot — regions absorb THAT place's look">⊙ bleed from…</button>
-      <button id="bleedFromClear" style="display:none">✕</button>
+      <button id="bleedFrom" class="chip" title="click this, then a canvas spot — regions absorb THAT place's look">⊙ bleed from…</button>
+      <button id="bleedFromClear" class="chip" style="display:none">✕</button>
     </div>
 
     <label title="Same seed + settings + canvas = same result. Blank = random.">seed</label>
     <input type="text" id="seed" placeholder="random">
-  </details>
 
-  <div class="global">
+    <div class="dsec"></div>
     <div class="row">
       <label style="margin:0" title="Canvas side in px. Grows right/down; shrinking crops!">canvas</label>
       <input type="number" id="worldSize" min="1024" max="24576" step="16" value="8192">
-      <button id="applyWorld">apply</button>
+      <button id="applyWorld" class="chip">apply</button>
     </div>
     <div class="row">
-      <button id="exportPainted" title="download a PNG of everything painted (auto-cropped), refined areas at full detail">export painted</button>
-      <button id="exportFull" title="download the whole canvas">full</button>
-      <select id="exportScale" style="width:auto" title="output pixels per canvas pixel — auto uses the finest detail level you've painted">
+      <button id="exportPainted" class="chip" title="everything painted, auto-cropped">export painted</button>
+      <button id="exportFull" class="chip" title="the whole canvas">full</button>
+    </div>
+    <div class="row">
+      <select id="exportScale" style="width:auto" title="output px per canvas px — auto uses your finest detail level">
         <option value="auto" selected>auto</option>
         <option value="1">1×</option><option value="2">2×</option>
         <option value="4">4×</option><option value="8">8×</option>
       </select>
       <label style="margin:0; display:flex; align-items:center; gap:4px; text-transform:none; cursor:pointer"
-             title="transparent background instead of gray — half-melted edges become see-through">
-        <input type="checkbox" id="exportAlpha" style="width:auto">⌀bg</label>
+             title="transparent background — half-melted edges become see-through">
+        <input type="checkbox" id="exportAlpha" style="width:auto">transparent</label>
     </div>
   </div>
+  <button id="drawerTab">⚙ Advanced</button>
 </div>
 
 <div id="jobs"></div>
 
-<div id="strip">
+<div id="zoomctl" class="card">
+  <button id="zoomOut" title="zoom out">−</button>
+  <span id="zoomPct" class="mono" style="min-width:44px; text-align:center">100%</span>
+  <button id="zoomIn" title="zoom in">+</button>
+</div>
+<div id="statusline" class="card">
   <span id="coords">–</span>
   <span id="stripJob" class="job"></span>
-  <span id="stripSave" class="save">–</span>
+  <span id="stripSave">–</span>
 </div>
 
 <script src="/static/vendor/pixi.min.js"></script>
