@@ -188,23 +188,30 @@
   </div>
 
   <div class="tool-group" data-tool="latent">
-    <label title="Instant, no AI steering — pure VQGAN material">operation</label>
+    <label title="Instant material effects — one decode, no AI steering. They rework the VQGAN 'weave' the picture is made of.">effect</label>
     <select id="latentOp">
-      <option value="spray" selected>spray — scatter fresh random tokens</option>
-      <option value="neighbor">neighbor swap — subtle wrongness</option>
-      <option value="shift">shift — slide the tokens</option>
-      <option value="mirror">mirror — flip the tokens</option>
-      <option value="repeat">repeat — tile a token block</option>
-      <option value="bloom">bloom — feedback drift</option>
+      <option value="spray" selected>noise spray</option>
+      <option value="neighbor">subtle corruption</option>
+      <option value="shift">slide</option>
+      <option value="mirror">mirror</option>
+      <option value="repeat">textile tiling</option>
+      <option value="bloom">melt / bloom</option>
     </select>
+    <div id="latDesc" style="color:var(--mut); font-size:12px; margin-top:6px"></div>
     <div id="latAmountRow">
-      <label title="Fraction of tokens affected">amount <span class="val" id="latAmountVal">50%</span></label>
+      <label title="How much of the area gets hit">amount <span class="val" id="latAmountVal">50%</span></label>
       <input type="range" id="latAmount" min="0" max="100" step="5" value="50">
     </div>
     <div class="row" id="latPaRow">
       <label style="margin:0" id="latPaLabel">param</label>
-      <input type="number" id="latPa" value="2" style="width:60px">
-      <input type="number" id="latPb" value="0" style="width:60px; display:none">
+      <input type="range" id="latPaSlider" min="1" max="8" step="1" value="2" style="flex:1">
+      <span class="val mono" id="latPaVal">2</span>
+      <input type="number" id="latPa" value="2" style="display:none">
+      <input type="number" id="latPb" value="0" style="display:none">
+    </div>
+    <div class="row" id="latAxisRow" style="display:none">
+      <button class="chip on" id="latAxisH" title="left-right flip">horizontal</button>
+      <button class="chip" id="latAxisV" title="top-bottom flip">vertical</button>
     </div>
     <div class="row">
       <button id="latApplySel" class="primary" style="display:none"

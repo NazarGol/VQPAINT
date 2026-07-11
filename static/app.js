@@ -94,19 +94,30 @@ function anchorBBox() {
 function updatePopover() {
   const pop = $("popover");
   const bb = anchorBBox();
-  const show = bb && !pickingBleed;
+  // never while mid-gesture, never while picking a bleed source
+  const show = bb && !pickingBleed && !drawing && !selDrawing;
   pop.style.display = show ? "block" : "none";
   if (!show) return;
   $("popTitle").textContent = TOOL_TITLES[tool] || tool;
   const sx0 = px + bb[0] * k, sy0 = py + bb[1] * k;
   const sx1 = px + (bb[0] + bb[2]) * k, sy1 = py + (bb[1] + bb[3]) * k;
-  const cx = Math.max(150, Math.min(innerWidth - 150, (sx0 + sx1) / 2));
-  const ph = pop.offsetHeight || 260;
-  let top = sy0 - ph - 16;
-  const below = top < 64;
-  if (below) top = Math.min(innerHeight - ph - 80, sy1 + 16);
-  pop.classList.toggle("below", below);
-  pop.style.left = `${Math.round(cx - 132)}px`;
+  const ph = pop.offsetHeight || 280, pw = 264;
+  const cx = Math.max(16 + pw / 2, Math.min(innerWidth - 16 - pw / 2, (sx0 + sx1) / 2));
+  let left, top, arrow = "none";
+  if (sy0 - ph - 16 >= 60) {                       // above the region
+    left = cx - pw / 2; top = sy0 - ph - 14; arrow = "above";
+  } else if (sy1 + ph + 16 <= innerHeight - 76) {  // below it
+    left = cx - pw / 2; top = sy1 + 14; arrow = "below";
+  } else if (sx1 + pw + 24 <= innerWidth) {        // to the right
+    left = sx1 + 14; top = Math.max(60, Math.min(innerHeight - ph - 76, (sy0 + sy1) / 2 - ph / 2));
+  } else if (sx0 - pw - 24 >= 0) {                 // to the left
+    left = sx0 - pw - 14; top = Math.max(60, Math.min(innerHeight - ph - 76, (sy0 + sy1) / 2 - ph / 2));
+  } else {                                         // region fills the view: park top-right
+    left = innerWidth - pw - 16; top = 64;
+  }
+  pop.querySelector(".arrow").style.display = arrow === "none" ? "none" : "";
+  pop.classList.toggle("below", arrow === "below");
+  pop.style.left = `${Math.round(left)}px`;
   pop.style.top = `${Math.round(top)}px`;
   if (tool === "refine") updateRefineHint();
 }
@@ -444,22 +455,53 @@ $("imageFile").addEventListener("change", async () => {
   setTool("image");
 });
 
-$("latentOp").addEventListener("change", () => {
-  const LATENT_PARAMS = {
-    spray:    { amount: true,  pa: null,             pb: false },
-    neighbor: { amount: true,  pa: "k neighbors",    pb: false },
-    shift:    { amount: false, pa: "dx (tokens)",    pb: true },
-    mirror:   { amount: false, pa: "axis 0=h 1=v",   pb: false },
-    repeat:   { amount: false, pa: "block (tokens)", pb: false },
-    bloom:    { amount: false, pa: "passes 1-6",     pb: false },
-  };
-  const cfg = LATENT_PARAMS[$("latentOp").value];
+// latent effects: plain descriptions, per-effect defaults, friendly controls
+// (latPa/latPb stay as hidden sources of truth for the request payload)
+const LATENT_CFG = {
+  spray:    { desc: "Scatters fresh random material through the area — gives the engine raw texture to be reworked later, or leave it as pure patchwork.",
+              amount: true },
+  neighbor: { desc: "Every mark is swapped for a near-identical one from the model's vocabulary. The picture stays the same but grows quietly wrong.",
+              amount: true, pa: { label: "how wrong", min: 2, max: 32, def: 8 } },
+  shift:    { desc: "Slides the area's fabric sideways inside the mask — edges tear and repeat where it exits.",
+              pa: { label: "slide distance", min: 1, max: 8, def: 3 } },
+  mirror:   { desc: "Flips the area's fabric. Symmetry out of asymmetry, in one stroke.",
+              axis: true },
+  repeat:   { desc: "Takes a small swatch and tiles it across the whole area — instant textile / wallpaper glitch.",
+              pa: { label: "swatch size", min: 1, max: 8, def: 3 } },
+  bloom:    { desc: "Recycles the area through the model's memory a few times — forms soften and drift toward what the model dreams they are.",
+              pa: { label: "melt passes", min: 1, max: 6, def: 3 } },
+};
+
+function latentOpChanged() {
+  const cfg = LATENT_CFG[$("latentOp").value];
+  $("latDesc").textContent = cfg.desc;
   $("latAmountRow").style.display = cfg.amount ? "block" : "none";
   $("latPaRow").style.display = cfg.pa ? "flex" : "none";
-  $("latPaLabel").textContent = cfg.pa || "";
-  $("latPb").style.display = cfg.pb ? "" : "none";
+  $("latAxisRow").style.display = cfg.axis ? "flex" : "none";
+  if (cfg.pa) {
+    $("latPaLabel").textContent = cfg.pa.label;
+    const s = $("latPaSlider");
+    s.min = cfg.pa.min; s.max = cfg.pa.max; s.value = cfg.pa.def;
+    $("latPa").value = cfg.pa.def;
+    $("latPaVal").textContent = cfg.pa.def;
+  }
+  if (cfg.axis) $("latPa").value = 0;
+  $("latPb").value = 0;
+}
+$("latentOp").addEventListener("change", latentOpChanged);
+latentOpChanged();
+$("latPaSlider").addEventListener("input", () => {
+  $("latPa").value = $("latPaSlider").value;
+  $("latPaVal").textContent = $("latPaSlider").value;
 });
-$("latentOp").dispatchEvent(new Event("change"));
+$("latAxisH").onclick = () => {
+  $("latPa").value = 0;
+  $("latAxisH").classList.add("on"); $("latAxisV").classList.remove("on");
+};
+$("latAxisV").onclick = () => {
+  $("latPa").value = 1;
+  $("latAxisV").classList.add("on"); $("latAxisH").classList.remove("on");
+};
 $("latAmount").addEventListener("input", () => {
   $("latAmountVal").textContent = $("latAmount").value + "%";
 });
