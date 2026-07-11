@@ -239,8 +239,13 @@
       <button id="applyWorld">apply</button>
     </div>
     <div class="row">
-      <button id="exportPainted" title="download a PNG of everything painted (auto-cropped)">export painted</button>
+      <button id="exportPainted" title="download a PNG of everything painted (auto-cropped), refined areas at full detail">export painted</button>
       <button id="exportFull" title="download the whole canvas">full</button>
+      <select id="exportScale" style="width:auto" title="output pixels per canvas pixel — auto uses the finest detail level you've painted">
+        <option value="auto" selected>auto</option>
+        <option value="1">1×</option><option value="2">2×</option>
+        <option value="4">4×</option><option value="8">8×</option>
+      </select>
       <label style="margin:0; display:flex; align-items:center; gap:4px; text-transform:none; cursor:pointer"
              title="transparent background instead of gray — half-melted edges become see-through">
         <input type="checkbox" id="exportAlpha" style="width:auto">⌀bg</label>

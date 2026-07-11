@@ -19,10 +19,12 @@ import io
 import json
 import math
 import os
+import struct
 import threading
 import time
 import traceback
 import uuid
+import zlib
 from contextlib import asynccontextmanager
 from queue import Queue
 
@@ -31,7 +33,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image, ImageFilter
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1193,32 +1195,148 @@ def view(x0: float, y0: float, x1: float, y1: float, w: int, h: int):
                     headers={"Cache-Control": "no-store"})
 
 
-@app.get("/export")
-def export(scope: str = "painted", bg: str = "canvas"):
+def _png_chunk(tag, data):
+    return (struct.pack(">I", len(data)) + tag + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+
+
+def _stream_png(width, height, bands, alpha=False):
+    """Minimal streaming PNG encoder: bands yield uint8 [h, w, 3|4] in
+    order; one zlib stream split over IDAT chunks. Memory = one band."""
+    yield b"\x89PNG\r\n\x1a\n"
+    yield _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8,
+                                          6 if alpha else 2, 0, 0, 0))
+    comp = zlib.compressobj(6)
+    filt = np.zeros(1, np.uint8).tobytes()
+    for band in bands:
+        rows = bytearray()
+        for row in band:
+            rows += filt + row.tobytes()
+        out = comp.compress(bytes(rows))
+        if out:
+            yield _png_chunk(b"IDAT", out)
+    out = comp.flush()
+    if out:
+        yield _png_chunk(b"IDAT", out)
+    yield _png_chunk(b"IEND", b"")
+
+
+def _render_content(wx0, wy0, ww_, wh_, scale):
+    """Pure-content premultiplied composite of an INTEGER world rect at an
+    integer scale: L0 upsampled, then every finer level's chunks, finest
+    wins. -> (pm f32 [h,w,3], alpha f32 [h,w])."""
+    w, h = ww_ * scale, wh_ * scale
     with buf_lock:
-        if scope == "painted":
-            ys, xs = np.nonzero(coverage)
-            if len(ys) == 0:
-                raise HTTPException(404, "nothing painted yet")
-            m = 32
-            y0, y1 = max(0, ys.min() - m), min(world, ys.max() + 1 + m)
-            x0, x1 = max(0, xs.min() - m), min(world, xs.max() + 1 + m)
-        else:
-            x0, y0, x1, y1 = 0, 0, world, world
-        rgb = canvas[y0:y1, x0:x1].copy()
-        a = coverage[y0:y1, x0:x1].copy()
+        rgb0 = canvas[wy0:wy0 + wh_, wx0:wx0 + ww_].copy()
+        a0 = coverage[wy0:wy0 + wh_, wx0:wx0 + ww_].copy()
+    if scale > 1:
+        rgb0 = np.asarray(Image.fromarray(rgb0).resize((w, h), Image.BICUBIC), np.uint8)
+        a0 = np.asarray(Image.fromarray(a0).resize((w, h), Image.BILINEAR), np.uint8)
+    va = a0.astype(np.float32) / 255.0
+    pm = (rgb0.astype(np.float32) / 255.0) * va[..., None]
+    for lvl in range(1, MAX_LEVEL + 1):
+        st = levels[lvl]
+        if not st.alpha:
+            continue
+        wpc = CHUNK // st.scale  # world px per chunk
+        for (cy, cx) in list(st.chunks_touching(wx0, wy0, wx0 + ww_, wy0 + wh_)):
+            gwx0, gwy0 = cx * wpc, cy * wpc
+            ix0, iy0 = max(gwx0, wx0), max(gwy0, wy0)
+            ix1, iy1 = min(gwx0 + wpc, wx0 + ww_), min(gwy0 + wpc, wy0 + wh_)
+            if ix1 <= ix0 or iy1 <= iy0:
+                continue
+            s = st.scale
+            crgb = st.rgb[(cy, cx)][(iy0 - gwy0) * s:(iy1 - gwy0) * s,
+                                    (ix0 - gwx0) * s:(ix1 - gwx0) * s]
+            ca = st.alpha[(cy, cx)][(iy0 - gwy0) * s:(iy1 - gwy0) * s,
+                                    (ix0 - gwx0) * s:(ix1 - gwx0) * s]
+            if not ca.any():
+                continue
+            dw, dh = (ix1 - ix0) * scale, (iy1 - iy0) * scale
+            if (dw, dh) != crgb.shape[1::-1]:
+                res = Image.BICUBIC if dw > crgb.shape[1] else Image.LANCZOS
+                crgb = np.asarray(Image.fromarray(crgb).resize((dw, dh), res), np.uint8)
+                ca = np.asarray(Image.fromarray(ca).resize((dw, dh), Image.BILINEAR), np.uint8)
+            dx0, dy0 = (ix0 - wx0) * scale, (iy0 - wy0) * scale
+            aj = ca.astype(np.float32)[..., None] / 255.0
+            tgt_pm = pm[dy0:dy0 + dh, dx0:dx0 + dw]
+            tgt_va = va[dy0:dy0 + dh, dx0:dx0 + dw]
+            pm[dy0:dy0 + dh, dx0:dx0 + dw] = \
+                (crgb.astype(np.float32) / 255.0) * aj + tgt_pm * (1.0 - aj)
+            va[dy0:dy0 + dh, dx0:dx0 + dw] = aj[..., 0] + tgt_va * (1.0 - aj[..., 0])
+    return pm, va
 
-    if bg == "transparent":
-        img = Image.merge("RGBA", (*Image.fromarray(rgb).split(), Image.fromarray(a)))
+
+def _painted_bbox():
+    """World bbox of everything painted at any level, or None."""
+    boxes = []
+    with buf_lock:
+        ys, xs = np.nonzero(coverage)
+        if len(ys):
+            boxes.append((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
+        for st in levels.values():
+            wpc = CHUNK // st.scale
+            for (cy, cx), a in st.alpha.items():
+                if a.any():
+                    boxes.append((cx * wpc, cy * wpc, (cx + 1) * wpc, (cy + 1) * wpc))
+    if not boxes:
+        return None
+    x0 = max(0, min(b[0] for b in boxes) - 32)
+    y0 = max(0, min(b[1] for b in boxes) - 32)
+    x1 = min(world, max(b[2] for b in boxes) + 32)
+    y1 = min(world, max(b[3] for b in boxes) + 32)
+    return x0, y0, x1, y1
+
+
+MAX_EXPORT_SIDE = 32768
+
+
+@app.get("/export")
+def export(scope: str = "painted", bg: str = "canvas", scale: str = "auto"):
+    """Flatten the pyramid: every area at its finest available level.
+    scale N renders N output px per world px; auto picks the finest level
+    present (clamped so the output stays under MAX_EXPORT_SIDE)."""
+    if scope == "painted":
+        bb = _painted_bbox()
+        if bb is None:
+            raise HTTPException(404, "nothing painted yet")
+        x0, y0, x1, y1 = bb
     else:
-        af = a.astype(np.float32)[..., None] / 255.0
-        img = Image.fromarray((rgb.astype(np.float32) * af + VIRGIN * (1 - af) + 0.5).astype(np.uint8))
+        x0, y0, x1, y1 = 0, 0, world, world
 
-    buf = io.BytesIO()
-    img.save(buf, "PNG")
-    name = f"polotno_{time.strftime('%Y%m%d_%H%M%S')}.png"
-    return Response(buf.getvalue(), media_type="image/png",
-                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+    if scale == "auto":
+        sc = 2 ** max([k for k, st in levels.items() if st.alpha] + [0])
+    else:
+        try:
+            sc = int(scale)
+        except ValueError:
+            raise HTTPException(400, "scale must be auto|1|2|4|8|16")
+        if sc not in (1, 2, 4, 8, 16):
+            raise HTTPException(400, "scale must be auto|1|2|4|8|16")
+    while sc > 1 and max(x1 - x0, y1 - y0) * sc > MAX_EXPORT_SIDE:
+        sc //= 2
+
+    out_w, out_h = (x1 - x0) * sc, (y1 - y0) * sc
+    band_world = max(1, 768 // sc)
+
+    def bands():
+        for wy in range(y0, y1, band_world):
+            bh = min(band_world, y1 - wy)
+            pm, va = _render_content(x0, wy, x1 - x0, bh, sc)
+            rgb = np.clip(pm / np.maximum(va[..., None], 1e-6), 0, 1)
+            if bg == "transparent":
+                band = np.dstack([(rgb * 255 + 0.5).astype(np.uint8),
+                                  (va * 255 + 0.5).astype(np.uint8)])
+            else:
+                flat = rgb * va[..., None] * 255 + VIRGIN * (1.0 - va[..., None])
+                band = (flat + 0.5).astype(np.uint8)
+            yield band
+
+    name = f"polotno_{time.strftime('%Y%m%d_%H%M%S')}_{sc}x.png"
+    return StreamingResponse(
+        _stream_png(out_w, out_h, bands(), alpha=(bg == "transparent")),
+        media_type="image/png",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 app.mount("/static", StaticFiles(directory=os.path.join(HERE, "static")), name="static")

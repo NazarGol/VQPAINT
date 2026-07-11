@@ -823,7 +823,8 @@ $("applyWorld").onclick = async () => {
 };
 
 const exportUrl = (scope) =>
-  `/export?scope=${scope}&bg=${$("exportAlpha").checked ? "transparent" : "canvas"}`;
+  `/export?scope=${scope}&bg=${$("exportAlpha").checked ? "transparent" : "canvas"}` +
+  `&scale=${$("exportScale").value}`;
 $("exportPainted").onclick = () => { location.href = exportUrl("painted"); };
 $("exportFull").onclick = () => { location.href = exportUrl("full"); };
 
