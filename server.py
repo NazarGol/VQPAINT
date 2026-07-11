@@ -158,6 +158,14 @@ class SelectReq(BaseModel):
     window: int = 1280                 # search window side, px
 
 
+class SelectClipReq(BaseModel):
+    x: float
+    y: float
+    threshold: float = 0.78            # cosine similarity cut
+    window: int = 3072                 # search window side, px
+    patch: int = 224                   # reference patch around the click
+
+
 def _ramp(size: int, falloff: int) -> np.ndarray:
     ramp = np.ones(size, np.float32)
     f = int(max(0, min(falloff, size // 2)))
@@ -566,6 +574,70 @@ def select(req: SelectReq):
     sub = (mask[by0:by1, bx0:bx1] * 255).astype(np.uint8)
     buf = io.BytesIO()
     Image.fromarray(sub).save(buf, "PNG")
+    return {
+        "bbox": [x0 + bx0, y0 + by0, bx1 - bx0, by1 - by0],
+        "mask_png": base64.b64encode(buf.getvalue()).decode(),
+        "area": int(mask.sum()),
+    }
+
+
+@app.post("/select_clip")
+def select_clip(req: SelectClipReq):
+    """Semantic wand: embed the clicked patch, sweep the window with
+    overlapping tiles through CLIP, select everything whose embedding is
+    cosine-similar above the threshold."""
+    if engine is None:
+        raise HTTPException(503, "engine still loading")
+    xi, yi = int(req.x), int(req.y)
+    if not (0 <= xi < world and 0 <= yi < world):
+        raise HTTPException(400, "point outside canvas")
+    half = max(512, min(req.window, 4096)) // 2
+    x0, y0 = max(0, xi - half), max(0, yi - half)
+    x1, y1 = min(world, xi + half), min(world, yi + half)
+    with buf_lock:
+        rgb = canvas[y0:y1, x0:x1].astype(np.float32)
+        a = coverage[y0:y1, x0:x1].astype(np.float32)[..., None] / 255.0
+    disp = (rgb * a + VIRGIN * (1.0 - a)) / 255.0
+    t = torch.from_numpy(disp).permute(2, 0, 1).to(engine.device)  # [3,H,W]
+    H, W = t.shape[1:]
+
+    def embed_batch(batch):  # [N,3,s,s] 0..1
+        batch = F.interpolate(batch, size=224, mode="bilinear", align_corners=False)
+        with torch.no_grad():
+            e = engine.clip.encode_image(engine_mod.CLIP_NORMALIZE(batch)).float()
+        return F.normalize(e, dim=-1)
+
+    p = max(64, min(req.patch, 512))
+    rx0 = max(0, min(xi - x0 - p // 2, W - p))
+    ry0 = max(0, min(yi - y0 - p // 2, H - p))
+    ref = embed_batch(t[:, ry0:ry0 + p, rx0:rx0 + p][None])
+
+    tile, stride = 192, 96
+    tiles = t.unfold(1, tile, stride).unfold(2, tile, stride)  # [3,ny,nx,tile,tile]
+    ny, nx = tiles.shape[1], tiles.shape[2]
+    flat = tiles.permute(1, 2, 0, 3, 4).reshape(ny * nx, 3, tile, tile)
+    sims = []
+    for i in range(0, len(flat), 64):
+        sims.append((embed_batch(flat[i:i + 64]) @ ref.T).squeeze(1))
+    sims = torch.cat(sims).view(ny, nx)
+
+    # accumulate max similarity per pixel over overlapping tiles
+    score = torch.zeros(1, 1, H, W, device=engine.device)
+    for iy in range(ny):
+        for ix in range(nx):
+            sy, sx = iy * stride, ix * stride
+            region = score[0, 0, sy:sy + tile, sx:sx + tile]
+            torch.maximum(region, sims[iy, ix].expand_as(region), out=region)
+    mask = (score[0, 0] >= req.threshold).cpu().numpy()
+    ys, xs = np.nonzero(mask)
+    if len(ys) == 0:
+        raise HTTPException(404, "nothing similar enough — lower the threshold")
+    by0, by1 = int(ys.min()), int(ys.max()) + 1
+    bx0, bx1 = int(xs.min()), int(xs.max()) + 1
+    sub = Image.fromarray((mask[by0:by1, bx0:bx1] * 255).astype(np.uint8))
+    sub = sub.filter(ImageFilter.GaussianBlur(4))
+    buf = io.BytesIO()
+    sub.save(buf, "PNG")
     return {
         "bbox": [x0 + bx0, y0 + by0, bx1 - bx0, by1 - by0],
         "mask_png": base64.b64encode(buf.getvalue()).decode(),

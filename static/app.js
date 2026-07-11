@@ -86,6 +86,24 @@ function redraw() {
     selSprite.visible = true;
   } else selSprite.visible = false;
 
+  // in-progress selection gesture
+  if (selDrawing) {
+    strokeGfx.lineStyle(1.5, 0x8fbf98, 0.9);
+    if (selDrawing.mode === "rect") {
+      const x = Math.min(selDrawing.ax, selDrawing.bx), y = Math.min(selDrawing.ay, selDrawing.by);
+      const w = Math.abs(selDrawing.bx - selDrawing.ax), h = Math.abs(selDrawing.by - selDrawing.ay);
+      strokeGfx.drawRect(px + x * k, py + y * k, w * k, h * k);
+    } else if (selDrawing.mode === "lasso") {
+      strokeGfx.moveTo(px + selDrawing.pts[0].x * k, py + selDrawing.pts[0].y * k);
+      for (const p of selDrawing.pts) strokeGfx.lineTo(px + p.x * k, py + p.y * k);
+    } else if (selDrawing.mode === "brushsel") {
+      strokeGfx.lineStyle({ width: 2 * selDrawing.r * k, color: 0x8fbf98, alpha: 0.3,
+                            cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND });
+      strokeGfx.moveTo(px + selDrawing.pts[0].x * k, py + selDrawing.pts[0].y * k);
+      for (const p of selDrawing.pts) strokeGfx.lineTo(px + p.x * k, py + p.y * k);
+    }
+  }
+
   jobGfx.clear();
   jobLabels.removeChildren().forEach((c) => c.destroy());
   for (const j of activeJobs) {
@@ -161,6 +179,8 @@ async function fetchView() {
 // ---- input --------------------------------------------------------
 
 let down = null, moved = false, panning = false, drawing = null;
+let selMode = "wand";
+let selDrawing = null;   // {mode:'rect',ax,ay,bx,by} | {mode:'lasso'|'brushsel',r?,pts}
 
 app.view.addEventListener("pointerdown", (e) => {
   if (e.button === 1 || e.button === 2 || spaceHeld) {
@@ -169,12 +189,19 @@ app.view.addEventListener("pointerdown", (e) => {
   }
   if (e.button !== 0) return;
   if (pickingBleed) return;
+  const wx = worldX(e.clientX), wy = worldY(e.clientY);
   if (tool === "brush") {
-    drawing = { r: +$("radius").value, pts: [{ x: worldX(e.clientX), y: worldY(e.clientY) }] };
+    drawing = { r: +$("radius").value, pts: [{ x: wx, y: wy }] };
     strokes.push(drawing);
     selection = null;
     $("brushActions").style.display = "flex";
     redraw();
+  } else if (tool === "wand" && selMode === "rect") {
+    selDrawing = { mode: "rect", ax: wx, ay: wy, bx: wx, by: wy };
+  } else if (tool === "wand" && selMode === "lasso") {
+    selDrawing = { mode: "lasso", pts: [{ x: wx, y: wy }] };
+  } else if (tool === "wand" && selMode === "brushsel") {
+    selDrawing = { mode: "brushsel", r: +$("selRadius").value, pts: [{ x: wx, y: wy }] };
   } else if (tool === "place") {
     down = { x: e.clientX, y: e.clientY }; moved = false;
   }
@@ -190,6 +217,14 @@ window.addEventListener("pointermove", (e) => {
     const last = drawing.pts[drawing.pts.length - 1];
     if (Math.hypot(wx - last.x, wy - last.y) > drawing.r * 0.3)
       drawing.pts.push({ x: wx, y: wy });
+  } else if (selDrawing) {
+    const wx = worldX(e.clientX), wy = worldY(e.clientY);
+    if (selDrawing.mode === "rect") { selDrawing.bx = wx; selDrawing.by = wy; }
+    else {
+      const last = selDrawing.pts[selDrawing.pts.length - 1];
+      const min = selDrawing.mode === "brushsel" ? selDrawing.r * 0.3 : 3 / k;
+      if (Math.hypot(wx - last.x, wy - last.y) > min) selDrawing.pts.push({ x: wx, y: wy });
+    }
   } else if (down && tool === "place") {
     const dx = e.clientX - down.x, dy = e.clientY - down.y;
     if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
@@ -202,6 +237,7 @@ window.addEventListener("pointermove", (e) => {
 window.addEventListener("pointerup", (e) => {
   if (panning) { panning = false; down = null; return; }
   if (drawing) { drawing = null; return; }
+  if (selDrawing) { finishSelDrawing(); return; }
   if (e.target !== app.view) { down = null; return; }
   const wx = worldX(e.clientX), wy = worldY(e.clientY);
   if (pickingBleed) {
@@ -214,8 +250,10 @@ window.addEventListener("pointerup", (e) => {
     paintSquare(wx, wy);
   } else if (tool === "image" && importImg) {
     placeImage(wx, wy);
-  } else if (tool === "wand") {
+  } else if (tool === "wand" && selMode === "wand") {
     wandSelect(wx, wy);
+  } else if (tool === "wand" && selMode === "similar") {
+    similarSelect(wx, wy);
   }
   down = null;
 });
@@ -234,18 +272,26 @@ window.addEventListener("resize", () => { redraw(); scheduleFetch(); });
 
 // ---- keyboard -----------------------------------------------------
 
-const SIZE_KEY = { place: ["size", 32], brush: ["radius", 16], wand: ["tolerance", 2], image: ["size", 32] };
+function sizeKeyFor() {
+  if (tool === "brush") return ["radius", 16];
+  if (tool === "wand") {
+    if (selMode === "similar") return ["similarity", 0.02];
+    if (selMode === "brushsel") return ["selRadius", 16];
+    return ["tolerance", 2];
+  }
+  return ["size", 32];
+}
 
 window.addEventListener("keydown", (e) => {
   if (e.target.tagName === "TEXTAREA" || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
   if (e.code === "Space") { spaceHeld = true; e.preventDefault(); return; }
   if (e.key === "Escape") { clearPending(); pickingBleed = false; redraw(); }
   else if (e.key === "Enter" && (strokes.length || selection)) generatePending();
-  else if (e.key >= "1" && e.key <= "4") setTool(["place", "brush", "wand", "image"][+e.key - 1]);
+  else if (e.key >= "1" && e.key <= "5") setTool(["place", "brush", "wand", "image", "latent"][+e.key - 1]);
   else if (e.key === "[" || e.key === "]") {
-    const [id, step] = SIZE_KEY[tool];
+    const [id, step] = sizeKeyFor();
     const el = $(id);
-    el.value = +el.value + (e.key === "]" ? step : -step);
+    el.value = Math.round((+el.value + (e.key === "]" ? step : -step)) * 100) / 100;
     el.dispatchEvent(new Event("input"));
   }
 });
@@ -293,12 +339,25 @@ $("imageFile").addEventListener("change", async () => {
 });
 
 function clearPending() {
-  strokes = []; drawing = null; selection = null;
+  strokes = []; drawing = null; selection = null; selDrawing = null;
   $("brushActions").style.display = "none";
+  $("selOps").style.display = "none";
   redraw();
 }
 $("clearBrush").onclick = clearPending;
 $("genBrush").onclick = () => generatePending();
+
+document.querySelectorAll(".selmode").forEach((b) => {
+  b.onclick = () => {
+    selMode = b.dataset.mode;
+    document.querySelectorAll(".selmode").forEach((x) => x.classList.toggle("on", x === b));
+    $("selParamTol").style.display = selMode === "wand" ? "block" : "none";
+    $("selParamSim").style.display = selMode === "similar" ? "block" : "none";
+    $("selParamRad").style.display = selMode === "brushsel" ? "block" : "none";
+  };
+});
+for (const op of ["Grow", "Shrink", "Feather", "Invert"])
+  $("sel" + op).onclick = () => morphSelection(op.toLowerCase());
 
 $("bleedFrom").onclick = () => { pickingBleed = true; };
 $("bleedFromClear").onclick = () => {
@@ -349,6 +408,119 @@ async function placeImage(wx, wy) {
   });
 }
 
+function maskCanvas(bbox, drawFn) {
+  /* render a white-on-black mask for bbox via drawFn(ctx, scale, ox, oy)
+     and return {bbox, mask_png} */
+  const [x0, y0, bw, bh] = bbox;
+  const scale = Math.min(1, 1024 / Math.max(bw, bh));
+  const c = document.createElement("canvas");
+  c.width = Math.max(8, Math.round(bw * scale));
+  c.height = Math.max(8, Math.round(bh * scale));
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.strokeStyle = ctx.fillStyle = "#fff";
+  ctx.lineCap = ctx.lineJoin = "round";
+  drawFn(ctx, scale, x0, y0);
+  return { bbox, mask_png: c.toDataURL("image/png").split(",")[1] };
+}
+
+async function finishSelDrawing() {
+  const d = selDrawing;
+  selDrawing = null;
+  if (d.mode === "rect") {
+    const x0 = Math.floor(Math.min(d.ax, d.bx)), y0 = Math.floor(Math.min(d.ay, d.by));
+    const w = Math.ceil(Math.abs(d.bx - d.ax)), h = Math.ceil(Math.abs(d.by - d.ay));
+    if (w < 8 || h < 8) { redraw(); return; }
+    await applySelection(maskCanvas([x0, y0, w, h], (ctx) => {
+      ctx.fillRect(0, 0, 1e5, 1e5);
+    }));
+  } else if (d.mode === "lasso") {
+    if (d.pts.length < 3) { redraw(); return; }
+    let x0 = 1e18, y0 = 1e18, x1 = -1e18, y1 = -1e18;
+    for (const p of d.pts) {
+      x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y);
+      x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y);
+    }
+    x0 = Math.floor(x0); y0 = Math.floor(y0);
+    const w = Math.ceil(x1 - x0), h = Math.ceil(y1 - y0);
+    if (w < 8 || h < 8) { redraw(); return; }
+    await applySelection(maskCanvas([x0, y0, w, h], (ctx, s, ox, oy) => {
+      ctx.beginPath();
+      ctx.moveTo((d.pts[0].x - ox) * s, (d.pts[0].y - oy) * s);
+      for (const p of d.pts) ctx.lineTo((p.x - ox) * s, (p.y - oy) * s);
+      ctx.closePath(); ctx.fill();
+    }));
+  } else if (d.mode === "brushsel") {
+    let x0 = 1e18, y0 = 1e18, x1 = -1e18, y1 = -1e18;
+    for (const p of d.pts) {
+      x0 = Math.min(x0, p.x - d.r); y0 = Math.min(y0, p.y - d.r);
+      x1 = Math.max(x1, p.x + d.r); y1 = Math.max(y1, p.y + d.r);
+    }
+    x0 = Math.floor(x0); y0 = Math.floor(y0);
+    await applySelection(maskCanvas([x0, y0, Math.ceil(x1 - x0), Math.ceil(y1 - y0)],
+      (ctx, s, ox, oy) => {
+        if (d.pts.length === 1) {
+          ctx.beginPath();
+          ctx.arc((d.pts[0].x - ox) * s, (d.pts[0].y - oy) * s, d.r * s, 0, 7);
+          ctx.fill();
+        } else {
+          ctx.lineWidth = 2 * d.r * s;
+          ctx.beginPath();
+          ctx.moveTo((d.pts[0].x - ox) * s, (d.pts[0].y - oy) * s);
+          for (const p of d.pts) ctx.lineTo((p.x - ox) * s, (p.y - oy) * s);
+          ctx.stroke();
+        }
+      }));
+  }
+}
+
+async function similarSelect(wx, wy) {
+  if (wx < 0 || wy < 0 || wx > WORLD || wy > WORLD) return;
+  $("stripJob").textContent = "◌ looking for similar regions…";
+  const res = await fetch("/select_clip", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ x: wx, y: wy, threshold: +$("similarity").value }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.detail || `similar-select failed (${res.status})`);
+    updateStrip();
+    return;
+  }
+  await applySelection(await res.json());
+  updateStrip();
+}
+
+async function morphSelection(op) {
+  if (!selection) return;
+  const pad = op === "grow" ? 24 : 0;
+  const [bx, by, bw, bh] = selection.bbox;
+  const bbox = [bx - pad, by - pad, bw + 2 * pad, bh + 2 * pad];
+  const scale = Math.min(1, 1024 / Math.max(bbox[2], bbox[3]));
+  const c = document.createElement("canvas");
+  c.width = Math.max(8, Math.round(bbox[2] * scale));
+  c.height = Math.max(8, Math.round(bbox[3] * scale));
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, c.width, c.height);
+  const raw = await createImageBitmap(
+    await (await fetch(`data:image/png;base64,${selection.mask_png}`)).blob());
+  const blur = op === "invert" ? 0 : Math.max(2, 8 * scale);
+  ctx.filter = `blur(${blur}px)`;
+  ctx.drawImage(raw, pad * scale, pad * scale, bw * scale, bh * scale);
+  ctx.filter = "none";
+  const img = ctx.getImageData(0, 0, c.width, c.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    let v = d[i];
+    if (op === "grow") v = v > 32 ? 255 : 0;
+    else if (op === "shrink") v = v > 224 ? 255 : 0;
+    else if (op === "invert") v = 255 - v;
+    d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  await applySelection({ bbox, mask_png: c.toDataURL("image/png").split(",")[1] });
+}
+
 async function wandSelect(wx, wy) {
   if (wx < 0 || wy < 0 || wx > WORLD || wy > WORLD) return;
   const res = await fetch("/select", {
@@ -383,6 +555,7 @@ async function applySelection(sel) {
   selSprite.texture = PIXI.Texture.from(c);
   if (old && old !== PIXI.Texture.EMPTY) old.destroy(true);
   $("brushActions").style.display = "flex";
+  $("selOps").style.display = "flex";
   redraw();
 }
 
@@ -515,7 +688,8 @@ for (const [id, out, fmt] of [
   ["cutn", "cutnVal", (v) => v], ["wimg", "wimgVal", (v) => (+v).toFixed(2)],
   ["wtext", "wtextVal", (v) => (+v).toFixed(2)], ["hold", "holdVal", (v) => (+v).toFixed(2)],
   ["drift", "driftVal", (v) => (+v).toFixed(2)], ["strength", "strengthVal", (v) => (+v).toFixed(2)],
-  ["tolerance", "tolVal", (v) => v],
+  ["tolerance", "tolVal", (v) => v], ["similarity", "simVal", (v) => (+v).toFixed(2)],
+  ["selRadius", "selRadVal", (v) => v],
 ]) {
   $(id).addEventListener("input", () => { $(out).textContent = fmt($(id).value); redraw(); });
 }

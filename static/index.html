@@ -113,8 +113,31 @@
   </div>
 
   <div class="tool-group" data-tool="wand">
-    <label title="How different a color can be and still join the wand selection">tolerance <span class="val" id="tolVal">18</span></label>
-    <input type="range" id="tolerance" min="2" max="80" step="1" value="18">
+    <div class="row">
+      <button class="chip selmode on" data-mode="wand" title="click a color — selects the connected same-color area">wand</button>
+      <button class="chip selmode" data-mode="similar" title="click anything — selects everything that LOOKS like it (CLIP similarity), even far away">similar</button>
+      <button class="chip selmode" data-mode="rect" title="drag a rectangle">rect</button>
+      <button class="chip selmode" data-mode="lasso" title="draw a freehand outline">lasso</button>
+      <button class="chip selmode" data-mode="brushsel" title="paint the selection with a round brush">brush</button>
+    </div>
+    <div id="selParamTol">
+      <label title="How different a color can be and still join the wand selection">tolerance <span class="val" id="tolVal">18</span></label>
+      <input type="range" id="tolerance" min="2" max="80" step="1" value="18">
+    </div>
+    <div id="selParamSim" style="display:none">
+      <label title="How semantically close a region must look to join the selection. Lower grabs more.">similarity <span class="val" id="simVal">0.78</span></label>
+      <input type="range" id="similarity" min="0.5" max="0.95" step="0.01" value="0.78">
+    </div>
+    <div id="selParamRad" style="display:none">
+      <label title="Selection brush radius">radius <span class="val" id="selRadVal">96</span></label>
+      <input type="range" id="selRadius" min="16" max="512" step="8" value="96">
+    </div>
+    <div class="row" id="selOps" style="display:none">
+      <button class="chip" id="selGrow" title="expand the selection edge outward">grow</button>
+      <button class="chip" id="selShrink" title="pull the selection edge inward">shrink</button>
+      <button class="chip" id="selFeather" title="soften the selection edge">feather</button>
+      <button class="chip" id="selInvert" title="select everything in the box EXCEPT the current selection">invert</button>
+    </div>
   </div>
 
   <div class="tool-group" data-tool="image">
