@@ -147,6 +147,21 @@ class PaintReq(BaseModel):
     bleed_from: list[float] | None = None  # [x, y]: bleed from elsewhere
 
 
+class LatentReq(BaseModel):
+    """Direct token-grid ops — no CLIP, no optimization, one decode."""
+    op: str                            # spray|shift|mirror|repeat|neighbor|bloom
+    x: float | None = None
+    y: float | None = None
+    size: int = 512
+    bbox: list[int] | None = None
+    mask_png: str | None = None
+    falloff: int = 64
+    amount: float = 0.5                # spray/neighbor: fraction of tokens
+    pa: int = 2                        # shift dx | mirror axis | repeat block | neighbor k | bloom passes
+    pb: int = 0                        # shift dy
+    seed: int | None = None
+
+
 class SizeReq(BaseModel):
     size: int
 
@@ -443,6 +458,103 @@ def _run_paint(job: dict, force_ckpt=False):
         composite(last_img, final=True)
 
 
+def _run_latent(job: dict):
+    p = job["params"]
+    x0, y0, rw, rh, mask = _region_and_mask(p)
+    job["bbox"] = [x0, y0, rw, rh]
+    seed = p["seed"] if p["seed"] is not None else int(torch.seed() % 2**31)
+    job["seed"] = seed
+    torch.manual_seed(seed)
+
+    with buf_lock:
+        orig = canvas[y0 : y0 + rh, x0 : x0 + rw].astype(np.float32) / 255.0
+        cov = coverage[y0 : y0 + rh, x0 : x0 + rw].astype(np.float32) / 255.0
+    if not (cov > 0).any():
+        raise ValueError("latent ops need existing paint under them")
+
+    scale = min(1.0, WORK_MAX / max(rw, rh))
+    ww = min(WORK_MAX, max(64, int(round(rw * scale / 64)) * 64))
+    wh = min(WORK_MAX, max(64, int(round(rh * scale / 64)) * 64))
+
+    crop, _ = edge_fill(orig, cov, engine.device)
+    img = Image.fromarray((crop * 255 + 0.5).astype(np.uint8)).resize((ww, wh), Image.LANCZOS)
+    t = torch.from_numpy(np.asarray(img, np.float32) / 255.0).permute(2, 0, 1)[None]
+    z = engine.z_from_pixels(t)
+
+    ty, tx = wh // engine.f, ww // engine.f
+    mimg = Image.fromarray((mask * 255 + 0.5).astype(np.uint8)).resize((tx, ty), Image.BILINEAR)
+    m = torch.from_numpy(np.asarray(mimg, np.float32) / 255.0).to(engine.device) > 0.25
+
+    op, amount = p["op"], float(p["amount"])
+    pa, pb = int(p["pa"]), int(p["pb"])
+    dev = engine.device
+
+    if op == "spray":
+        sel = m & (torch.rand(ty, tx, device=dev) < amount)
+        zr = engine.z_from_random(tx, ty)
+        z[:, :, sel] = zr[:, :, sel]
+    elif op == "shift":
+        zs = torch.roll(z, shifts=(pb, pa), dims=(2, 3))
+        z = torch.where(m[None, None], zs, z)
+    elif op == "mirror":
+        zs = torch.flip(z, dims=[2 if pa == 1 else 3])
+        z = torch.where(m[None, None], zs, z)
+    elif op == "repeat":
+        n = max(1, min(pa, min(ty, tx)))
+        ys, xs = torch.nonzero(m, as_tuple=True)
+        oy, ox = (int(ys.min()), int(xs.min())) if len(ys) else (0, 0)
+        block = z[:, :, oy : oy + n, ox : ox + n]
+        reps = (math.ceil(ty / n), math.ceil(tx / n))
+        tiled = block.repeat(1, 1, reps[0], reps[1])[:, :, :ty, :tx]
+        z = torch.where(m[None, None], tiled, z)
+    elif op == "neighbor":
+        codebook = engine.model.quantize.embedding.weight  # [n_e, e_dim]
+        kk = max(1, min(pa if pa > 1 else 8, 64))
+        zz = z.movedim(1, 3).reshape(-1, engine.e_dim)
+        d = zz.pow(2).sum(1, keepdim=True) + codebook.pow(2).sum(1) - 2 * zz @ codebook.T
+        idx = d.argmin(1)
+        sel = m.flatten() & (torch.rand(ty * tx, device=dev) < amount)
+        if bool(sel.any()):
+            u, inv = idx[sel].unique(return_inverse=True)
+            du = (codebook[u].pow(2).sum(1, keepdim=True) + codebook.pow(2).sum(1)
+                  - 2 * codebook[u] @ codebook.T)
+            knn = du.topk(kk + 1, largest=False).indices[:, 1:]        # [U, kk]
+            pick = knn[inv, torch.randint(kk, (int(sel.sum()),), device=dev)]
+            zz[sel] = codebook[pick]
+            z = zz.reshape(1, ty, tx, engine.e_dim).movedim(3, 1).contiguous()
+    elif op == "bloom":
+        passes = max(1, min(pa, 6))
+        z0 = z.clone()
+        for _ in range(passes):
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16,
+                                                 enabled=engine.autocast):
+                x = engine.synth(z).float()
+            z = engine.z_from_pixels(x)
+        z = torch.where(m[None, None], z, z0)
+    else:
+        raise ValueError(f"unknown latent op '{op}'")
+
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16,
+                                         enabled=engine.autocast):
+        out = engine.synth(z).float().cpu()
+
+    arr = out[0].permute(1, 2, 0).numpy()
+    if (ww, wh) != (rw, rh):
+        im = Image.fromarray((arr * 255 + 0.5).astype(np.uint8))
+        arr = np.asarray(im.resize((rw, rh), Image.LANCZOS), np.float32) / 255.0
+    a_new = mask[..., None]
+    a_old = cov[..., None]
+    a_out = a_new + a_old * (1.0 - a_new)
+    safe = np.maximum(a_out, 1e-6)
+    res = np.where(a_out > 1e-6,
+                   (arr * a_new + orig * a_old * (1.0 - a_new)) / safe, orig)
+    with buf_lock:
+        canvas[y0 : y0 + rh, x0 : x0 + rw] = (np.clip(res, 0, 1) * 255 + 0.5).astype(np.uint8)
+        coverage[y0 : y0 + rh, x0 : x0 + rw] = (a_out[..., 0] * 255 + 0.5).astype(np.uint8)
+    dirty.set()
+    job["iter"] = 1
+
+
 def worker():
     global engine
     while engine is None:
@@ -460,12 +572,16 @@ def worker():
         job["status"] = "running"
         job["started"] = time.time()
         try:
+            run = _run_latent if job["params"].get("op") else _run_paint
             try:
-                _run_paint(job)
+                run(job)
             except torch.OutOfMemoryError:
                 torch.cuda.empty_cache()
                 job["note"] = "retried with low-VRAM decoder"
-                _run_paint(job, force_ckpt=True)
+                if run is _run_paint:
+                    _run_paint(job, force_ckpt=True)
+                else:
+                    raise
             job["status"] = "stopped" if job.get("stop") else "done"
             _log_op(job)
         except Exception as e:
@@ -579,6 +695,28 @@ def select(req: SelectReq):
         "mask_png": base64.b64encode(buf.getvalue()).decode(),
         "area": int(mask.sum()),
     }
+
+
+@app.post("/latent_op")
+def latent_op(req: LatentReq):
+    if req.op not in ("spray", "shift", "mirror", "repeat", "neighbor", "bloom"):
+        raise HTTPException(400, "op must be spray|shift|mirror|repeat|neighbor|bloom")
+    if req.bbox is None and (req.x is None or req.y is None):
+        raise HTTPException(400, "need x/y or bbox")
+    job = {
+        "id": uuid.uuid4().hex[:12],
+        "status": "queued",
+        "iter": 0,
+        "params": {**req.model_dump(), "prompt": "", "iterations": 1},
+        "bbox": req.bbox if req.bbox else
+                [int(round(req.x - req.size / 2)), int(round(req.y - req.size / 2)),
+                 req.size, req.size],
+        "created": time.time(),
+    }
+    jobs[job["id"]] = job
+    job_order.append(job["id"])
+    job_queue.put(job)
+    return {"job_id": job["id"], "bbox": job["bbox"]}
 
 
 @app.post("/select_clip")
@@ -695,8 +833,9 @@ def _job_public(j):
         "iterations": j["params"]["iterations"], "bbox": j["bbox"],
         "prompt": j["params"]["prompt"], "seed": j.get("seed"),
         "loss": j.get("loss"), "error": j.get("error"), "note": j.get("note"),
-        "kind": "image" if j["params"].get("source_png") else
-                ("brush" if j["params"].get("mask_png") else "region"),
+        "kind": ("latent " + j["params"]["op"]) if j["params"].get("op") else
+                ("image" if j["params"].get("source_png") else
+                 ("brush" if j["params"].get("mask_png") else "region")),
     }
 
 

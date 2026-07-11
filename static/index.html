@@ -82,6 +82,7 @@
   <button id="toolBrush" title="brush — paint the area to generate (2)">✦</button>
   <button id="toolWand" title="select — wand/rect/lasso, then generate into it (3)">⚲</button>
   <button id="toolImage" title="image — place a PNG/JPG and paint it in (4)">⇓</button>
+  <button id="toolLatent" title="latent — instant token-space ops on existing paint: no prompt, no optimization, pure VQGAN material (5)">⌁</button>
   <div class="sep"></div>
   <button id="saveNow" title="save a canvas version now">✓</button>
   <input type="file" id="imageFile" accept="image/*" style="display:none">
@@ -102,7 +103,7 @@
     </div>
   </div>
 
-  <div class="tool-group" data-tool="place image">
+  <div class="tool-group" data-tool="place image latent">
     <label title="Region side in canvas pixels (image tool: placed width). Any size — beyond 576 the engine works coarser and stretches, like a wide brush.">size <span class="val" id="sizeVal">512</span></label>
     <input type="range" id="size" min="128" max="2048" step="16" value="512">
   </div>
@@ -144,6 +145,31 @@
     <label title="How much of your image survives: low = ghost armature, high = recognizably yours. It always gets VQGAN-ified — that's the medium.">source strength <span class="val" id="strengthVal">0.60</span></label>
     <input type="range" id="strength" min="0" max="1" step="0.05" value="0.6">
     <div class="row"><button id="pickImage">choose image…</button><span id="imageName" style="color:var(--mut)"></span></div>
+  </div>
+
+  <div class="tool-group" data-tool="latent">
+    <label title="What to do to the latent tokens under the region — these are instant, no AI steering, pure VQGAN material">operation</label>
+    <select id="latentOp">
+      <option value="spray" selected>spray — scatter fresh random tokens</option>
+      <option value="neighbor">neighbor swap — subtle wrongness</option>
+      <option value="shift">shift — slide the tokens</option>
+      <option value="mirror">mirror — flip the tokens</option>
+      <option value="repeat">repeat — tile a token block</option>
+      <option value="bloom">bloom — encode/decode feedback drift</option>
+    </select>
+    <div id="latAmountRow">
+      <label title="Fraction of tokens affected">amount <span class="val" id="latAmountVal">50%</span></label>
+      <input type="range" id="latAmount" min="0" max="100" step="5" value="50">
+    </div>
+    <div class="row" id="latPaRow">
+      <label style="margin:0" id="latPaLabel">param</label>
+      <input type="number" id="latPa" value="2" style="width:64px">
+      <input type="number" id="latPb" value="0" style="width:64px; display:none">
+    </div>
+    <div class="row">
+      <button id="latApplySel" class="primary" style="display:none"
+              title="apply this operation inside the active selection">apply to selection</button>
+    </div>
   </div>
 
   <label title="How strongly the region absorbs the look of what surrounds it — palette, texture, motifs bleed in from the canvas itself. The glue between regions.">bleed <span class="val" id="wimgVal">0.60</span></label>

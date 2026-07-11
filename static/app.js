@@ -42,8 +42,18 @@ const worldY = (sy) => (sy - py) / k;
 const TOOL_HINTS = {
   place: "— click canvas to paint",
   brush: "— drag to mark, Enter to generate",
-  wand:  "— click a color to select",
+  wand:  "— select, then generate into it",
   image: "— click canvas to place",
+  latent: "— instant token ops, click to apply",
+};
+
+const LATENT_PARAMS = {
+  spray:    { amount: true,  pa: null,          pb: false },
+  neighbor: { amount: true,  pa: "k neighbors", pb: false },
+  shift:    { amount: false, pa: "dx (tokens)", pb: true },
+  mirror:   { amount: false, pa: "axis 0=h 1=v", pb: false },
+  repeat:   { amount: false, pa: "block (tokens)", pb: false },
+  bloom:    { amount: false, pa: "passes 1-6",  pb: false },
 };
 
 function fitWorld() {
@@ -142,6 +152,10 @@ function redraw() {
               .drawRect(mouse.x - w / 2, mouse.y - h / 2, w, h);
     } else if (tool === "wand") {
       brushGfx.lineStyle(1, 0xc98fe0, 0.9).drawCircle(mouse.x, mouse.y, 6);
+    } else if (tool === "latent") {
+      const s = +$("size").value * k;
+      brushGfx.lineStyle(1, 0xc98fe0, 0.7)
+              .drawRect(mouse.x - s / 2, mouse.y - s / 2, s, s);
     }
   }
 }
@@ -254,6 +268,8 @@ window.addEventListener("pointerup", (e) => {
     wandSelect(wx, wy);
   } else if (tool === "wand" && selMode === "similar") {
     similarSelect(wx, wy);
+  } else if (tool === "latent") {
+    submitLatent({ ...latentParams(), x: wx, y: wy, size: +$("size").value });
   }
   down = null;
 });
@@ -304,18 +320,64 @@ window.addEventListener("keyup", (e) => {
 function setTool(t) {
   tool = t;
   for (const [id, name] of [["toolPlace", "place"], ["toolBrush", "brush"],
-                            ["toolWand", "wand"], ["toolImage", "image"]])
+                            ["toolWand", "wand"], ["toolImage", "image"],
+                            ["toolLatent", "latent"]])
     $(id).classList.toggle("active", t === name);
   document.querySelectorAll(".tool-group[data-tool]").forEach((g) => {
     g.style.display = g.dataset.tool.split(" ").includes(t) ? "block" : "none";
   });
   $("toolTitle").innerHTML = `${t} <span class="hint">${TOOL_HINTS[t]}</span>`;
-  if (t !== "brush" && t !== "wand") clearPending();
+  if (!["brush", "wand", "latent"].includes(t)) clearPending();
   redraw();
 }
 $("toolPlace").onclick = () => setTool("place");
 $("toolBrush").onclick = () => setTool("brush");
 $("toolWand").onclick = () => setTool("wand");
+$("toolLatent").onclick = () => setTool("latent");
+
+$("latentOp").addEventListener("change", () => {
+  const cfg = LATENT_PARAMS[$("latentOp").value];
+  $("latAmountRow").style.display = cfg.amount ? "block" : "none";
+  $("latPaRow").style.display = cfg.pa ? "flex" : "none";
+  $("latPaLabel").textContent = cfg.pa || "";
+  $("latPb").style.display = cfg.pb ? "" : "none";
+});
+$("latentOp").dispatchEvent(new Event("change"));
+$("latAmount").addEventListener("input", () => {
+  $("latAmountVal").textContent = $("latAmount").value + "%";
+});
+
+function latentParams() {
+  return {
+    op: $("latentOp").value,
+    amount: +$("latAmount").value / 100,
+    pa: +$("latPa").value,
+    pb: +$("latPb").value,
+    falloff: +$("falloff").value,
+    seed: $("seed").value.trim() === "" ? null : +$("seed").value,
+  };
+}
+
+async function submitLatent(body) {
+  const res = await fetch("/latent_op", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.detail || `latent op failed (${res.status})`);
+    return false;
+  }
+  pollJobs();
+  return true;
+}
+
+$("latApplySel").onclick = async () => {
+  if (!selection) return;
+  const ok = await submitLatent({ ...latentParams(),
+    bbox: selection.bbox, mask_png: selection.mask_png });
+  if (ok) clearPending();
+};
 $("toolImage").onclick = () => {
   if (importImg) setTool("image");
   else $("imageFile").click();
@@ -342,6 +404,7 @@ function clearPending() {
   strokes = []; drawing = null; selection = null; selDrawing = null;
   $("brushActions").style.display = "none";
   $("selOps").style.display = "none";
+  $("latApplySel").style.display = "none";
   redraw();
 }
 $("clearBrush").onclick = clearPending;
@@ -556,6 +619,7 @@ async function applySelection(sel) {
   if (old && old !== PIXI.Texture.EMPTY) old.destroy(true);
   $("brushActions").style.display = "flex";
   $("selOps").style.display = "flex";
+  $("latApplySel").style.display = "";
   redraw();
 }
 
