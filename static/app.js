@@ -96,7 +96,7 @@ function updatePopover() {
   const pop = $("popover");
   const bb = anchorBBox();
   // never while mid-gesture, never while picking a bleed source
-  const show = bb && !pickingBleed && !drawing && !selDrawing;
+  const show = bb && !pickingBleed && !drawing && !selDrawing && !smearDrawing;
   pop.style.display = show ? "block" : "none";
   if (!show) return;
   $("popTitle").textContent = TOOL_TITLES[tool] || tool;
@@ -127,6 +127,7 @@ function updatePopover() {
 
 let selMode = "wand";
 let selDrawing = null;
+let smearDrawing = null;
 
 function redraw() {
   document.body.style.backgroundPosition = `${px % 26}px ${py % 26}px, 0 0`;
@@ -153,6 +154,12 @@ function redraw() {
       for (let i = 1; i < s.pts.length; i++)
         strokeGfx.lineTo(px + s.pts[i].x * k, py + s.pts[i].y * k);
     }
+  }
+  if (smearDrawing && smearDrawing.pts.length > 1) {
+    strokeGfx.lineStyle({ width: 2 * smearDrawing.r * k, color: 0x9a6bb8, alpha: 0.3,
+                          cap: PIXI.LINE_CAP.ROUND, join: PIXI.LINE_JOIN.ROUND });
+    strokeGfx.moveTo(px + smearDrawing.pts[0].x * k, py + smearDrawing.pts[0].y * k);
+    for (const p of smearDrawing.pts) strokeGfx.lineTo(px + p.x * k, py + p.y * k);
   }
   if (selDrawing) {
     strokeGfx.lineStyle(1.5, ACC, 0.9);
@@ -301,7 +308,11 @@ app.view.addEventListener("pointerdown", (e) => {
   if (e.button !== 0) return;
   if (pickingBleed) return;
   const wx = worldX(e.clientX), wy = worldY(e.clientY);
-  if (tool === "brush") {
+  if (tool === "latent" && $("latentOp").value === "smear") {
+    smearDrawing = { r: Math.max(24, +$("size").value / 4), pts: [{ x: wx, y: wy }] };
+    pendingPt = null;
+    redraw();
+  } else if (tool === "brush") {
     drawing = { r: +$("radius").value, pts: [{ x: wx, y: wy }] };
     strokes.push(drawing);
     selection = null; pendingPt = null;
@@ -327,6 +338,10 @@ window.addEventListener("pointermove", (e) => {
     const last = drawing.pts[drawing.pts.length - 1];
     if (Math.hypot(wx - last.x, wy - last.y) > drawing.r * 0.3)
       drawing.pts.push({ x: wx, y: wy });
+  } else if (smearDrawing) {
+    const wx = worldX(e.clientX), wy = worldY(e.clientY);
+    const last = smearDrawing.pts[smearDrawing.pts.length - 1];
+    if (Math.hypot(wx - last.x, wy - last.y) > 8 / k) smearDrawing.pts.push({ x: wx, y: wy });
   } else if (selDrawing) {
     const wx = worldX(e.clientX), wy = worldY(e.clientY);
     if (selDrawing.mode === "rect") { selDrawing.bx = wx; selDrawing.by = wy; }
@@ -347,6 +362,7 @@ window.addEventListener("pointermove", (e) => {
 window.addEventListener("pointerup", (e) => {
   if (panning) { panning = false; down = null; return; }
   if (drawing) { drawing = null; redraw(); return; }
+  if (smearDrawing) { finishSmear(); return; }
   if (selDrawing) { finishSelDrawing(); return; }
   if (e.target !== app.view) { down = null; return; }
   const wx = worldX(e.clientX), wy = worldY(e.clientY);
@@ -486,8 +502,10 @@ $("imageFile").addEventListener("change", async () => {
 // latent effects: plain descriptions, per-effect defaults, friendly controls
 // (latPa/latPb stay as hidden sources of truth for the request payload)
 const LATENT_CFG = {
-  spray:    { desc: "Scatters fresh random material through the area — gives the engine raw texture to be reworked later, or leave it as pure patchwork.",
-              amount: true },
+  spray:    { desc: "Lays down raw VQGAN material — works on EMPTY canvas too. Cohesion 0 = chaotic patchwork, high = one coherent texture family.",
+              amount: true, pa: { label: "cohesion", min: 0, max: 8, def: 0 } },
+  smear:    { desc: "Drag across painted canvas — the material under your stroke is dragged and stretched along the drag direction.",
+              amount: false },
   neighbor: { desc: "Every mark is swapped for a near-identical one from the model's vocabulary. The picture stays the same but grows quietly wrong.",
               amount: true, pa: { label: "how wrong", min: 2, max: 32, def: 8 } },
   shift:    { desc: "Slides the area's fabric sideways inside the mask — edges tear and repeat where it exits.",
@@ -678,6 +696,32 @@ function maskCanvas(bbox, drawFn) {
   ctx.lineCap = ctx.lineJoin = "round";
   drawFn(ctx, scale, x0, y0);
   return { bbox, mask_png: c.toDataURL("image/png").split(",")[1] };
+}
+
+async function finishSmear() {
+  const d = smearDrawing;
+  smearDrawing = null;
+  if (!d || d.pts.length < 2) { redraw(); return; }
+  const first = d.pts[0], last = d.pts[d.pts.length - 1];
+  const dx = Math.round((last.x - first.x) / 16);
+  const dy = Math.round((last.y - first.y) / 16);
+  if (!dx && !dy) { redraw(); return; }
+  let x0 = 1e18, y0 = 1e18, x1 = -1e18, y1 = -1e18;
+  for (const p of d.pts) {
+    x0 = Math.min(x0, p.x - d.r); y0 = Math.min(y0, p.y - d.r);
+    x1 = Math.max(x1, p.x + d.r); y1 = Math.max(y1, p.y + d.r);
+  }
+  x0 = Math.floor(x0); y0 = Math.floor(y0);
+  const m = maskCanvas([x0, y0, Math.ceil(x1 - x0), Math.ceil(y1 - y0)], (ctx, sc, ox, oy) => {
+    ctx.lineWidth = 2 * d.r * sc;
+    ctx.beginPath();
+    ctx.moveTo((d.pts[0].x - ox) * sc, (d.pts[0].y - oy) * sc);
+    for (const p of d.pts) ctx.lineTo((p.x - ox) * sc, (p.y - oy) * sc);
+    ctx.stroke();
+  });
+  await submitLatent({ ...latentParams(), op: "smear",
+    bbox: m.bbox, mask_png: m.mask_png, pa: dx, pb: dy });
+  redraw();
 }
 
 async function finishSelDrawing() {

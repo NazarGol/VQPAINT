@@ -774,30 +774,68 @@ def _run_latent(job: dict):
     with buf_lock:
         orig = canvas[y0 : y0 + rh, x0 : x0 + rw].astype(np.float32) / 255.0
         cov = coverage[y0 : y0 + rh, x0 : x0 + rw].astype(np.float32) / 255.0
-    if not (cov > 0).any():
-        raise ValueError("latent ops need existing paint under them")
+    virgin = not (cov > 0).any()
+    op, amount = p["op"], float(p["amount"])
+    pa, pb = int(p["pa"]), int(p["pb"])
+    dev = engine.device
+    if virgin and op != "spray":
+        raise ValueError("this effect reworks existing paint — only spray lays down fresh material")
 
     scale = min(1.0, WORK_MAX / max(rw, rh))
     ww = min(WORK_MAX, max(64, int(round(rw * scale / 64)) * 64))
     wh = min(WORK_MAX, max(64, int(round(rh * scale / 64)) * 64))
-
-    crop, _ = edge_fill(orig, cov, engine.device)
-    img = Image.fromarray((crop * 255 + 0.5).astype(np.uint8)).resize((ww, wh), Image.LANCZOS)
-    t = torch.from_numpy(np.asarray(img, np.float32) / 255.0).permute(2, 0, 1)[None]
-    z = engine.z_from_pixels(t)
-
     ty, tx = wh // engine.f, ww // engine.f
-    mimg = Image.fromarray((mask * 255 + 0.5).astype(np.uint8)).resize((tx, ty), Image.BILINEAR)
-    m = torch.from_numpy(np.asarray(mimg, np.float32) / 255.0).to(engine.device) > 0.25
 
-    op, amount = p["op"], float(p["amount"])
-    pa, pb = int(p["pa"]), int(p["pb"])
-    dev = engine.device
+    def spray_codes(n):
+        """cohesion (pa 0..8): 0 samples the whole codebook (chaotic
+        patchwork); higher samples a shrinking neighborhood of one random
+        anchor code (cohesive material)."""
+        cb = engine.model.quantize.embedding.weight
+        coh = max(0, min(int(pa), 8))
+        if coh <= 0:
+            idx = torch.randint(engine.n_toks, (n,), device=dev)
+        else:
+            anchor = int(torch.randint(engine.n_toks, (1,)))
+            da = (cb - cb[anchor]).pow(2).sum(1)
+            pool = da.topk(max(16, engine.n_toks >> coh), largest=False).indices
+            idx = pool[torch.randint(len(pool), (n,), device=dev)]
+        return cb[idx]
 
-    if op == "spray":
+    if virgin:
+        # latent as PAINT: lay raw VQGAN material into empty canvas;
+        # the (noise-torn) mask shapes it at composite time
+        z = spray_codes(ty * tx).T.reshape(1, engine.e_dim, ty, tx).contiguous()
+        m = torch.ones(ty, tx, device=dev) > 0
+    else:
+        crop, _ = edge_fill(orig, cov, engine.device)
+        img = Image.fromarray((crop * 255 + 0.5).astype(np.uint8)).resize((ww, wh), Image.LANCZOS)
+        t = torch.from_numpy(np.asarray(img, np.float32) / 255.0).permute(2, 0, 1)[None]
+        z = engine.z_from_pixels(t)
+        mimg = Image.fromarray((mask * 255 + 0.5).astype(np.uint8)).resize((tx, ty), Image.BILINEAR)
+        m = torch.from_numpy(np.asarray(mimg, np.float32) / 255.0).to(engine.device) > 0.25
+
+    if virgin:
+        pass  # z already is the sprayed field
+    elif op == "spray":
         sel = m & (torch.rand(ty, tx, device=dev) < amount)
-        zr = engine.z_from_random(tx, ty)
-        z[:, :, sel] = zr[:, :, sel]
+        if bool(sel.any()):
+            z_flat = z.movedim(1, 3).reshape(-1, engine.e_dim).clone()
+            z_flat[sel.flatten()] = spray_codes(int(sel.sum()))
+            z = z_flat.reshape(1, ty, tx, engine.e_dim).movedim(3, 1).contiguous()
+    elif op == "smear":
+        steps = max(abs(pa), abs(pb))
+        if steps == 0:
+            raise ValueError("smear needs a drag direction")
+        sx, sy = pa / steps, pb / steps
+        ax = ay = 0.0
+        for _ in range(min(steps, 24)):
+            ax += sx; ay += sy
+            rx, ry = int(round(ax)), int(round(ay))
+            ax -= rx; ay -= ry
+            if rx == 0 and ry == 0:
+                continue
+            zs = torch.roll(z, shifts=(ry, rx), dims=(2, 3))
+            z = torch.where(m[None, None], zs, z)
     elif op == "shift":
         zs = torch.roll(z, shifts=(pb, pa), dims=(2, 3))
         z = torch.where(m[None, None], zs, z)
@@ -1027,8 +1065,8 @@ def refine(req: RefineReq):
 
 @app.post("/latent_op")
 def latent_op(req: LatentReq):
-    if req.op not in ("spray", "shift", "mirror", "repeat", "neighbor", "bloom"):
-        raise HTTPException(400, "op must be spray|shift|mirror|repeat|neighbor|bloom")
+    if req.op not in ("spray", "smear", "shift", "mirror", "repeat", "neighbor", "bloom"):
+        raise HTTPException(400, "op must be spray|smear|shift|mirror|repeat|neighbor|bloom")
     if req.bbox is None and (req.x is None or req.y is None):
         raise HTTPException(400, "need x/y or bbox")
     job = {
