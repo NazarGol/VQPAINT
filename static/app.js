@@ -860,7 +860,11 @@ async function pollJobs() {
     const res = await fetch("/jobs");
     const js = await res.json();
     const sig = (a) => JSON.stringify(a.map((j) => [j.id, j.status, j.iter]));
+    const statusSig = (a) => JSON.stringify(a.map((j) => [j.id, j.status]));
     const changed = sig(js) !== sig(activeJobs);
+    // any status transition (queued->running->done, incl. sub-second
+    // latent ops the running-refresh loop never sees) => refetch pixels
+    if (statusSig(js) !== statusSig(activeJobs)) scheduleFetch(120);
     activeJobs = js;
     updateStrip();
     if (changed) { renderJobList(js); redraw(); }
