@@ -984,6 +984,72 @@ setInterval(pollInfo, 4000);
 
 $("saveNow").onclick = async () => { await fetch("/save", { method: "POST" }); pollInfo(); };
 
+async function doUndo() {
+  const res = await fetch("/undo", { method: "POST" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    $("stripJob").textContent = err.detail || "nothing to undo";
+    setTimeout(updateStrip, 1800);
+    return;
+  }
+  pollInfo(); scheduleFetch(50);
+}
+$("undoBtn").onclick = doUndo;
+window.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" &&
+      e.target.tagName !== "TEXTAREA" && e.target.tagName !== "INPUT") {
+    e.preventDefault(); doUndo();
+  }
+});
+
+// ---- history / re-roll ----------------------------------------------
+
+window.rerollOp = async (id) => {
+  const res = await fetch("/reroll", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ op_id: id }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.detail || "re-roll failed");
+    return;
+  }
+  $("histCard").style.display = "none";
+  pollJobs();
+};
+
+app.view.addEventListener("dblclick", async (e) => {
+  const wx = worldX(e.clientX), wy = worldY(e.clientY);
+  if (wx < 0 || wy < 0 || wx > WORLD || wy > WORLD) return;
+  const res = await fetch(`/history?x=${wx}&y=${wy}`);
+  if (!res.ok) return;
+  const ops = await res.json();
+  const card = $("histCard");
+  if (!ops.length) {
+    $("histList").innerHTML = `<div style="color:var(--mut)">no operations recorded here</div>`;
+  } else {
+    $("histList").innerHTML = ops.map((o) => {
+      const what = o.op ? `latent ${o.op}` :
+                   o.level ? `refine ${2 ** o.level}×` :
+                   (o.prompt && o.prompt.trim() ? o.prompt.slice(0, 42) : "(flow)");
+      return `<div style="display:flex; gap:6px; align-items:center; padding:4px 0; border-top:1px solid var(--line)">
+        <div style="flex:1; min-width:0">
+          <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${what}</div>
+          <div class="mono" style="color:var(--mut); font-size:11px">seed ${o.seed} · ${o.iterations ?? 1} it</div>
+        </div>
+        <button class="chip" onclick="rerollOp('${o.id}')" title="run this op again with a fresh seed, on the canvas as it is now">↻</button>
+      </div>`;
+    }).join("");
+  }
+  card.style.left = `${Math.min(innerWidth - 300, e.clientX + 14)}px`;
+  card.style.top = `${Math.min(innerHeight - 300, e.clientY + 14)}px`;
+  card.style.display = "block";
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") $("histCard").style.display = "none";
+});
+app.view.addEventListener("pointerdown", () => { $("histCard").style.display = "none"; });
+
 // ---- settings -------------------------------------------------------
 
 for (const [id, out, fmt] of [

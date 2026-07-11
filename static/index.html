@@ -116,6 +116,7 @@
 
 <div id="chromeTL" class="card"><b>VQPAINT</b><span id="worldLabel" class="mono">8192px</span></div>
 <div id="chromeTR" class="card">
+  <button id="undoBtn" title="undo the last operation (Ctrl+Z)">↶</button>
   <button id="exportQuick" title="download everything painted, refined areas at full detail">Export</button>
   <button id="saveNow" title="save a canvas version now">✓</button>
 </div>
@@ -335,6 +336,11 @@
 </div>
 
 <div id="jobs"></div>
+
+<div id="histCard" class="card" style="position:fixed; z-index:32; width:280px; padding:12px; display:none">
+  <div style="font-weight:600; margin-bottom:6px">History here <span style="color:var(--mut); font-weight:400">— double-clicked spot</span></div>
+  <div id="histList" style="max-height:40vh; overflow-y:auto"></div>
+</div>
 
 <div id="zoomctl" class="card">
   <button id="zoomOut" title="zoom out">−</button>

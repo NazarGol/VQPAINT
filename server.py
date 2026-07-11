@@ -182,6 +182,76 @@ def load_state():
           f"({(a > 0).mean() * 100:.1f}% painted, {nchunks} fine chunks)", flush=True)
 
 
+# ---- per-op undo: snapshot the affected region before an op touches it ----
+UNDO_DIR = os.path.join(STATE_DIR, "undo")
+UNDO_KEEP = 10
+_undo_seq = 0
+undo_lock = threading.Lock()
+
+
+def _undo_stack():
+    try:
+        return sorted(f[:-5] for f in os.listdir(UNDO_DIR) if f.endswith(".json"))
+    except FileNotFoundError:
+        return []
+
+
+def snapshot_undo(bbox, level=0, label=""):
+    """bbox in world coords for level 0, in level-pixel coords otherwise."""
+    global _undo_seq
+    x0, y0, w, h = [int(v) for v in bbox]
+    with buf_lock:
+        if level == 0:
+            rgb = canvas[y0:y0 + h, x0:x0 + w].copy()
+            alpha = coverage[y0:y0 + h, x0:x0 + w].copy()
+        else:
+            rgb, alpha = levels[level].read(x0, y0, w, h)
+    with undo_lock:
+        os.makedirs(UNDO_DIR, exist_ok=True)
+        stack = _undo_stack()
+        _undo_seq = max(_undo_seq + 1, (int(stack[-1]) + 1) if stack else 1)
+        name = f"{_undo_seq:08d}"
+        np.savez(os.path.join(UNDO_DIR, name + ".npz"), rgb=rgb, alpha=alpha)
+        with open(os.path.join(UNDO_DIR, name + ".json"), "w") as f:
+            json.dump({"bbox": [x0, y0, w, h], "level": level,
+                       "label": label, "ts": time.time()}, f)
+        for old in _undo_stack()[:-UNDO_KEEP]:
+            for ext in (".npz", ".json"):
+                try:
+                    os.remove(os.path.join(UNDO_DIR, old + ext))
+                except OSError:
+                    pass
+
+
+def pop_undo():
+    """Restore the most recent snapshot. Returns remaining depth or None."""
+    with undo_lock:
+        stack = _undo_stack()
+        if not stack:
+            return None
+        name = stack[-1]
+        with open(os.path.join(UNDO_DIR, name + ".json")) as f:
+            meta = json.load(f)
+        with np.load(os.path.join(UNDO_DIR, name + ".npz")) as z:
+            rgb, alpha = z["rgb"], z["alpha"]
+        x0, y0, w, h = meta["bbox"]
+        lvl = meta["level"]
+        with buf_lock:
+            if lvl == 0:
+                if y0 + h <= canvas.shape[0] and x0 + w <= canvas.shape[1]:
+                    canvas[y0:y0 + h, x0:x0 + w] = rgb
+                    coverage[y0:y0 + h, x0:x0 + w] = alpha
+            else:
+                levels[lvl].write(x0, y0, rgb, alpha)
+        dirty.set()
+        for ext in (".npz", ".json"):
+            try:
+                os.remove(os.path.join(UNDO_DIR, name + ext))
+            except OSError:
+                pass
+        return len(_undo_stack())
+
+
 def _log_op(job):
     """Append-only op log: full provenance of every completed op. Binary
     payloads are deduplicated into state/blobs/ and referenced by hash."""
@@ -458,6 +528,7 @@ def _run_paint(job: dict, force_ckpt=False):
     torch.manual_seed(seed)
     x0, y0, rw, rh, mask = _region_and_mask(p, seed)
     job["bbox"] = [x0, y0, rw, rh]
+    snapshot_undo([x0, y0, rw, rh], 0, label=p.get("prompt", "")[:40] or "paint")
 
     with buf_lock:
         orig = canvas[y0 : y0 + rh, x0 : x0 + rw].astype(np.float32) / 255.0
@@ -648,6 +719,8 @@ def _run_refine(job: dict, force_ckpt=False):
     job["seed"] = p["seed"] = seed
     torch.manual_seed(seed)
 
+    snapshot_undo([lx0, ly0, lw, lh], lvl, label=f"refine {2**lvl}x")
+
     falloff = int(p["falloff"]) * s
     mask = chaos_mask(soft_mask(lw, lh, falloff), float(p.get("edge_chaos", 0.5)), seed)
 
@@ -770,6 +843,7 @@ def _run_latent(job: dict):
     torch.manual_seed(seed)
     x0, y0, rw, rh, mask = _region_and_mask(p, seed)
     job["bbox"] = [x0, y0, rw, rh]
+    snapshot_undo([x0, y0, rw, rh], 0, label="latent " + p.get("op", ""))
 
     with buf_lock:
         orig = canvas[y0 : y0 + rh, x0 : x0 + rw].astype(np.float32) / 255.0
@@ -960,7 +1034,8 @@ def index():
 def canvas_info():
     vs = statestore.versions(STATE_DIR)
     return {"world": world, "work_max": WORK_MAX, "max_world": MAX_WORLD, "engine_f": 16,
-            "last_save": vs[0] if vs else None, "dirty": dirty.is_set()}
+            "last_save": vs[0] if vs else None, "dirty": dirty.is_set(),
+            "undo_depth": len(_undo_stack())}
 
 
 @app.post("/canvas_size")
@@ -996,6 +1071,91 @@ def state_versions():
         except Exception:
             out.append({"version": v, "world": None, "saved": None})
     return out
+
+
+@app.post("/undo")
+def undo():
+    if any(j["status"] in ("running", "queued") for j in jobs.values()):
+        raise HTTPException(409, "wait for the queue to finish before undoing")
+    depth = pop_undo()
+    if depth is None:
+        raise HTTPException(404, "nothing to undo")
+    return {"undone": True, "remaining": depth}
+
+
+@app.get("/history")
+def history(x: float, y: float, limit: int = 12):
+    """Recent ops whose region contains the point, newest first."""
+    path = os.path.join(STATE_DIR, "oplog.jsonl")
+    out = []
+    try:
+        with open(path) as f:
+            lines = f.readlines()[-800:]
+    except FileNotFoundError:
+        return []
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        bx, by, bw, bh = rec.get("bbox", [0, 0, 0, 0])
+        if bx <= x <= bx + bw and by <= y <= by + bh:
+            out.append({k: rec.get(k) for k in
+                        ("id", "prompt", "seed", "iterations", "bbox", "op",
+                         "level", "status", "ts", "mask_ref", "source_ref")})
+            if len(out) >= limit:
+                break
+    return out
+
+
+class RerollReq(BaseModel):
+    op_id: str
+    seed: int | None = None            # None = fresh random
+
+
+@app.post("/reroll")
+def reroll(req: RerollReq):
+    """Re-run a logged op on the current canvas, default with a new seed."""
+    path = os.path.join(STATE_DIR, "oplog.jsonl")
+    rec = None
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("id") == req.op_id:
+                    rec = r
+    except FileNotFoundError:
+        pass
+    if rec is None:
+        raise HTTPException(404, "op not found in the log")
+    params = {k: v for k, v in rec.items()
+              if k not in ("id", "status", "iter", "ts", "mask_ref", "source_ref")}
+    for ref, key in (("mask_ref", "mask_png"), ("source_ref", "source_png")):
+        if rec.get(ref):
+            try:
+                with open(os.path.join(STATE_DIR, "blobs", rec[ref] + ".png"), "rb") as f:
+                    params[key] = base64.b64encode(f.read()).decode()
+            except FileNotFoundError:
+                raise HTTPException(410, "op's mask/image blob is gone")
+    params["seed"] = req.seed  # None -> fresh random at run time
+    params.setdefault("prompt", "")
+    params.setdefault("iterations", 200)
+    job = {
+        "id": uuid.uuid4().hex[:12],
+        "status": "queued",
+        "iter": 0,
+        "params": params,
+        "bbox": rec["bbox"],
+        "created": time.time(),
+        "note": "re-roll",
+    }
+    jobs[job["id"]] = job
+    job_order.append(job["id"])
+    job_queue.put(job)
+    return {"job_id": job["id"], "bbox": job["bbox"]}
 
 
 @app.post("/select")
