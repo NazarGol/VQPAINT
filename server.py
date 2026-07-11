@@ -588,9 +588,10 @@ def _run_paint(job: dict, force_ckpt=False):
 
     def composite(img_tensor, final=False):
         arr = img_tensor[0].permute(1, 2, 0).numpy()
-        if (ww, wh) != (rw, rh):
+        # previews may arrive at half working res — always resize by the
+        # ACTUAL array shape, not the intended working size
+        if arr.shape[:2] != (rh, rw):
             im = Image.fromarray((arr * 255 + 0.5).astype(np.uint8))
-            # previews take the cheap resample; the committed image is LANCZOS
             arr = np.asarray(im.resize((rw, rh), Image.LANCZOS if final else Image.BILINEAR),
                              np.float32) / 255.0
         out = np.where(a_out > 1e-6,
@@ -724,7 +725,7 @@ def _run_refine(job: dict, force_ckpt=False):
 
     def composite(img_tensor, final=False):
         arr = img_tensor[0].permute(1, 2, 0).numpy()
-        if (ww, wh) != (lw, lh):
+        if arr.shape[:2] != (lh, lw):
             im = Image.fromarray((arr * 255 + 0.5).astype(np.uint8))
             arr = np.asarray(im.resize((lw, lh), Image.LANCZOS if final else Image.BILINEAR),
                              np.float32) / 255.0
