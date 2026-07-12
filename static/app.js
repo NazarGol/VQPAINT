@@ -48,8 +48,24 @@ const worldY = (sy) => (sy - py) / k;
 const TOOL_TITLES = {
   place: "Paint region", brush: "Paint area", wand: "Selection",
   image: "Place image", latent: "Latent op", refine: "Refine detail",
-  grow: "Grown region",
+  grow: "Grown region", process: "Living process",
 };
+
+const PROC_CFG = {
+  reaction_diffusion: { desc: "Turing patterns — spots and stripes negotiate territory in VQGAN material. Flip: coral regime.",
+                        pa: "feed", pb: "kill" },
+  life_ca:  { desc: "Cellular life — cells matching a material live, breed and die by neighbor count. Flip: death spreads.",
+              pa: "—", pb: "—" },
+  diffuse_flow: { desc: "The fabric drifts along an invisible current, smearing like wet paint. Flip: sharpen instead.",
+              pa: "current strength", pb: "sharpen amount" },
+  decay_grow: { desc: "Everything sinks toward rot. Flip: crystallizes toward hard bright material instead.",
+              pa: "rate", pb: "turbulence" },
+  feedback_bloom: { desc: "The model re-remembers the region again and again; errors bloom into growths. Flip: accelerated.",
+              pa: "noise per pass", pb: "—" },
+  two_clip_tension: { desc: "Two prompts fight for the same ground; the border between them migrates as you watch. Flip: B wins ties.",
+              pa: "step size", pb: "—" },
+};
+let procFlip = false, procLive = false, procCanvas = false;
 
 function refineLevel() {
   const sel = +$("refineLevel").value;
@@ -211,7 +227,7 @@ function redraw() {
     const col = j.status === "error" ? ERR : j.status === "running" ? WARN : QUEUED;
     jobGfx.lineStyle(1.5, col, 0.9).drawRect(px + bx * k, py + by * k, bw * k, bh * k);
     const label = new PIXI.Text(
-      j.status === "running" ? `${j.iter}/${j.iterations}` : j.status,
+      j.status === "running" ? `${j.iter}/${j.iterations >= 1e8 ? "∞" : j.iterations}` : j.status,
       { fontSize: 12, fill: col, fontFamily: "monospace" });
     label.x = px + bx * k + 4; label.y = py + by * k + 4;
     jobLabels.addChild(label);
@@ -251,6 +267,9 @@ function redraw() {
     } else if (tool === "latent") {
       const s = +$("size").value * k;
       brushGfx.lineStyle(1, 0x9a6bb8, 0.7).drawRect(mouse.x - s / 2, mouse.y - s / 2, s, s);
+    } else if (tool === "process") {
+      const s = +$("size").value * k;
+      brushGfx.lineStyle(1, 0x3a8f8a, 0.8).drawRect(mouse.x - s / 2, mouse.y - s / 2, s, s);
     } else if (tool === "refine") {
       const s = Math.min(+$("size").value, refineMaxSize()) * k;
       brushGfx.lineStyle(1, 0x4a90c2, 0.7).drawRect(mouse.x - s / 2, mouse.y - s / 2, s, s);
@@ -382,7 +401,7 @@ window.addEventListener("pointerup", (e) => {
   else if (tool === "wand" && selMode === "wand") wandSelect(wx, wy);
   else if (tool === "wand" && selMode === "similar") similarSelect(wx, wy);
   else if (tool === "image" && !importImg) $("imageFile").click();
-  else if (["place", "refine", "image", "latent"].includes(tool)) {
+  else if (["place", "refine", "image", "latent", "process"].includes(tool)) {
     pendingPt = { x: wx, y: wy };
     selection = null; strokes = [];
     redraw();
@@ -424,7 +443,7 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "Space") { spaceHeld = true; e.preventDefault(); return; }
   if (e.key === "Escape") { clearPending(); pickingBleed = false; redraw(); }
   else if (e.key === "Enter" && (strokes.length || selection || pendingPt)) generatePending();
-  else if (e.key >= "1" && e.key <= "7") setTool(["place", "brush", "wand", "image", "latent", "refine", "grow"][+e.key - 1]);
+  else if (e.key >= "1" && e.key <= "8") setTool(["place", "brush", "wand", "image", "latent", "refine", "grow", "process"][+e.key - 1]);
   else if (e.key === "[" || e.key === "]") {
     const [id, step] = sizeKeyFor();
     const el = $(id);
@@ -441,7 +460,7 @@ function setTool(t) {
   for (const [id, name] of [["toolPlace", "place"], ["toolBrush", "brush"],
                             ["toolWand", "wand"], ["toolImage", "image"],
                             ["toolLatent", "latent"], ["toolRefine", "refine"],
-                            ["toolGrow", "grow"]])
+                            ["toolGrow", "grow"], ["toolProcess", "process"]])
     $(id).classList.toggle("active", t === name);
   document.querySelectorAll(".tool-group[data-tool]").forEach((g) => {
     g.style.display = g.dataset.tool.split(" ").includes(t) ? "block" : "none";
@@ -457,6 +476,54 @@ $("toolWand").onclick = () => setTool("wand");
 $("toolLatent").onclick = () => setTool("latent");
 $("toolRefine").onclick = () => setTool("refine");
 $("toolGrow").onclick = () => setTool("grow");
+$("toolProcess").onclick = () => setTool("process");
+
+function procRuleChanged() {
+  const cfg = PROC_CFG[$("procRule").value];
+  $("procDesc").textContent = cfg.desc;
+  $("procPaLabel").firstChild.textContent = cfg.pa === "—" ? "param A " : cfg.pa + " ";
+  $("procPbLabel").firstChild.textContent = cfg.pb === "—" ? "param B " : cfg.pb + " ";
+  $("procPrompt2Row").style.display =
+    $("procRule").value === "two_clip_tension" ? "block" : "none";
+}
+$("procRule").addEventListener("change", procRuleChanged);
+procRuleChanged();
+$("procFlip").onclick = () => { procFlip = !procFlip; $("procFlip").classList.toggle("on", procFlip); };
+$("procLive").onclick = () => { procLive = !procLive; $("procLive").classList.toggle("on", procLive); };
+$("procCanvas").onclick = () => {
+  procCanvas = !procCanvas;
+  $("procCanvas").classList.toggle("on", procCanvas);
+  if (procCanvas) { pendingPt = null; redraw(); }
+};
+
+async function submitProcess() {
+  const body = {
+    rule: $("procRule").value,
+    flip: procFlip, live: procLive && !procCanvas,
+    scope: procCanvas ? "canvas" : "region",
+    pa: +$("procPa").value, pb: +$("procPb").value,
+    steps: +$("procSteps").value,
+    falloff: +$("falloff").value, edge_chaos: +$("edgechaos").value,
+    prompt: $("prompt").value, prompt2: $("prompt2").value,
+    seed: $("seed").value.trim() === "" ? null : +$("seed").value,
+  };
+  if (!procCanvas) {
+    if (!pendingPt) return;
+    body.x = pendingPt.x; body.y = pendingPt.y; body.size = +$("size").value;
+  }
+  const res = await fetch("/process", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.detail || `process failed (${res.status})`);
+    return false;
+  }
+  pollJobs();
+  clearPending();
+  return true;
+}
 
 let lastGrowPt = null;
 async function growAt(wx, wy) {
@@ -858,6 +925,7 @@ async function applySelection(sel) {
 // ---- generate dispatch ----------------------------------------------
 
 async function generatePending() {
+  if (tool === "process") { await submitProcess(); return; }
   if (tool === "latent") {
     if (selection) { $("latApplySel").click(); return; }
     if (pendingPt) {
@@ -950,7 +1018,7 @@ function updateStrip() {
   const running = activeJobs.filter((j) => j.status === "running");
   const queued = activeJobs.filter((j) => j.status === "queued").length;
   $("stripJob").textContent = running.length
-    ? `● ${running[0].iter}/${running[0].iterations}` + (queued ? ` +${queued}` : "")
+    ? `● ${running[0].iter}/${running[0].iterations >= 1e8 ? "∞" : running[0].iterations}` + (queued ? ` +${queued}` : "")
     : (queued ? `${queued} queued` : "");
 }
 
@@ -1062,6 +1130,8 @@ for (const [id, out, fmt] of [
   ["tolerance", "tolVal", (v) => v], ["similarity", "simVal", (v) => (+v).toFixed(2)],
   ["edgechaos", "chaosVal", (v) => (+v).toFixed(2)], ["reach", "reachVal", (v) => v],
   ["irregularity", "irrVal", (v) => (+v).toFixed(2)], ["flow", "flowVal", (v) => (+v).toFixed(2)],
+  ["procPa", "procPaVal", (v) => (+v).toFixed(2)], ["procPb", "procPbVal", (v) => (+v).toFixed(2)],
+  ["procSteps", "procStepsVal", (v) => v],
   ["selRadius", "selRadVal", (v) => v],
 ]) {
   $(id).addEventListener("input", () => { $(out).textContent = fmt($(id).value); redraw(); });

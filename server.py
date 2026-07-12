@@ -335,6 +335,28 @@ class LatentReq(BaseModel):
     edge_chaos: float = 0.5
 
 
+class ProcessReq(BaseModel):
+    """Time-based process evolving the latent token field while you watch."""
+    rule: str                          # reaction_diffusion|life_ca|diffuse_flow|decay_grow|feedback_bloom|two_clip_tension
+    x: float | None = None
+    y: float | None = None
+    size: int = 512
+    bbox: list[int] | None = None
+    mask_png: str | None = None
+    falloff: int = 64
+    edge_chaos: float = 0.5
+    steps: int = 200
+    live: bool = False                 # run until stopped (autosaves ~20s)
+    flip: bool = False                 # polarity: growth<->decay, spots<->coral, ...
+    pa: float = 0.5                    # rule param A, 0..1
+    pb: float = 0.5                    # rule param B, 0..1
+    prompt: str = ""                   # two_clip: target A
+    prompt2: str = ""                  # two_clip: target B
+    preview_every: int = 4
+    seed: int | None = None
+    scope: str = "region"              # region | canvas
+
+
 class RefineReq(BaseModel):
     """Raise a region's detail level: a masked paint op at 2^level px per
     world unit, seeded by whatever is visible below."""
@@ -836,6 +858,273 @@ def _run_refine(job: dict, force_ckpt=False):
         composite(last_img, final=True)
 
 
+PROCESS_RULES = ("reaction_diffusion", "life_ca", "diffuse_flow",
+                 "decay_grow", "feedback_bloom", "two_clip_tension")
+
+
+def _vq_snap(z):
+    """Re-quantize to the codebook: every state stays inside VQGAN's
+    material vocabulary — evolution, not blur."""
+    cb = engine.model.quantize.embedding.weight
+    with torch.no_grad():
+        return engine_mod.vector_quantize(z.movedim(1, 3), cb).movedim(3, 1).contiguous()
+
+
+def _process_region(job, p, seed, take_snapshot=True):
+    x0, y0, rw, rh, mask = _region_and_mask(p, seed)
+    job["bbox"] = job.get("bbox") or [x0, y0, rw, rh]
+    if take_snapshot:
+        snapshot_undo([x0, y0, rw, rh], 0, label="process " + p["rule"])
+    with buf_lock:
+        orig = canvas[y0:y0 + rh, x0:x0 + rw].astype(np.float32) / 255.0
+        cov = coverage[y0:y0 + rh, x0:x0 + rw].astype(np.float32) / 255.0
+    if not (cov > 0).any():
+        raise ValueError("processes evolve existing paint — paint or spray here first")
+
+    scale = min(1.0, WORK_MAX / max(rw, rh))
+    ww = min(WORK_MAX, max(64, int(round(rw * scale / 64)) * 64))
+    wh = min(WORK_MAX, max(64, int(round(rh * scale / 64)) * 64))
+    ty, tx = wh // engine.f, ww // engine.f
+    dev = engine.device
+    cb = engine.model.quantize.embedding.weight
+
+    crop, _ = edge_fill(orig, cov, dev)
+    img = Image.fromarray((crop * 255 + 0.5).astype(np.uint8)).resize((ww, wh), Image.LANCZOS)
+    t = torch.from_numpy(np.asarray(img, np.float32) / 255.0).permute(2, 0, 1)[None]
+    z0 = engine.z_from_pixels(t)
+    z = z0.clone()
+    mimg = Image.fromarray((mask * 255 + 0.5).astype(np.uint8)).resize((tx, ty), Image.BILINEAR)
+    m = torch.from_numpy(np.asarray(mimg, np.float32) / 255.0).to(dev) > 0.25
+    mm = m[None, None]
+
+    a_new = mask[..., None]
+    a_old = cov[..., None]
+    a_out = a_new + a_old * (1.0 - a_new)
+    safe = np.maximum(a_out, 1e-6)
+
+    def composite(img_tensor, final=False):
+        arr = img_tensor[0].permute(1, 2, 0).float().cpu().numpy()
+        if arr.shape[:2] != (rh, rw):
+            im = Image.fromarray((arr * 255 + 0.5).astype(np.uint8))
+            arr = np.asarray(im.resize((rw, rh), Image.LANCZOS if final else Image.BILINEAR),
+                             np.float32) / 255.0
+        res = np.where(a_out > 1e-6,
+                       (arr * a_new + orig * a_old * (1.0 - a_new)) / safe, orig)
+        with buf_lock:
+            canvas[y0:y0 + rh, x0:x0 + rw] = (np.clip(res, 0, 1) * 255 + 0.5).astype(np.uint8)
+            coverage[y0:y0 + rh, x0:x0 + rw] = (a_out[..., 0] * 255 + 0.5).astype(np.uint8)
+        dirty.set()
+
+    rule = p["rule"]
+    flip = bool(p["flip"])
+    pa, pb = float(p["pa"]), float(p["pb"])
+    live = bool(p["live"])
+    steps = 10 ** 9 if live else max(1, int(p["steps"]))
+    kprev = max(1, int(p["preview_every"]))
+    last_autosave = time.time()
+
+    def anchor_vec(off=0):
+        return cb[int(torch.randint(engine.n_toks, (1,)))]
+
+    # ---- rule setup: each returns step(z)->z' on the token field ----
+    if rule == "reaction_diffusion":
+        R = 4
+        gh, gw = ty * R, tx * R
+        A = torch.ones(1, 1, gh, gw, device=dev)
+        B = torch.zeros_like(A)
+        for _ in range(9):
+            sy = int(torch.randint(max(1, gh - 10), (1,)))
+            sx = int(torch.randint(max(1, gw - 10), (1,)))
+            B[..., sy:sy + 10, sx:sx + 10] = 1.0
+            A[..., sy:sy + 10, sx:sx + 10] = 0.2   # dip A so seeds take hold fast
+        lap = torch.tensor([[.05, .2, .05], [.2, -1., .2], [.05, .2, .05]],
+                           device=dev)[None, None]
+        f_, k_ = (0.0545, 0.0620) if flip else (0.0367, 0.0649)
+        f_ += (pa - 0.5) * 0.02
+        k_ += (pb - 0.5) * 0.008
+        c1 = anchor_vec()
+        cbw = engine.model.quantize.embedding.weight
+        c2 = cbw[(cbw - c1).pow(2).sum(1).argmax()]  # farthest code: max contrast
+
+        def step(z):
+            nonlocal A, B
+            for _ in range(20):
+                r = A * B * B
+                A = (A + F.conv2d(A, lap, padding=1) - r + f_ * (1 - A)).clamp(0, 1)
+                B = (B + 0.5 * F.conv2d(B, lap, padding=1) + r - (f_ + k_) * B).clamp(0, 1)
+            # B peaks ~0.4 in healthy GS — normalize for full material contrast
+            Bt = (F.avg_pool2d(B, R)[0, 0] / 0.32).clamp(0, 1)
+            tgt = c1[:, None, None] * (1 - Bt) + c2[:, None, None] * Bt
+            # stamp only where the pattern lives; elsewhere relax toward the
+            # ORIGINAL painting so the ground never compounds to extinction
+            w = (0.6 * Bt)[None, None]
+            return z + w * (tgt[None] - z) + 0.08 * (z0 - z)
+
+    elif rule == "life_ca":
+        seedv = anchor_vec()
+        rot = cb[cb.pow(2).sum(1).argmin()]
+        ksum = torch.ones(1, 1, 3, 3, device=dev)
+        ksum[0, 0, 1, 1] = 0
+        birth, surv = ((2,), (1, 2)) if flip else ((3,), (2, 3))
+
+        def step(z):
+            simv = F.cosine_similarity(z, seedv[None, :, None, None], dim=1, eps=1e-6)[0]
+            alive = (simv > 0.45).float()[None, None]
+            n = F.conv2d(alive, ksum, padding=1)[0, 0]
+            a = alive[0, 0] > 0.5
+            born = torch.zeros_like(a)
+            for b in birth:
+                born |= (n == b)
+            kept = torch.zeros_like(a)
+            for sv in surv:
+                kept |= (n == sv)
+            newalive = torch.where(a, kept, born)
+            za = z.clone()
+            if bool(newalive.any()):
+                za[0, :, newalive] = seedv[:, None].expand(-1, int(newalive.sum()))
+            dead = ~newalive
+            if bool(dead.any()):
+                za[0, :, dead] = z[0, :, dead] * 0.82 + rot[:, None] * 0.18
+            return za
+
+    elif rule == "diffuse_flow":
+        n1 = value_noise(ty, tx, seed + 3, cells=4, octaves=3)
+        gy, gx = np.gradient(n1)
+        amp = 1.2 + pa * 3.0
+        vx = torch.from_numpy((gy * amp * 12).astype(np.float32)).to(dev)
+        vy = torch.from_numpy((-gx * amp * 12).astype(np.float32)).to(dev)
+        ys, xs = torch.meshgrid(torch.linspace(-1, 1, ty, device=dev),
+                                torch.linspace(-1, 1, tx, device=dev), indexing="ij")
+        grid = torch.stack([xs + vx * 2 / max(tx, 1), ys + vy * 2 / max(ty, 1)], -1)[None]
+
+        def step(z):
+            if flip:
+                blur = F.avg_pool2d(z, 3, 1, 1)
+                return z + (0.5 + pb) * (z - blur)
+            zs = F.grid_sample(z, grid, mode="bilinear",
+                               padding_mode="border", align_corners=True)
+            return zs * 0.85 + F.avg_pool2d(zs, 3, 1, 1) * 0.15
+
+    elif rule == "decay_grow":
+        norms = cb.pow(2).sum(1)
+        rot = cb[norms.topk(256, largest=False).indices].mean(0)
+        crys = cb[norms.topk(256).indices].mean(0)
+        tgt = crys if flip else rot
+        rate = 0.03 + pa * 0.12
+        nz = 0.02 + pb * 0.06
+
+        def step(z):
+            return z + rate * (tgt[None, :, None, None] - z) + nz * torch.randn_like(z) * 0.1
+
+    elif rule == "feedback_bloom":
+        def step(z):
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16,
+                                                 enabled=engine.autocast):
+                x = engine.synth(z).float()
+            zn = engine.z_from_pixels(x)
+            if pa > 0:
+                zn = zn + pa * 0.05 * torch.randn_like(zn)
+            if flip:
+                zn = z + 1.7 * (zn - z)
+            return zn
+
+    elif rule == "two_clip_tension":
+        pass  # separate loop below
+    else:
+        raise ValueError(f"unknown rule '{rule}'")
+
+    if rule == "two_clip_tension":
+        promptA = (p.get("prompt") or "").strip() or "ornate growth"
+        promptB = (p.get("prompt2") or "").strip() or "burnt ruin"
+        eA = F.normalize(engine.embed_text(promptA), dim=-1)
+        eB = F.normalize(engine.embed_text(promptB), dim=-1)
+        bias = -0.02 if flip else 0.02
+        zt = z.clone().requires_grad_(True)
+        opt = torch.optim.Adam([zt], lr=0.06 + pa * 0.1)
+        mc = engine.make_cutouts_for(16, "original")
+        engine.checkpoint_decoder = True
+        for i in range(1, steps + 1):
+            opt.zero_grad(set_to_none=True)
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=engine.autocast):
+                out = engine.synth(zt)
+                emb = engine.clip.encode_image(
+                    engine_mod.CLIP_NORMALIZE(mc(out))).float()
+            en = F.normalize(emb, dim=-1)
+            dA = (en - eA).norm(dim=-1).div(2).arcsin().pow(2).mul(2)
+            dB = (en - eB).norm(dim=-1).div(2).arcsin().pow(2).mul(2)
+            loss = torch.minimum(dA, dB + bias).mean()
+            loss.backward()
+            opt.step()
+            stopping = bool(job.get("stop"))
+            with torch.no_grad():
+                if i % 4 == 0 or stopping or i == steps:
+                    zt.data = torch.where(mm, _vq_snap(zt.data), z0)
+            job["iter"] = i
+            job["loss"] = round(float(loss), 4)
+            if i % kprev == 0 or i == steps or stopping:
+                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16,
+                                                     enabled=engine.autocast):
+                    composite(engine.synth(zt.data).float().detach().cpu(),
+                              final=(i == steps or stopping))
+            if live and time.time() - last_autosave > 20:
+                save_state()
+                last_autosave = time.time()
+            if stopping:
+                return
+        return
+
+    for i in range(1, steps + 1):
+        with torch.no_grad():
+            z = torch.where(mm, _vq_snap(step(z)), z0)
+        stopping = bool(job.get("stop"))
+        job["iter"] = i
+        if i % kprev == 0 or i == steps or stopping:
+            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16,
+                                                 enabled=engine.autocast):
+                composite(engine.synth(z).float().detach().cpu(),
+                          final=(i == steps or stopping))
+        if live and time.time() - last_autosave > 20:
+            save_state()
+            last_autosave = time.time()
+        if stopping:
+            return
+
+
+def _run_process(job: dict, force_ckpt=False):
+    p = job["params"]
+    seed = p["seed"] if p["seed"] is not None else int(torch.seed() % 2**31)
+    job["seed"] = p["seed"] = seed
+    torch.manual_seed(seed)
+    if p.get("scope") == "canvas":
+        bb = _painted_bbox()
+        if bb is None:
+            raise ValueError("nothing painted yet")
+        x0, y0, x1, y1 = bb
+        job["bbox"] = [x0, y0, x1 - x0, y1 - y0]
+        snapshot_undo(job["bbox"], 0, label="process " + p["rule"] + " (canvas)")
+        TILE, OVER = 512, 96
+        tp = dict(p)
+        tp["scope"] = "region"
+        tp["live"] = False
+        step_x = TILE - OVER
+        for tyy in range(y0, y1, step_x):
+            for txx in range(x0, x1, step_x):
+                if job.get("stop"):
+                    return
+                tp2 = dict(tp)
+                tp2["bbox"] = [txx, tyy, min(TILE, x1 - txx), min(TILE, y1 - tyy)]
+                tp2["mask_png"] = None
+                tp2["x"] = tp2["y"] = None
+                if tp2["bbox"][2] < 64 or tp2["bbox"][3] < 64:
+                    continue
+                try:
+                    _process_region(job, tp2, seed, take_snapshot=False)
+                except ValueError:
+                    continue  # virgin tile
+        return
+    _process_region(job, p, seed, take_snapshot=True)
+
+
 def _run_latent(job: dict):
     p = job["params"]
     seed = p["seed"] if p["seed"] is not None else int(torch.seed() % 2**31)
@@ -990,7 +1279,8 @@ def worker():
         job["started"] = time.time()
         try:
             prm = job["params"]
-            run = (_run_latent if prm.get("op") else
+            run = (_run_process if prm.get("rule") else
+                   _run_latent if prm.get("op") else
                    _run_refine if prm.get("level") else _run_paint)
             try:
                 run(job)
@@ -1223,6 +1513,33 @@ def refine(req: RefineReq):
     return {"job_id": job["id"], "bbox": job["bbox"]}
 
 
+@app.post("/process")
+def process(req: ProcessReq):
+    if req.rule not in PROCESS_RULES:
+        raise HTTPException(400, "rule must be one of " + "|".join(PROCESS_RULES))
+    if req.scope not in ("region", "canvas"):
+        raise HTTPException(400, "scope must be region|canvas")
+    if req.scope == "region" and req.bbox is None and (req.x is None or req.y is None):
+        raise HTTPException(400, "need x/y or bbox for region scope")
+    if req.scope == "canvas" and req.live:
+        raise HTTPException(400, "live mode is region-only; canvas runs a budget pass")
+    job = {
+        "id": uuid.uuid4().hex[:12],
+        "status": "queued",
+        "iter": 0,
+        "params": {**req.model_dump(), "prompt": req.prompt,
+                   "iterations": 10**9 if req.live else req.steps},
+        "bbox": req.bbox if req.bbox else
+                ([int(round(req.x - req.size / 2)), int(round(req.y - req.size / 2)),
+                  req.size, req.size] if req.x is not None else None),
+        "created": time.time(),
+    }
+    jobs[job["id"]] = job
+    job_order.append(job["id"])
+    job_queue.put(job)
+    return {"job_id": job["id"], "bbox": job["bbox"]}
+
+
 @app.post("/latent_op")
 def latent_op(req: LatentReq):
     if req.op not in ("spray", "smear", "shift", "mirror", "repeat", "neighbor", "bloom"):
@@ -1441,7 +1758,8 @@ def _job_public(j):
         "iterations": j["params"]["iterations"], "bbox": j["bbox"],
         "prompt": j["params"]["prompt"], "seed": j.get("seed"),
         "loss": j.get("loss"), "error": j.get("error"), "note": j.get("note"),
-        "kind": ("latent " + j["params"]["op"]) if j["params"].get("op") else
+        "kind": ("process " + j["params"]["rule"]) if j["params"].get("rule") else
+                ("latent " + j["params"]["op"]) if j["params"].get("op") else
                 (f"refine {2 ** j['params']['level']}×" if j["params"].get("level") else
                  ("image" if j["params"].get("source_png") else
                   ("brush" if j["params"].get("mask_png") else "region"))),
