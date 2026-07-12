@@ -116,6 +116,7 @@
 
 <div id="chromeTL" class="card"><b>VQPAINT</b><span id="worldLabel" class="mono">8192px</span></div>
 <div id="chromeTR" class="card">
+  <button id="fxBtn" title="display effects — never touch the stored canvas">fx</button>
   <button id="undoBtn" title="undo the last operation (Ctrl+Z)">↶</button>
   <button id="exportQuick" title="download everything painted, refined areas at full detail">Export</button>
   <button id="saveNow" title="save a canvas version now">✓</button>
@@ -374,6 +375,13 @@
 </div>
 
 <div id="jobs"></div>
+
+<div id="fxCard" class="card" style="position:fixed; top:64px; right:16px; z-index:31; width:250px; padding:13px; display:none">
+  <div style="font-weight:600; margin-bottom:2px">View effects</div>
+  <div style="color:var(--mut); font-size:12px">display-only — stored pixels untouched; baked only on "export with fx"</div>
+  <div id="fxRows"></div>
+  <div class="row"><button id="fxExport" class="chip" title="bake the active effects into a PNG (≤4096px)">export with fx</button></div>
+</div>
 
 <div id="histCard" class="card" style="position:fixed; z-index:32; width:280px; padding:12px; display:none">
   <div style="font-weight:600; margin-bottom:6px">History here <span style="color:var(--mut); font-weight:400">— double-clicked spot</span></div>

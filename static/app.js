@@ -1197,3 +1197,125 @@ $("exportQuick").onclick = () => { location.href = exportUrl("painted"); };
   fetchView();
   pollJobs();
 })();
+
+
+// ---- view effects: display-only shader stack over the view sprite ----
+const FX = {
+  bloom:      { label: "bloom",      v: 0 },
+  aberration: { label: "aberration", v: 0 },
+  mosh:       { label: "datamosh",   v: 0 },
+  scanline:   { label: "scanline",   v: 0 },
+  grain:      { label: "grain",      v: 0 },
+};
+
+const abFrag = `
+varying vec2 vTextureCoord; uniform sampler2D uSampler; uniform float amt;
+void main(void){
+  vec2 off = vec2(amt, 0.0);
+  float r = texture2D(uSampler, vTextureCoord - off).r;
+  vec4 c = texture2D(uSampler, vTextureCoord);
+  float b = texture2D(uSampler, vTextureCoord + off).b;
+  gl_FragColor = vec4(r, c.g, b, c.a);
+}`;
+const scanFrag = `
+varying vec2 vTextureCoord; uniform sampler2D uSampler; uniform float amt; uniform float ph;
+void main(void){
+  vec4 c = texture2D(uSampler, vTextureCoord);
+  float s = 1.0 - amt * 0.5 * (0.5 + 0.5 * sin((vTextureCoord.y + ph) * 900.0));
+  gl_FragColor = vec4(c.rgb * s, c.a);
+}`;
+
+const fxAb = new PIXI.Filter(undefined, abFrag, { amt: 0 });
+const fxScan = new PIXI.Filter(undefined, scanFrag, { amt: 0, ph: 0 });
+const fxNoise = new PIXI.filters.NoiseFilter(0);
+// datamosh: displacement by a blocky random map
+const moshCanvas = document.createElement("canvas");
+moshCanvas.width = moshCanvas.height = 128;
+(() => {
+  const c = moshCanvas.getContext("2d");
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+    c.fillStyle = `rgb(${128 + (Math.random() * 120 - 60) | 0},${128 + (Math.random() * 120 - 60) | 0},128)`;
+    c.fillRect(x * 8, y * 8, 8, 8);
+  }
+})();
+const moshSprite = new PIXI.Sprite(PIXI.Texture.from(moshCanvas));
+moshSprite.renderable = false;
+app.stage.addChild(moshSprite);
+const fxMosh = new PIXI.DisplacementFilter(moshSprite);
+// bloom: additive blurred twin of the view sprite
+const bloomSprite = new PIXI.Sprite(PIXI.Texture.EMPTY);
+bloomSprite.blendMode = PIXI.BLEND_MODES.ADD;
+bloomSprite.visible = false;
+bloomSprite.filters = [new PIXI.BlurFilter(8, 4)];
+app.stage.addChildAt(bloomSprite, app.stage.getChildIndex(viewSprite) + 1);
+
+function applyFx() {
+  const fs = [];
+  if (FX.aberration.v > 0) { fxAb.uniforms.amt = FX.aberration.v * 0.004; fs.push(fxAb); }
+  if (FX.mosh.v > 0) { fxMosh.scale.set(FX.mosh.v * 40); fs.push(fxMosh); }
+  if (FX.scanline.v > 0) { fxScan.uniforms.amt = FX.scanline.v; fs.push(fxScan); }
+  if (FX.grain.v > 0) { fxNoise.noise = FX.grain.v * 0.35; fs.push(fxNoise); }
+  viewSprite.filters = fs.length ? fs : null;
+  bloomSprite.visible = FX.bloom.v > 0;
+  bloomSprite.alpha = FX.bloom.v * 0.85;
+}
+app.ticker.add(() => {
+  fxScan.uniforms.ph = (performance.now() % 4000) / 4000;
+  if (FX.grain.v > 0) fxNoise.seed = Math.random();
+  if (bloomSprite.visible) {
+    bloomSprite.texture = viewSprite.texture;
+    bloomSprite.x = viewSprite.x; bloomSprite.y = viewSprite.y;
+    bloomSprite.width = viewSprite.width; bloomSprite.height = viewSprite.height;
+  }
+});
+
+$("fxRows").innerHTML = Object.entries(FX).map(([k, f]) => `
+  <label>${f.label} <span class="val" id="fx_${k}_v">off</span></label>
+  <input type="range" id="fx_${k}" min="0" max="1" step="0.05" value="0">`).join("");
+for (const k of Object.keys(FX)) {
+  $(`fx_${k}`).addEventListener("input", () => {
+    FX[k].v = +$(`fx_${k}`).value;
+    $(`fx_${k}_v`).textContent = FX[k].v > 0 ? FX[k].v.toFixed(2) : "off";
+    applyFx();
+  });
+}
+$("fxBtn").onclick = () => {
+  const c = $("fxCard");
+  c.style.display = c.style.display === "none" ? "block" : "none";
+};
+
+$("fxExport").onclick = async () => {
+  const res = await fetch("/export?scope=painted&scale=1");
+  if (!res.ok) { alert("export failed"); return; }
+  const bmp = await createImageBitmap(await res.blob());
+  const sc = Math.min(1, 4096 / Math.max(bmp.width, bmp.height));
+  const sp = new PIXI.Sprite(PIXI.Texture.from(bmp));
+  sp.scale.set(sc);
+  const wrap = new PIXI.Container();
+  wrap.addChild(sp);
+  if (FX.bloom.v > 0) {
+    const bs = new PIXI.Sprite(sp.texture);
+    bs.scale.set(sc);
+    bs.blendMode = PIXI.BLEND_MODES.ADD;
+    bs.alpha = FX.bloom.v * 0.85;
+    bs.filters = [new PIXI.BlurFilter(8, 4)];
+    wrap.addChild(bs);
+  }
+  const fs = [];
+  if (FX.aberration.v > 0) fs.push(fxAb);
+  if (FX.mosh.v > 0) fs.push(fxMosh);
+  if (FX.scanline.v > 0) fs.push(fxScan);
+  if (FX.grain.v > 0) fs.push(fxNoise);
+  if (fs.length) wrap.filters = fs;
+  const rt = PIXI.RenderTexture.create({
+    width: Math.round(bmp.width * sc), height: Math.round(bmp.height * sc) });
+  app.renderer.render(wrap, { renderTexture: rt });
+  const cnv = app.renderer.extract.canvas(rt);
+  cnv.toBlob((blob) => {
+    const aEl = document.createElement("a");
+    aEl.href = URL.createObjectURL(blob);
+    aEl.download = `vqpaint_fx_${Date.now()}.png`;
+    aEl.click();
+  }, "image/png");
+  rt.destroy(true); sp.texture.destroy(true);
+};
