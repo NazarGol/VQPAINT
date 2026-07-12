@@ -279,6 +279,16 @@ def _log_op(job):
             f.write(json.dumps(rec) + "\n")
             f.flush()
             os.fsync(f.fileno())
+        # time-lapse frame: cheap strided thumbnail of the whole canvas
+        tdir = os.path.join(STATE_DIR, "timelapse")
+        os.makedirs(tdir, exist_ok=True)
+        stp = max(1, world // 640)
+        with buf_lock:
+            small = canvas[::stp, ::stp].copy()
+            a = coverage[::stp, ::stp].astype(np.float32)[..., None] / 255.0
+        thumb = (small.astype(np.float32) * a + VIRGIN * (1 - a) + 0.5).astype(np.uint8)
+        Image.fromarray(thumb).save(
+            os.path.join(tdir, f"{int(time.time() * 1000)}.jpg"), quality=82)
     except Exception as e:
         print(f"[oplog] failed: {e}", flush=True)
 
@@ -666,6 +676,8 @@ def _run_paint(job: dict, force_ckpt=False):
     if src_comp is not None and float(p.get("source_strength", 0)) > 0:
         st = torch.from_numpy(src_comp).permute(2, 0, 1)[None]
         targets.append((engine.embed_image(st), 1.5 * float(p["source_strength"])))
+    if ANCHOR["prompt"].strip() and ANCHOR["weight"] > 0:
+        targets.append((engine.embed_text(ANCHOR["prompt"]), float(ANCHOR["weight"])))
     if not targets:
         raise ValueError("nothing to aim at: give a prompt, or paint where "
                          "something already exists so it can flow in")
@@ -841,6 +853,8 @@ def _run_refine(job: dict, force_ckpt=False):
     if ctx_filled is not None and float(p["w_img"]) > 0:
         targets.append((_bleed_embed(ctx_filled, p.get("bleed_drift", 0)),
                         float(p["w_img"])))
+    if ANCHOR["prompt"].strip() and ANCHOR["weight"] > 0:
+        targets.append((engine.embed_text(ANCHOR["prompt"]), float(ANCHOR["weight"])))
     if not targets:
         raise ValueError("nothing to aim at: give a prompt or refine over existing paint")
     target = engine.blend_targets(targets)
@@ -1399,6 +1413,71 @@ def state_versions():
     return out
 
 
+ANCHOR_PATH = os.path.join(STATE_DIR, "anchor.json")
+ANCHOR = {"prompt": "", "weight": 0.3}
+try:
+    ANCHOR.update(json.load(open(ANCHOR_PATH)))
+except Exception:
+    pass
+
+
+class AnchorReq(BaseModel):
+    prompt: str = ""
+    weight: float = 0.3
+
+
+@app.get("/anchor")
+def get_anchor():
+    return ANCHOR
+
+
+@app.post("/anchor")
+def set_anchor(req: AnchorReq):
+    ANCHOR["prompt"] = req.prompt
+    ANCHOR["weight"] = max(0.0, min(2.0, req.weight))
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(ANCHOR_PATH, "w") as f:
+        json.dump(ANCHOR, f)
+    return ANCHOR
+
+
+class EraseReq(BaseModel):
+    bbox: list[int]
+    mask_png: str
+    amount: float = 1.0
+    falloff: int = 32
+    edge_chaos: float = 0.5
+    seed: int | None = None
+
+
+@app.post("/erase")
+def erase(req: EraseReq):
+    """Fade painted content back toward the paper (alpha down, colors
+    kept — a light pass ghosts, a full pass clears). Affects all levels."""
+    p = req.model_dump()
+    seed = p["seed"] if p["seed"] is not None else int(time.time() * 1000) % 2**31
+    x0, y0, rw, rh, mask = _region_and_mask(p, seed)
+    snapshot_undo([x0, y0, rw, rh], 0, label="erase")
+    fade = 1.0 - np.clip(mask * max(0.0, min(1.0, req.amount)), 0.0, 1.0)
+    with buf_lock:
+        cov = coverage[y0:y0 + rh, x0:x0 + rw].astype(np.float32)
+        coverage[y0:y0 + rh, x0:x0 + rw] = (cov * fade + 0.5).astype(np.uint8)
+    for lvl, st in levels.items():
+        if not st.alpha:
+            continue
+        sc = st.scale
+        lrgb, la = st.read(x0 * sc, y0 * sc, rw * sc, rh * sc)
+        if not la.any():
+            continue
+        fr = np.asarray(Image.fromarray((fade * 255 + 0.5).astype(np.uint8))
+                        .resize((rw * sc, rh * sc), Image.BILINEAR), np.float32) / 255.0
+        with buf_lock:
+            st.write(x0 * sc, y0 * sc, lrgb,
+                     (la.astype(np.float32) * fr + 0.5).astype(np.uint8))
+    dirty.set()
+    return {"erased": True, "bbox": [x0, y0, rw, rh]}
+
+
 @app.post("/undo")
 def undo():
     if any(j["status"] in ("running", "queued") for j in jobs.values()):
@@ -1407,6 +1486,12 @@ def undo():
     if depth is None:
         raise HTTPException(404, "nothing to undo")
     return {"undone": True, "remaining": depth}
+
+
+@app.get("/painted_bbox")
+def painted_bbox_ep():
+    bb = _painted_bbox()
+    return {"bbox": list(bb) if bb else None}
 
 
 @app.get("/history")
