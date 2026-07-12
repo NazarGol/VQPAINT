@@ -48,7 +48,7 @@ const worldY = (sy) => (sy - py) / k;
 const TOOL_TITLES = {
   place: "Paint region", brush: "Paint area", wand: "Selection",
   image: "Place image", latent: "Latent op", refine: "Refine detail",
-  grow: "Grown region", process: "Living process",
+  grow: "Grown region", process: "Living process", gradient: "Semantic gradient",
 };
 
 const PROC_CFG = {
@@ -251,8 +251,9 @@ function redraw() {
     } else if (tool === "place") {
       const s = +$("size").value * k;
       brushGfx.lineStyle(1, ACC, 0.5).drawRect(mouse.x - s / 2, mouse.y - s / 2, s, s);
-    } else if (tool === "brush") {
-      brushGfx.lineStyle(1, ACC, 0.7).drawCircle(mouse.x, mouse.y, +$("radius").value * k);
+    } else if (tool === "brush" || tool === "gradient") {
+      brushGfx.lineStyle(1, tool === "gradient" ? 0x4a90c2 : ACC, 0.7)
+              .drawCircle(mouse.x, mouse.y, +$("radius").value * k);
     } else if (tool === "image" && importImg) {
       const w = +$("size").value * k, h = w * importImg.h / importImg.w;
       imgSprite.x = mouse.x - w / 2; imgSprite.y = mouse.y - h / 2;
@@ -331,8 +332,9 @@ app.view.addEventListener("pointerdown", (e) => {
     smearDrawing = { r: Math.max(24, +$("size").value / 4), pts: [{ x: wx, y: wy }] };
     pendingPt = null;
     redraw();
-  } else if (tool === "brush") {
+  } else if (tool === "brush" || tool === "gradient") {
     drawing = { r: +$("radius").value, pts: [{ x: wx, y: wy }] };
+    if (tool === "gradient") strokes = [];   // one stroke = one gradient
     strokes.push(drawing);
     selection = null; pendingPt = null;
     redraw();
@@ -443,7 +445,7 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "Space") { spaceHeld = true; e.preventDefault(); return; }
   if (e.key === "Escape") { clearPending(); pickingBleed = false; redraw(); }
   else if (e.key === "Enter" && (strokes.length || selection || pendingPt)) generatePending();
-  else if (e.key >= "1" && e.key <= "8") setTool(["place", "brush", "wand", "image", "latent", "refine", "grow", "process"][+e.key - 1]);
+  else if (e.key >= "1" && e.key <= "9") setTool(["place", "brush", "wand", "image", "latent", "refine", "grow", "process", "gradient"][+e.key - 1]);
   else if (e.key === "[" || e.key === "]") {
     const [id, step] = sizeKeyFor();
     const el = $(id);
@@ -460,13 +462,14 @@ function setTool(t) {
   for (const [id, name] of [["toolPlace", "place"], ["toolBrush", "brush"],
                             ["toolWand", "wand"], ["toolImage", "image"],
                             ["toolLatent", "latent"], ["toolRefine", "refine"],
-                            ["toolGrow", "grow"], ["toolProcess", "process"]])
+                            ["toolGrow", "grow"], ["toolProcess", "process"],
+                            ["toolGradient", "gradient"]])
     $(id).classList.toggle("active", t === name);
   document.querySelectorAll(".tool-group[data-tool]").forEach((g) => {
     g.style.display = g.dataset.tool.split(" ").includes(t) ? "block" : "none";
   });
   pendingPt = null;
-  if (!["brush", "wand", "latent", "grow"].includes(t)) { strokes = []; selection = null;
+  if (!["brush", "wand", "latent", "grow", "gradient"].includes(t)) { strokes = []; selection = null;
     $("selOps").style.display = "none"; $("latApplySel").style.display = "none"; }
   redraw();
 }
@@ -477,6 +480,7 @@ $("toolLatent").onclick = () => setTool("latent");
 $("toolRefine").onclick = () => setTool("refine");
 $("toolGrow").onclick = () => setTool("grow");
 $("toolProcess").onclick = () => setTool("process");
+$("toolGradient").onclick = () => setTool("gradient");
 
 function procRuleChanged() {
   const cfg = PROC_CFG[$("procRule").value];
@@ -939,6 +943,31 @@ async function generatePending() {
     const ok = await submitPaint({
       ...commonParams(), bbox: selection.bbox, mask_png: selection.mask_png,
     });
+    if (ok) clearPending();
+    return;
+  }
+  if (strokes.length && tool === "gradient") {
+    const st = strokes[strokes.length - 1];
+    if (st.pts.length < 2) return;
+    const falloff = +$("falloff").value;
+    let x0 = 1e18, y0 = 1e18, x1 = -1e18, y1 = -1e18;
+    for (const p of st.pts) {
+      x0 = Math.min(x0, p.x - st.r); y0 = Math.min(y0, p.y - st.r);
+      x1 = Math.max(x1, p.x + st.r); y1 = Math.max(y1, p.y + st.r);
+    }
+    x0 = Math.floor(x0 - falloff); y0 = Math.floor(y0 - falloff);
+    const m = maskCanvas([x0, y0, Math.ceil(x1 + falloff - x0), Math.ceil(y1 + falloff - y0)],
+      (ctx, sc, ox, oy) => {
+        ctx.lineWidth = 2 * st.r * sc;
+        ctx.beginPath();
+        ctx.moveTo((st.pts[0].x - ox) * sc, (st.pts[0].y - oy) * sc);
+        for (const p of st.pts) ctx.lineTo((p.x - ox) * sc, (p.y - oy) * sc);
+        ctx.stroke();
+      });
+    const ok = await submitPaint({ ...commonParams(),
+      bbox: m.bbox, mask_png: m.mask_png,
+      grad_to: $("gradTo").value || null,
+      stroke_pts: st.pts.map((p) => [Math.round(p.x), Math.round(p.y)]) });
     if (ok) clearPending();
     return;
   }

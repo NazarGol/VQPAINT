@@ -137,6 +137,8 @@
     <svg viewBox="0 0 21 21"><path d="M11.5 3L6 12h4l-1.5 6L15 9h-4z"/></svg></button>
   <button id="toolProcess" data-tip="process — set a living rule loose on a region and watch it evolve (8)">
     <svg viewBox="0 0 21 21"><path d="M3 13c2-5 4 3 6-2s4 3 6-2 3 1 3 1M3 17.5c2-4 4 2 6-1.5s4 2 6-1.5 3 .8 3 .8"/><circle cx="10.5" cy="5" r="1.6"/></svg></button>
+  <button id="toolGradient" data-tip="gradient — drag a stroke that morphs from one concept to another (9)">
+    <svg viewBox="0 0 21 21"><path d="M3.5 15c4-6 10-6 14-9"/><circle cx="3.5" cy="15" r="1.8"/><circle cx="17.5" cy="6" r="1.8" fill="currentColor"/></svg></button>
   <div class="tsep"></div>
   <button id="toolImage" data-tip="image — place a PNG/JPG and paint it in (4)">
     <svg viewBox="0 0 21 21"><rect x="3.5" y="4.5" width="14" height="12" rx="2"/><circle cx="8" cy="9" r="1.4"/><path d="M4 15l4.5-4 3 2.5 3-3 3 3.5"/></svg></button>
@@ -147,7 +149,7 @@
   <div class="arrow"></div>
   <div id="popTitle"></div>
 
-  <div class="tool-group" data-tool="place brush grow wand image process">
+  <div class="tool-group" data-tool="place brush grow wand image process gradient">
     <label title="What should grow here. LEAVE EMPTY to let the region flow purely out of its surroundings.">prompt</label>
     <textarea id="prompt" placeholder="empty = flow from surroundings"></textarea>
   </div>
@@ -263,7 +265,13 @@
     </div>
   </div>
 
-  <div class="tool-group" data-tool="brush">
+  <div class="tool-group" data-tool="gradient">
+    <label title="The stroke starts as this concept (the main prompt above is the START)…">…and ends as</label>
+    <textarea id="gradTo" placeholder="what the stroke becomes" style="min-height:36px"></textarea>
+    <div style="color:var(--mut); font-size:12px; margin-top:6px">drag a stroke — one gesture morphs from the prompt above to this, across space</div>
+  </div>
+
+  <div class="tool-group" data-tool="brush gradient">
     <label title="Brush radius in canvas pixels">radius <span class="val" id="radiusVal">96</span></label>
     <input type="range" id="radius" min="16" max="512" step="8" value="96">
   </div>
@@ -280,7 +288,7 @@
       <span id="imageName" style="color:var(--mut); font-size:12px"></span></div>
   </div>
 
-  <div class="tool-group" data-tool="place brush grow wand refine image">
+  <div class="tool-group" data-tool="place brush grow wand refine image gradient">
     <label title="How long it cooks: low = soft and dreamy, high = crisp, very high = fried. ~2 it/s.">iterations <span class="val" id="itersVal">200</span></label>
     <input type="range" id="iters" min="10" max="1500" step="5" value="200">
     <div class="row">
@@ -289,7 +297,7 @@
     </div>
   </div>
 
-  <div class="tool-group" data-tool="place brush grow wand image">
+  <div class="tool-group" data-tool="place brush grow wand image gradient">
     <label title="How strongly the region absorbs the look of its surroundings — the glue between regions.">bleed <span class="val" id="wimgVal">0.60</span></label>
     <input type="range" id="wimg" min="0" max="2" step="0.05" value="0.6">
   </div>

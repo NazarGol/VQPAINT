@@ -134,6 +134,34 @@ class MakeCutoutsOrig(nn.Module):
         return clamp_with_grad(torch.cat(cutouts, dim=0), 0, 1)
 
 
+class MakeCutoutsPositional(nn.Module):
+    """Classic random crops that also record each crop's normalized center
+    (x, y in 0..1 of the input) so a spatially varying target can address
+    each cutout by location."""
+
+    def __init__(self, cut_size, cutn, cut_pow=1.0):
+        super().__init__()
+        self.cut_size = cut_size
+        self.cutn = cutn
+        self.cut_pow = cut_pow
+        self.last_centers = None
+
+    def forward(self, input):
+        sideY, sideX = input.shape[2:4]
+        max_size = min(sideX, sideY)
+        min_size = min(sideX, sideY, self.cut_size)
+        cutouts, centers = [], []
+        for _ in range(self.cutn):
+            size = int(torch.rand([]) ** self.cut_pow * (max_size - min_size) + min_size)
+            offsetx = int(torch.randint(0, sideX - size + 1, ()))
+            offsety = int(torch.randint(0, sideY - size + 1, ()))
+            cutouts.append(F.adaptive_avg_pool2d(
+                input[:, :, offsety:offsety + size, offsetx:offsetx + size], self.cut_size))
+            centers.append(((offsetx + size / 2) / sideX, (offsety + size / 2) / sideY))
+        self.last_centers = torch.tensor(centers, device=input.device)
+        return clamp_with_grad(torch.cat(cutouts, dim=0), 0, 1)
+
+
 def load_vqgan(config_path, ckpt_path):
     config = OmegaConf.load(config_path)
     assert config.model.target == "taming.models.vqgan.VQModel", config.model.target
@@ -254,7 +282,7 @@ class Engine:
 
     def optimize(self, z, target_embed, iterations, lr=0.1, preview_every=10,
                  snapshot_iters=(), make_cutouts=None, stop_flag=None,
-                 pixel_hold=None):
+                 pixel_hold=None, target_field=None):
         """Generator. Mutates z in place. Yields {'i', 'loss'} EVERY iter;
         the dict also carries 'image' (CPU, [1,3,H,W] 0..1) every
         preview_every iters, at snapshot_iters, at the last iter, and when
@@ -281,7 +309,14 @@ class Engine:
                 out = self.synth(z)
                 batch = CLIP_NORMALIZE(mc(out))
                 embeds = self.clip.encode_image(batch).float()
-            loss = spherical_dist(embeds, target)
+            if target_field is not None and getattr(mc, "last_centers", None) is not None:
+                # spatially varying target: same spherical geometry, each
+                # cutout measured against the target at its own location
+                tgts = target_field(mc.last_centers)
+                a = F.normalize(embeds, dim=-1)
+                loss = a.sub(tgts).norm(dim=-1).div(2).arcsin().pow(2).mul(2).mean()
+            else:
+                loss = spherical_dist(embeds, target)
             if pixel_hold is not None:
                 loss = loss + h_scale * (h_weight * (out.float() - h_target).pow(2)).mean()
             loss.backward()

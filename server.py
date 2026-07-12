@@ -317,6 +317,8 @@ class PaintReq(BaseModel):
     bleed_drift: float = 0.0           # seeded excursion in CLIP space
     bleed_from: list[float] | None = None  # [x, y]: bleed from elsewhere
     edge_chaos: float = 0.5            # 0 = clean ramp, 1 = torn/wispy edge
+    grad_to: str | None = None         # gradient stroke: concept at the END
+    stroke_pts: list | None = None     # gradient stroke polyline, world px
 
 
 class LatentReq(BaseModel):
@@ -670,6 +672,40 @@ def _run_paint(job: dict, force_ckpt=False):
     target = engine.blend_targets(targets)
     mc = engine.make_cutouts_for(int(p["cutn"]), p.get("cut_method", "original"))
 
+    # ---- semantic gradient: target varies along the stroke's arc ----
+    target_field = None
+    if p.get("grad_to") and p.get("stroke_pts") and len(p["stroke_pts"]) >= 2:
+        eA = F.normalize(engine.embed_text(prompt or p["grad_to"]), dim=-1)
+        eB = F.normalize(engine.embed_text(p["grad_to"]), dim=-1)
+        ctxv = None
+        if float(p["w_img"]) > 0 and ctx_filled is not None:
+            ctxv = _bleed_embed(ctx_filled, p.get("bleed_drift", 0))
+        poly = np.asarray(p["stroke_pts"], np.float32)
+        segd = np.diff(poly, axis=0)
+        segl = np.hypot(segd[:, 0], segd[:, 1])
+        cum = np.concatenate([[0.0], np.cumsum(segl)])
+        total = max(float(cum[-1]), 1e-6)
+        wt, wi = float(p["w_text"]), float(p["w_img"])
+
+        def target_field(centers):
+            c = centers.detach().cpu().numpy()
+            P = np.stack([x0 + c[:, 0] * rw, y0 + c[:, 1] * rh], 1)[:, None, :]
+            A = poly[None, :-1, :]
+            D = segd[None]
+            tseg = ((P - A) * D).sum(-1) / np.maximum((D * D).sum(-1), 1e-6)
+            tseg = np.clip(tseg, 0, 1)
+            C = A + tseg[..., None] * D
+            i = ((P - C) ** 2).sum(-1).argmin(1)
+            n = np.arange(len(c))
+            arc = cum[i] + tseg[n, i] * segl[i]
+            tt = torch.from_numpy((arc / total).astype(np.float32)).to(engine.device)[:, None]
+            g = F.normalize(eA * (1 - tt) + eB * tt, dim=-1)
+            if ctxv is not None:
+                g = F.normalize(g * max(wt, 0.05) + ctxv * wi, dim=-1)
+            return g
+
+        mc = engine_mod.MakeCutoutsPositional(engine.cut_size, int(p["cutn"]))
+
     # ---- HOLD: pin kept pixels, weight (1 - mask) * coverage ----
     pixel_hold = None
     if float(p["hold"]) > 0 and has_content.any():
@@ -711,7 +747,7 @@ def _run_paint(job: dict, force_ckpt=False):
     for ev in engine.optimize(z, target, iters, lr=float(p["lr"]),
                               preview_every=preview_every, make_cutouts=mc,
                               stop_flag=lambda: job.get("stop", False),
-                              pixel_hold=pixel_hold):
+                              pixel_hold=pixel_hold, target_field=target_field):
         if "image" in ev:
             last_img = ev["image"]
             composite(last_img)
@@ -848,7 +884,7 @@ def _run_refine(job: dict, force_ckpt=False):
     for ev in engine.optimize(z, target, iters, lr=float(p["lr"]),
                               preview_every=preview_every, make_cutouts=mc,
                               stop_flag=lambda: job.get("stop", False),
-                              pixel_hold=pixel_hold):
+                              pixel_hold=pixel_hold, target_field=target_field):
         if "image" in ev:
             last_img = ev["image"]
             composite(last_img)
@@ -1710,7 +1746,7 @@ def select_clip(req: SelectClipReq):
 
 @app.post("/paint")
 def paint(req: PaintReq):
-    if not req.prompt.strip() and req.w_img <= 0 and req.source_png is None:
+    if not req.prompt.strip() and req.w_img <= 0 and req.source_png is None and req.grad_to is None:
         raise HTTPException(400, "empty prompt = flow from surroundings, which needs bleed > 0")
     if req.bbox is None and (req.x is None or req.y is None):
         raise HTTPException(400, "need x/y (square) or bbox [x0,y0,w,h]")
