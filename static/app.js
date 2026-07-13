@@ -506,6 +506,7 @@ async function submitProcess() {
     flip: procFlip, live: procLive && !procCanvas,
     scope: procCanvas ? "canvas" : "region",
     pa: +$("procPa").value, pb: +$("procPb").value,
+    chaos: +$("procChaos").value,
     steps: +$("procSteps").value,
     falloff: +$("falloff").value, edge_chaos: +$("edgechaos").value,
     prompt: $("prompt").value, prompt2: $("prompt2").value,
@@ -1160,6 +1161,7 @@ for (const [id, out, fmt] of [
   ["edgechaos", "chaosVal", (v) => (+v).toFixed(2)], ["reach", "reachVal", (v) => v],
   ["irregularity", "irrVal", (v) => (+v).toFixed(2)], ["flow", "flowVal", (v) => (+v).toFixed(2)],
   ["procPa", "procPaVal", (v) => (+v).toFixed(2)], ["procPb", "procPbVal", (v) => (+v).toFixed(2)],
+  ["procChaos", "procChaosVal", (v) => (+v).toFixed(2)],
   ["procSteps", "procStepsVal", (v) => v],
   ["selRadius", "selRadVal", (v) => v],
 ]) {

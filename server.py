@@ -362,6 +362,7 @@ class ProcessReq(BaseModel):
     flip: bool = False                 # polarity: growth<->decay, spots<->coral, ...
     pa: float = 0.5                    # rule param A, 0..1
     pb: float = 0.5                    # rule param B, 0..1
+    chaos: float = 0.15                # 0 = coherent evolution, 1 = boiling divergence
     prompt: str = ""                   # two_clip: target A
     prompt2: str = ""                  # two_clip: target B
     preview_every: int = 4
@@ -968,6 +969,10 @@ def _process_region(job, p, seed, take_snapshot=True):
     rule = p["rule"]
     flip = bool(p["flip"])
     pa, pb = float(p["pa"]), float(p["pb"])
+    # slider maps to the empirically ALIVE band: past ~0.85 the decoder's
+    # neighbor-averaging turns everything to mud, so 1.0 on the slider IS
+    # the verified boil, not the mush beyond it
+    chaos = 0.85 * max(0.0, min(1.0, float(p.get("chaos", 0.15))))
     live = bool(p["live"])
     steps = 10 ** 9 if live else max(1, int(p["steps"]))
     kprev = max(1, int(p["preview_every"]))
@@ -997,18 +1002,30 @@ def _process_region(job, p, seed, take_snapshot=True):
         c2 = cbw[(cbw - c1).pow(2).sum(1).argmax()]  # farthest code: max contrast
 
         def step(z):
-            nonlocal A, B
+            nonlocal A, B, f_, k_
+            if chaos > 0:  # tiny walk inside the ALIVE band; restlessness
+                f_ = min(0.060, max(0.030, f_ + (float(torch.rand(1)) - 0.5) * 0.0012 * chaos))
+                k_ = min(0.066, max(0.058, k_ + (float(torch.rand(1)) - 0.5) * 0.0006 * chaos))
+            # if the system dies or floods, re-seed it — it must never settle
+            if float(B.max()) < 0.05 or float(B.mean()) > 0.45:
+                B.zero_()
+                for _ in range(7):
+                    sy = int(torch.randint(max(1, gh - 10), (1,)))
+                    sx = int(torch.randint(max(1, gw - 10), (1,)))
+                    B[..., sy:sy + 10, sx:sx + 10] = 1.0
+                    A[..., sy:sy + 10, sx:sx + 10] = 0.2
             for _ in range(20):
                 r = A * B * B
                 A = (A + F.conv2d(A, lap, padding=1) - r + f_ * (1 - A)).clamp(0, 1)
                 B = (B + 0.5 * F.conv2d(B, lap, padding=1) + r - (f_ + k_) * B).clamp(0, 1)
-            # B peaks ~0.4 in healthy GS — normalize for full material contrast
+            # fixed normalization: where there is no pattern the stamp is
+            # zero — structureless mud can never steamroll the region
             Bt = (F.avg_pool2d(B, R)[0, 0] / 0.32).clamp(0, 1)
             tgt = c1[:, None, None] * (1 - Bt) + c2[:, None, None] * Bt
             # stamp only where the pattern lives; elsewhere relax toward the
             # ORIGINAL painting so the ground never compounds to extinction
-            w = (0.6 * Bt)[None, None]
-            return z + w * (tgt[None] - z) + 0.08 * (z0 - z)
+            w = ((0.6 + 0.3 * chaos) * Bt)[None, None]
+            return z + w * (tgt[None] - z) + max(0.015, 0.08 * (1.0 - chaos)) * (z0 - z)
 
     elif rule == "life_ca":
         seedv = anchor_vec()
@@ -1022,11 +1039,15 @@ def _process_region(job, p, seed, take_snapshot=True):
             alive = (simv > 0.45).float()[None, None]
             n = F.conv2d(alive, ksum, padding=1)[0, 0]
             a = alive[0, 0] > 0.5
+            birth_l, surv_l = birth, surv
+            if chaos > 0.6 and float(torch.rand(1)) < (chaos - 0.5):
+                bs = torch.randint(1, 8, (2,))   # rules themselves destabilize
+                birth_l, surv_l = (int(bs[0]),), (int(bs[1]), int(bs[1]) % 8 + 1)
             born = torch.zeros_like(a)
-            for b in birth:
+            for b in birth_l:
                 born |= (n == b)
             kept = torch.zeros_like(a)
-            for sv in surv:
+            for sv in surv_l:
                 kept |= (n == sv)
             newalive = torch.where(a, kept, born)
             za = z.clone()
@@ -1034,13 +1055,14 @@ def _process_region(job, p, seed, take_snapshot=True):
                 za[0, :, newalive] = seedv[:, None].expand(-1, int(newalive.sum()))
             dead = ~newalive
             if bool(dead.any()):
-                za[0, :, dead] = z[0, :, dead] * 0.82 + rot[:, None] * 0.18
+                rm = 0.18 * (1.0 - 0.9 * chaos)
+                za[0, :, dead] = z[0, :, dead] * (1.0 - rm) + rot[:, None] * rm
             return za
 
     elif rule == "diffuse_flow":
         n1 = value_noise(ty, tx, seed + 3, cells=4, octaves=3)
         gy, gx = np.gradient(n1)
-        amp = 1.2 + pa * 3.0
+        amp = (1.2 + pa * 3.0) * (1.0 + 2.5 * chaos)
         vx = torch.from_numpy((gy * amp * 12).astype(np.float32)).to(dev)
         vy = torch.from_numpy((-gx * amp * 12).astype(np.float32)).to(dev)
         ys, xs = torch.meshgrid(torch.linspace(-1, 1, ty, device=dev),
@@ -1050,21 +1072,22 @@ def _process_region(job, p, seed, take_snapshot=True):
         def step(z):
             if flip:
                 blur = F.avg_pool2d(z, 3, 1, 1)
-                return z + (0.5 + pb) * (z - blur)
+                return z + (0.5 + pb + 1.5 * chaos) * (z - blur)
             zs = F.grid_sample(z, grid, mode="bilinear",
                                padding_mode="border", align_corners=True)
-            return zs * 0.85 + F.avg_pool2d(zs, 3, 1, 1) * 0.15
+            return zs * (0.85 + 0.15 * chaos) + F.avg_pool2d(zs, 3, 1, 1) * (0.15 * (1.0 - chaos))
 
     elif rule == "decay_grow":
         norms = cb.pow(2).sum(1)
         rot = cb[norms.topk(256, largest=False).indices].mean(0)
         crys = cb[norms.topk(256).indices].mean(0)
         tgt = crys if flip else rot
-        rate = 0.03 + pa * 0.12
+        rate = (0.03 + pa * 0.12) * (1.0 + 1.5 * chaos)
         nz = 0.02 + pb * 0.06
 
         def step(z):
-            return z + rate * (tgt[None, :, None, None] - z) + nz * torch.randn_like(z) * 0.1
+            return z + rate * (tgt[None, :, None, None] - z) \
+                     + nz * torch.randn_like(z) * (0.1 + 0.8 * chaos)
 
     elif rule == "feedback_bloom":
         def step(z):
@@ -1072,11 +1095,11 @@ def _process_region(job, p, seed, take_snapshot=True):
                                                  enabled=engine.autocast):
                 x = engine.synth(z).float()
             zn = engine.z_from_pixels(x)
-            if pa > 0:
-                zn = zn + pa * 0.05 * torch.randn_like(zn)
-            if flip:
-                zn = z + 1.7 * (zn - z)
-            return zn
+            inj = pa * 0.05 + chaos * 0.15
+            if inj > 0:
+                zn = zn + inj * torch.randn_like(zn)
+            f = (1.7 + 1.5 * chaos) if flip else (1.0 + 0.8 * chaos)
+            return z + f * (zn - z)
 
     elif rule == "two_clip_tension":
         pass  # separate loop below
@@ -1090,7 +1113,8 @@ def _process_region(job, p, seed, take_snapshot=True):
         eB = F.normalize(engine.embed_text(promptB), dim=-1)
         bias = -0.02 if flip else 0.02
         zt = z.clone().requires_grad_(True)
-        opt = torch.optim.Adam([zt], lr=0.06 + pa * 0.1)
+        opt = torch.optim.Adam([zt], lr=(0.06 + pa * 0.1) * (1.0 + chaos))
+        tc_snap = 4 + int(chaos * 28)
         mc = engine.make_cutouts_for(16, "original")
         engine.checkpoint_decoder = True
         for i in range(1, steps + 1):
@@ -1107,8 +1131,18 @@ def _process_region(job, p, seed, take_snapshot=True):
             opt.step()
             stopping = bool(job.get("stop"))
             with torch.no_grad():
-                if i % 4 == 0 or stopping or i == steps:
+                if chaos > 0:
+                    sel = m & (torch.rand(ty, tx, device=dev) < chaos * 0.1)
+                    if bool(sel.any()):
+                        idx = torch.randint(engine.n_toks, (int(sel.sum()),), device=dev)
+                        zf = zt.data.movedim(1, 3).reshape(-1, engine.e_dim)
+                        zf[sel.flatten()] = cb[idx]
+                if i % tc_snap == 0 or stopping or i == steps:
                     zt.data = torch.where(mm, _vq_snap(zt.data), z0)
+                zt.data = torch.minimum(torch.maximum(zt.data, engine.z_min), engine.z_max)
+                bad = ~torch.isfinite(zt.data)
+                if bool(bad.any()):
+                    zt.data = torch.where(bad, z0, zt.data)
             job["iter"] = i
             job["loss"] = round(float(loss), 4)
             if i % kprev == 0 or i == steps or stopping:
@@ -1123,9 +1157,37 @@ def _process_region(job, p, seed, take_snapshot=True):
                 return
         return
 
+    # measured, not assumed: long off-codebook drift AVERAGES into mush —
+    # short excursions with hard snap-backs are what actually boil
+    snap_every = 1 + int(chaos * 5)
+    noise_frac = chaos * 0.15
     for i in range(1, steps + 1):
         with torch.no_grad():
-            z = torch.where(mm, _vq_snap(step(z)), z0)
+            zn = step(z)
+            if chaos > 0.7:  # desync in coherent PATCHES (iid freeze = mush)
+                nf = torch.from_numpy(value_noise(ty, tx, seed * 13 + i,
+                                                  cells=3, octaves=2)).to(dev)
+                keep = nf > (chaos - 0.7)   # lagging regions drift out of phase
+                zn = torch.where(keep[None, None], zn, z)
+            if noise_frac > 0 and i % 3 == 0:
+                # coherent eruptions, not salt: iid random cells decode to
+                # gray mush — a BLOB of one alien material reads as chaos
+                nb = torch.from_numpy(value_noise(ty, tx, seed * 7 + i,
+                                                  cells=3, octaves=2)).to(dev)
+                blob = (nb > (1.0 - noise_frac * 1.3)) & m
+                if bool(blob.any()):
+                    alien = cb[int(torch.randint(engine.n_toks, (1,)))]
+                    zf = zn.movedim(1, 3).reshape(-1, engine.e_dim).clone()
+                    zf[blob.flatten()] = alien
+                    zn = zf.reshape(1, ty, tx, engine.e_dim).movedim(3, 1).contiguous()
+            if i % snap_every == 0:  # the master leash: off-codebook between snaps
+                zn = _vq_snap(zn)
+            # guards: bounded and finite — beautiful garbage, never a dead frame
+            zn = torch.minimum(torch.maximum(zn, engine.z_min), engine.z_max)
+            bad = ~torch.isfinite(zn)
+            if bool(bad.any()):
+                zn = torch.where(bad, z0, zn)
+            z = torch.where(mm, zn, z0)
         stopping = bool(job.get("stop"))
         job["iter"] = i
         if i % kprev == 0 or i == steps or stopping:
