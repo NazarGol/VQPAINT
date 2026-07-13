@@ -65,7 +65,7 @@ const PROC_CFG = {
   two_clip_tension: { desc: "Two prompts fight for the same ground; the border between them migrates as you watch. Flip: B wins ties.",
               pa: "step size", pb: "—" },
 };
-let procFlip = false, procLive = false, procCanvas = false;
+let procFlip = false, procLive = false, procCanvas = false, procNoUndo = false;
 
 function refineLevel() {
   const sel = +$("refineLevel").value;
@@ -494,6 +494,7 @@ $("procRule").addEventListener("change", procRuleChanged);
 procRuleChanged();
 $("procFlip").onclick = () => { procFlip = !procFlip; $("procFlip").classList.toggle("on", procFlip); };
 $("procLive").onclick = () => { procLive = !procLive; $("procLive").classList.toggle("on", procLive); };
+$("procNoUndo").onclick = () => { procNoUndo = !procNoUndo; $("procNoUndo").classList.toggle("on", procNoUndo); };
 $("procCanvas").onclick = () => {
   procCanvas = !procCanvas;
   $("procCanvas").classList.toggle("on", procCanvas);
@@ -507,6 +508,7 @@ async function submitProcess() {
     scope: procCanvas ? "canvas" : "region",
     pa: +$("procPa").value, pb: +$("procPb").value,
     chaos: +$("procChaos").value,
+    snapshot: !procNoUndo,
     steps: +$("procSteps").value,
     falloff: +$("falloff").value, edge_chaos: +$("edgechaos").value,
     prompt: $("prompt").value, prompt2: $("prompt2").value,

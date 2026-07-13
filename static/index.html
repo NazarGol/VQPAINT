@@ -253,6 +253,7 @@
       <button class="chip" id="procFlip" title="reverse the process's polarity">⇄ flip</button>
       <button class="chip" id="procLive" title="run forever until you press stop (autosaves as it goes)">∞ live</button>
       <button class="chip" id="procCanvas" title="run the process across everything painted, tile by tile">whole canvas</button>
+      <button class="chip" id="procNoUndo" title="point of no return: skip the undo snapshot (for very long boils)">🔥 no undo</button>
     </div>
     <label title="The leash. 0 = coherent evolution (snapped to real VQGAN material every step). Higher = the field drifts off-codebook between snaps, rules un-damp, noise pours in — up to boiling divergence at 1. The snap-back moments are glitches; that's the point.">CHAOS <span class="val" id="procChaosVal">0.15</span></label>
     <input type="range" id="procChaos" min="0" max="1" step="0.05" value="0.15">

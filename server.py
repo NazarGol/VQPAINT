@@ -368,6 +368,8 @@ class ProcessReq(BaseModel):
     preview_every: int = 4
     seed: int | None = None
     scope: str = "region"              # region | canvas
+    snapshot: bool = True              # False = no undo snapshot (long boils)
+    level: int = 0                     # 0 = canvas; 1..4 = run on a finer pyramid plane
 
 
 class RefineReq(BaseModel):
@@ -1213,7 +1215,8 @@ def _run_process(job: dict, force_ckpt=False):
             raise ValueError("nothing painted yet")
         x0, y0, x1, y1 = bb
         job["bbox"] = [x0, y0, x1 - x0, y1 - y0]
-        snapshot_undo(job["bbox"], 0, label="process " + p["rule"] + " (canvas)")
+        if p.get("snapshot", True):
+            snapshot_undo(job["bbox"], 0, label="process " + p["rule"] + " (canvas)")
         TILE, OVER = 512, 96
         tp = dict(p)
         tp["scope"] = "region"
@@ -1234,7 +1237,7 @@ def _run_process(job: dict, force_ckpt=False):
                 except ValueError:
                     continue  # virgin tile
         return
-    _process_region(job, p, seed, take_snapshot=True)
+    _process_region(job, p, seed, take_snapshot=p.get("snapshot", True))
 
 
 def _run_latent(job: dict):
@@ -1554,6 +1557,23 @@ def undo():
 def painted_bbox_ep():
     bb = _painted_bbox()
     return {"bbox": list(bb) if bb else None}
+
+
+@app.post("/undo/commit")
+def undo_commit():
+    """Point of no return: drop the newest undo snapshot WITHOUT restoring
+    — finalizes the last op and frees its snapshot."""
+    with undo_lock:
+        stack = _undo_stack()
+        if not stack:
+            raise HTTPException(404, "nothing to commit")
+        name = stack[-1]
+        for ext in (".npz", ".json"):
+            try:
+                os.remove(os.path.join(UNDO_DIR, name + ext))
+            except OSError:
+                pass
+        return {"committed": True, "remaining": len(stack) - 1}
 
 
 @app.get("/history")
