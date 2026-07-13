@@ -261,6 +261,13 @@
     <input type="range" id="procPa" min="0" max="1" step="0.05" value="0.5">
     <label id="procPbLabel">param B <span class="val" id="procPbVal">0.50</span></label>
     <input type="range" id="procPb" min="0" max="1" step="0.05" value="0.5">
+    <label title="Resolution, NOT chaos: run the rule on a finer detail plane — more cells over the same area = finer pattern. Needs a smaller region at higher levels.">resolution</label>
+    <select id="procLevel">
+      <option value="0" selected>canvas</option>
+      <option value="1">2× fine plane</option>
+      <option value="2">4× fine plane</option>
+      <option value="3">8× fine plane</option>
+    </select>
     <label title="Budget mode: how many steps before it stops">steps <span class="val" id="procStepsVal">200</span></label>
     <input type="range" id="procSteps" min="10" max="1000" step="10" value="200">
     <div id="procPrompt2Row" style="display:none">

@@ -924,15 +924,47 @@ def _vq_snap(z):
 
 
 def _process_region(job, p, seed, take_snapshot=True):
-    x0, y0, rw, rh, mask = _region_and_mask(p, seed)
-    job["bbox"] = job.get("bbox") or [x0, y0, rw, rh]
-    if take_snapshot:
-        snapshot_undo([x0, y0, rw, rh], 0, label="process " + p["rule"])
-    with buf_lock:
-        orig = canvas[y0:y0 + rh, x0:x0 + rw].astype(np.float32) / 255.0
-        cov = coverage[y0:y0 + rh, x0:x0 + rw].astype(np.float32) / 255.0
-    if not (cov > 0).any():
-        raise ValueError("processes evolve existing paint — paint or spray here first")
+    lvl = int(p.get("level", 0))
+    if lvl > 0:
+        # run the process on a finer pyramid plane: more cells over the
+        # same world area = finer pattern (resolution, distinct from chaos)
+        s2 = 2 ** lvl
+        cap = 2304 // s2
+        if p.get("bbox"):
+            bx, by, bw, bh = [int(v) for v in p["bbox"]]
+        else:
+            sz = min(int(p["size"]), cap)
+            bx = max(0, min(int(round(p["x"] - sz / 2)), world - sz))
+            by = max(0, min(int(round(p["y"] - sz / 2)), world - sz))
+            bw = bh = sz
+        bw, bh = min(bw, cap, world - bx), min(bh, cap, world - by)
+        if bw < 32 or bh < 32:
+            raise ValueError("refined-process area too small")
+        job["bbox"] = job.get("bbox") or [bx, by, bw, bh]
+        x0, y0 = bx * s2, by * s2
+        rw, rh = bw * s2, bh * s2
+        if take_snapshot:
+            snapshot_undo([x0, y0, rw, rh], lvl, label=f"process {p['rule']} {s2}x")
+        mask = chaos_mask(soft_mask(rw, rh, int(p["falloff"]) * s2),
+                          float(p.get("edge_chaos", 0.5)), seed)
+        orig, cov, fine_rgb, fine_a = read_visible(lvl, x0, y0, rw, rh)
+        if float(cov.max()) < 0.01:
+            raise ValueError("nothing visible here to evolve")
+        a_old_src = fine_a
+        store = levels[lvl]
+    else:
+        x0, y0, rw, rh, mask = _region_and_mask(p, seed)
+        job["bbox"] = job.get("bbox") or [x0, y0, rw, rh]
+        if take_snapshot:
+            snapshot_undo([x0, y0, rw, rh], 0, label="process " + p["rule"])
+        with buf_lock:
+            orig = canvas[y0:y0 + rh, x0:x0 + rw].astype(np.float32) / 255.0
+            cov = coverage[y0:y0 + rh, x0:x0 + rw].astype(np.float32) / 255.0
+        if not (cov > 0).any():
+            raise ValueError("processes evolve existing paint — paint or spray here first")
+        a_old_src = cov
+        fine_rgb = orig
+        store = None
 
     scale = min(1.0, WORK_MAX / max(rw, rh))
     ww = min(WORK_MAX, max(64, int(round(rw * scale / 64)) * 64))
@@ -951,7 +983,7 @@ def _process_region(job, p, seed, take_snapshot=True):
     mm = m[None, None]
 
     a_new = mask[..., None]
-    a_old = cov[..., None]
+    a_old = a_old_src[..., None]
     a_out = a_new + a_old * (1.0 - a_new)
     safe = np.maximum(a_out, 1e-6)
 
@@ -962,10 +994,14 @@ def _process_region(job, p, seed, take_snapshot=True):
             arr = np.asarray(im.resize((rw, rh), Image.LANCZOS if final else Image.BILINEAR),
                              np.float32) / 255.0
         res = np.where(a_out > 1e-6,
-                       (arr * a_new + orig * a_old * (1.0 - a_new)) / safe, orig)
+                       (arr * a_new + fine_rgb * a_old * (1.0 - a_new)) / safe, fine_rgb)
         with buf_lock:
-            canvas[y0:y0 + rh, x0:x0 + rw] = (np.clip(res, 0, 1) * 255 + 0.5).astype(np.uint8)
-            coverage[y0:y0 + rh, x0:x0 + rw] = (a_out[..., 0] * 255 + 0.5).astype(np.uint8)
+            if store is None:
+                canvas[y0:y0 + rh, x0:x0 + rw] = (np.clip(res, 0, 1) * 255 + 0.5).astype(np.uint8)
+                coverage[y0:y0 + rh, x0:x0 + rw] = (a_out[..., 0] * 255 + 0.5).astype(np.uint8)
+            else:
+                store.write(x0, y0, (np.clip(res, 0, 1) * 255 + 0.5).astype(np.uint8),
+                            (a_out[..., 0] * 255 + 0.5).astype(np.uint8))
         dirty.set()
 
     rule = p["rule"]
@@ -1726,6 +1762,10 @@ def process(req: ProcessReq):
         raise HTTPException(400, "need x/y or bbox for region scope")
     if req.scope == "canvas" and req.live:
         raise HTTPException(400, "live mode is region-only; canvas runs a budget pass")
+    if not (0 <= req.level <= MAX_LEVEL):
+        raise HTTPException(400, f"level must be 0..{MAX_LEVEL}")
+    if req.level > 0 and req.scope == "canvas":
+        raise HTTPException(400, "finer-plane processes are region-only")
     job = {
         "id": uuid.uuid4().hex[:12],
         "status": "queued",

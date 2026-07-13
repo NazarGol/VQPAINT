@@ -509,6 +509,7 @@ async function submitProcess() {
     pa: +$("procPa").value, pb: +$("procPb").value,
     chaos: +$("procChaos").value,
     snapshot: !procNoUndo,
+    level: +$("procLevel").value,
     steps: +$("procSteps").value,
     falloff: +$("falloff").value, edge_chaos: +$("edgechaos").value,
     prompt: $("prompt").value, prompt2: $("prompt2").value,
