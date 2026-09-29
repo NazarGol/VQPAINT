@@ -224,6 +224,7 @@ async function boot() {
     fetchJsonCached(M + 'mobileclip_s0/tokenizer.json'),
   ]);
   stats.fetchMs = Math.round(performance.now() - t0);
+  stats.cached = Object.values(prog).length > 0 && Object.values(prog).every((x) => x.cached);
   $('loading-text').textContent = 'Starting the models…';
   decoder = await Decoder.create(ort, decBuf, { ep });          // WebGPU sessions: one at a time
   clip = await Clip.create(ort, { visionBuf: visBuf, textBuf: txtBuf, tokenizerJson: tokJson, visionEp: ep });

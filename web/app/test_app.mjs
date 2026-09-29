@@ -9,7 +9,7 @@ import { chromium, webkit } from 'playwright';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, s, i, arr) => { if (s.startsWith('--')) a.push([s.slice(2), arr[i + 1] && !arr[i + 1].startsWith('--') ? arr[i + 1] : 'true']); return a; }, []));
-const seconds = +(args.seconds || 6), browserName = args.browser || 'chromium';
+const seconds = +(args.seconds || 6), browserName = args.browser || 'chromium', base = args.base || null; // --base https://nazargol.github.io/VQPAINT tests the live site
 const roomId = args.room || 'test-' + Math.random().toString(36).slice(2, 8);
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json', '.wasm': 'application/wasm', '.css': 'text/css' };
 const server = http.createServer((req, res) => {
@@ -20,7 +20,7 @@ const server = http.createServer((req, res) => {
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const port = server.address().port;
-const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/`;
+const url = base ? `${base}/app/room.html?r=${roomId}` : `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/`;
 const outDir = path.join(here, 'test_out'); fs.mkdirSync(outDir, { recursive: true });
 const browser = browserName === 'webkit' ? await webkit.launch({ headless: true }) : await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
 const ctxA = await browser.newContext({ viewport: { width: 1100, height: 760 } }), ctxB = await browser.newContext({ viewport: { width: 1100, height: 760 } });
@@ -68,6 +68,10 @@ await A.click('#undo'); await A.waitForTimeout(1500);
 const tokA2 = await A.evaluate(() => Array.from(window.__vqpaint.grid.tokens)), tokB2 = await B.evaluate(() => Array.from(window.__vqpaint.grid.tokens));
 check(tokA2.every((v, i) => v === tokB2[i]) && tokA2[5 * 32 + 5] === tokA[0], 'undo restored the region on A and B');
 await A.screenshot({ path: path.join(outDir, `${browserName}_A.png`) }); await B.screenshot({ path: path.join(outDir, `${browserName}_B.png`) });
+const tr = Date.now(); await A.reload(); await A.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready, null, { timeout: 180000 });
+const st2 = await A.evaluate(() => window.__vqpaint.stats);
+console.log(`second load (reload): ready in ${((Date.now() - tr) / 1000).toFixed(1)}s, fetch ${st2.fetchMs} ms, models from cache: ${st2.cached}`);
+check(st2.cached === true, 'models came from Cache Storage on the second load');
 await browser.close(); server.close();
 console.log(fails.length ? `FAILED: ${fails.join('; ')}` : 'ALL PASS');
 process.exit(fails.length ? 1 : 0);
