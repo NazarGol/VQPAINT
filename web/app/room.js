@@ -221,16 +221,14 @@ async function boot() {
   const [decBuf, visBuf, txtBuf, tokJson] = await Promise.all([
     fetchCached(M + 'decoder_fp16.onnx', { onProgress }),
     fetchCached(M + 'mobileclip_s0/onnx/vision_model_fp16.onnx', { onProgress }),
-    fetchCached(M + 'mobileclip_s0/onnx/text_model_quantized.onnx', { onProgress }),
+    fetchCached(M + 'mobileclip_s0/onnx/text_model_fp16.onnx', { onProgress }),
     fetchJsonCached(M + 'mobileclip_s0/tokenizer.json'),
   ]);
   stats.fetchMs = Math.round(performance.now() - t0);
   $('loading-text').textContent = 'Starting the models…';
-  [decoder, clip, palette] = await Promise.all([
-    Decoder.create(ort, decBuf, { ep }),
-    Clip.create(ort, { visionBuf: visBuf, textBuf: txtBuf, tokenizerJson: tokJson, visionEp: ep, textEp: 'wasm' }),
-    Palette.load(M + 'palette/'),
-  ]);
+  decoder = await Decoder.create(ort, decBuf, { ep });          // WebGPU sessions: one at a time
+  clip = await Clip.create(ort, { visionBuf: visBuf, textBuf: txtBuf, tokenizerJson: tokJson, visionEp: ep });
+  palette = await Palette.load(M + 'palette/');
   stats.loadMs = Math.round(performance.now() - t0);
   painter = new Painter({ decoder, clip, palette });
   // blank token = brightest low-saturation tile

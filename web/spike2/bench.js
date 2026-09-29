@@ -39,16 +39,16 @@ async function main() {
     const [decBuf, visBuf, txtBuf, tokJson] = await Promise.all([
       fetchCached(MODELS + 'decoder_fp16.onnx', { onProgress }),
       fetchCached(MODELS + 'mobileclip_s0/onnx/vision_model_fp16.onnx', { onProgress }),
-      fetchCached(MODELS + 'mobileclip_s0/onnx/text_model_quantized.onnx', { onProgress }),
+      fetchCached(MODELS + 'mobileclip_s0/onnx/text_model_fp16.onnx', { onProgress }),
       fetchJsonCached(MODELS + 'mobileclip_s0/tokenizer.json'),
     ]);
     results.timings.fetch_ms = Math.round(performance.now() - t);
     results.model_bytes = Object.fromEntries(Object.entries(prog).map(([k, v]) => [k, v.total]));
     log(`fetched models in ${results.timings.fetch_ms} ms: ${JSON.stringify(results.model_bytes)}`);
     t = performance.now();
-    const [decoder, clip, palette] = await Promise.all([
-      Decoder.create(ort, decBuf), Clip.create(ort, { visionBuf: visBuf, textBuf: txtBuf, tokenizerJson: tokJson }), Palette.load(MODELS + 'palette/'),
-    ]);
+    const decoder = await Decoder.create(ort, decBuf);
+    const clip = await Clip.create(ort, { visionBuf: visBuf, textBuf: txtBuf, tokenizerJson: tokJson });
+    const palette = await Palette.load(MODELS + 'palette/');
     results.timings.sessions_ms = Math.round(performance.now() - t);
     log(`sessions ready in ${results.timings.sessions_ms} ms`);
 

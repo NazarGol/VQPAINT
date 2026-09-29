@@ -12,11 +12,10 @@ function normalize(v) {
 export function dot(a, b) { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
 
 export class Clip {
-  static async create(ort, { visionBuf, textBuf, tokenizerJson, visionEp = 'webgpu', textEp = 'wasm' }) {
-    const [vision, text] = await Promise.all([
-      ort.InferenceSession.create(visionBuf, { executionProviders: [visionEp], graphOptimizationLevel: 'all' }),
-      ort.InferenceSession.create(textBuf, { executionProviders: [textEp], graphOptimizationLevel: 'all' }),
-    ]);
+  static async create(ort, { visionBuf, textBuf, tokenizerJson, visionEp = 'webgpu', textEp = visionEp }) {
+    // WebGPU EP sessions must be created one at a time
+    const vision = await ort.InferenceSession.create(visionBuf, { executionProviders: [visionEp], graphOptimizationLevel: 'all' });
+    const text = await ort.InferenceSession.create(textBuf, { executionProviders: [textEp], graphOptimizationLevel: 'all' });
     return new Clip(ort, vision, text, new CLIPTokenizer(tokenizerJson));
   }
 
