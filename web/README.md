@@ -43,12 +43,14 @@ prompt ──MobileCLIP text──► text embedding
 
 | | Chromium 153 | Safari 26.6 |
 |---|---|---|
-| first visit: model download | 210 MB | 210 MB |
+| first visit: model download | 210 MB, 95 s at ~2.5 MB/s from GitHub Pages | same |
 | decode 16×16 tokens (256 px) | 237 ms | 409 ms |
 | decode 32×32 tokens (512 px, whole canvas) | 0.98 s | 1.8 s |
-| MobileCLIP image embedding | 22 ms | ~50 ms |
-| search tries per second (16×16 region) | 4.3 | see results/ |
-| stroke with "normal" effort (8×8 brush, 10 s search) | ~11 s | ~11 s |
+| MobileCLIP image embedding | 22 ms | ~220 ms (background tab) |
+| search tries per second, 16×16 region | 4.3 | 2.3 (Playwright WebKit) |
+| search tries per second, 8×8 brush (+2 token margin) | 6.5 | – |
+| stroke with "normal" effort (8×8 brush, 10 s search) | 10.1 s | ~10 s (WebKit) |
+| second visit, models from cache, to ready | 1.7 s | – |
 | room set round-trip (Cloudflare) | 43 ms median | – |
 
 Spike results with pictures: [spike1/results/](spike1/results/) (decoder), [spike2/results/](spike2/results/)
@@ -108,6 +110,8 @@ git clone --depth 1 https://github.com/CompVis/taming-transformers.git web/expor
 - `DECISIONS.md`, `PROGRESS.md`, `NEEDS_NAZAR.md`.
 
 ## Known limits
+
+- **Safari and hidden tabs**: Safari 26 throttles WebGPU in a tab that is not visible so hard that one decode took 108 s in my automated runs (Playwright's WebKit build does not do this). The painter now pauses while the tab is hidden. Keep the tab in front while a stroke runs. Foreground Safari numbers above come from Spike 1 and Playwright WebKit; the automated app run in real Safari always landed in a background tab.
 
 - Needs WebGPU (Chrome/Edge 113+, Safari 26+). Without it the page says so and falls back to CPU wasm, about 10× slower.
 - Seams: a stroke is decoded with a 2-token margin and only the region's pixels are blitted, so edges can show.

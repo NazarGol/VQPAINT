@@ -31,7 +31,10 @@ export class Painter {
     const nCells = cells.length;
     const cellXY = (c) => { const x = c % crop.w; return [x - rx, (c - x) / crop.w - ry]; };
 
+    // Safari throttles WebGPU work in hidden tabs so hard that one run can take 100 s: pause instead.
+    const whileHidden = async () => { while (typeof document !== 'undefined' && document.visibilityState === 'hidden' && !(signal && signal.aborted)) await new Promise((r) => setTimeout(r, 250)); };
     const evaluate = async (tokens) => {
+      await whileHidden();
       const img = await this.decoder.decode(tokens, crop.h, crop.w);
       let data = img.data, w = img.w, h = img.h;
       if (scoreCropOnly) { data = cropCHW(data, w, h, rx * F, ry * F, region.w * F, region.h * F); w = region.w * F; h = region.h * F; }
@@ -93,8 +96,10 @@ export class Painter {
 
     let lastReport = 0, accepted = 0;
     const elapsed = () => (performance.now() - t0) / 1000;
-    while (best && elapsed() < seconds && !(signal && signal.aborted)) {
-      const progress = Math.min(1, elapsed() / seconds);
+    let pausedMs = 0;
+    while (best && elapsed() - pausedMs / 1000 < seconds && !(signal && signal.aborted)) {
+      const tp = performance.now(); await whileHidden(); pausedMs += performance.now() - tp;
+      const progress = Math.min(1, (elapsed() - pausedMs / 1000) / seconds);
       const frac = 0.08 * (1 - progress) + 0.01;
       const cand = best.slice();
       mutate(cand, frac);

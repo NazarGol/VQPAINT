@@ -12,3 +12,7 @@
 - 2026-09-29 Spike 2 v2 (bank seeds + patch mutations) passes: a face is recognisable at 10 s, night sea and forest at 60 s. Kept the hill-climb on top because it lets a prompt reshape a retrieved seed and blend into the surrounding canvas (decode with 2-token margin).
 - 2026-09-29 Default stroke effort in the app = 10 s: CLIP keeps rewarding glitchier images past ~20 s (faces get messier), so long searches are not better.
 - 2026-09-29 Bank compressed to PCA-128 (85% variance) + mean-dot term; 6.5 MB total for 6500 photos at 4 token sizes.
+- 2026-09-29 Site + models on GitHub Pages (`gh-pages` branch): GitHub Release assets have no CORS header, no HF token exists, and Pages allows files < 100 MB (biggest is 94 MB).
+- 2026-09-29 Model bytes kept in Cache Storage (not IndexedDB): survives reloads in Chromium and real Safari 26 (probe: 100 MB entries kept, quota 82 GB). Playwright's headless WebKit profile drops them, so the WebKit e2e cache check is expected to fail.
+- 2026-09-29 Rooms tested at 10 s strokes: two browsers on the live site stay in sync; no server-side decode anywhere.
+- 2026-09-29 Painter pauses while `document.visibilityState` is hidden: real Safari 26 stalls WebGPU runs in background tabs (108 s for one decode), which is what broke every automated Safari run of the app; Chromium and Playwright WebKit do not stall.

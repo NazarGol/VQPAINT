@@ -200,14 +200,19 @@ function showStats() {
 }
 
 // ---------- boot ----------
+const beacon = (phase, extra = {}) => { if (!params.get('auto')) return; try { fetch('/__progress', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phase, t: Math.round(performance.now()), ...extra }) }).catch(() => {}); } catch (_) {} };
+window.addEventListener('error', (e) => beacon('error', { message: String(e.message), src: String(e.filename) + ':' + e.lineno }));
+window.addEventListener('unhandledrejection', (e) => beacon('unhandledrejection', { message: String(e.reason && (e.reason.stack || e.reason.message || e.reason)) }));
 async function boot() {
   const gpu = await webgpuInfo();
+  beacon('gpu', { gpu });
   if (!gpu) {
     $('loading-text').innerHTML = '<b>No WebGPU in this browser.</b>';
     $('loading-sub').textContent = 'Painting needs WebGPU to run the model on your GPU. Use Chrome or Edge 113+, or Safari 26+. Falling back to CPU decoding, which is very slow (about 10 s per region).';
   }
   const ep = gpu ? 'webgpu' : 'wasm';
-  const ort = await loadOrt(params.get('ort') || CONFIG.ortBase);   // ?ort=/node_modules/onnxruntime-web/dist/ for local dev
+  const ort = await loadOrt(params.get('ort') || CONFIG.ortBase);
+  beacon('ort-loaded');   // ?ort=/node_modules/onnxruntime-web/dist/ for local dev
   const prog = {};
   const onProgress = (p) => {
     prog[p.url] = p;
@@ -223,13 +228,17 @@ async function boot() {
     fetchCached(M + 'mobileclip_s0/onnx/text_model_fp16.onnx', { onProgress }),
     fetchJsonCached(M + 'mobileclip_s0/tokenizer.json'),
   ]);
+  beacon('fetched');
   stats.fetchMs = Math.round(performance.now() - t0);
   stats.cached = Object.values(prog).length > 0 && Object.values(prog).every((x) => x.cached);
   $('loading-text').textContent = 'Starting the models…';
   decoder = await Decoder.create(ort, decBuf, { ep });          // WebGPU sessions: one at a time
+  beacon('decoder-ready');
   clip = await Clip.create(ort, { visionBuf: visBuf, textBuf: txtBuf, tokenizerJson: tokJson, visionEp: ep });
+  beacon('clip-ready');
   palette = await Palette.load(M + 'palette/');
   try { bank = await Bank.load(M + 'bank/'); } catch (e) { console.warn('bank not available, palette-only painting', e); bank = null; }
+  beacon('palette-bank-ready', { bank: !!bank });
   stats.loadMs = Math.round(performance.now() - t0);
   painter = new Painter({ decoder, clip, palette, bank });
   // blank token = tile closest to a light neutral grey
@@ -237,6 +246,7 @@ async function boot() {
   for (let i = 0; i < palette.n; i++) { const r = palette.rgb[i * 3], g = palette.rgb[i * 3 + 1], b = palette.rgb[i * 3 + 2]; const d = (r - 225) ** 2 + (g - 225) ** 2 + (b - 225) ** 2 + 4 * ((Math.max(r, g, b) - Math.min(r, g, b)) ** 2); if (d < best) { best = d; blankToken = i; } }
   grid.tokens.fill(blankToken);
   await redrawAll();
+  beacon('first-decode-done', { ms: stats.fullDecodeMs });
   $('loading').hidden = true;
   ready = true;
   showStats();
@@ -280,5 +290,20 @@ boot().then(() => { if (pendingFill) { room?.setCells(pendingFill); pendingFill 
   $('loading-text').innerHTML = '<b>Could not load the models.</b>';
   $('loading-sub').textContent = String(e.message || e);
 });
+// dev/test: ?auto=<prompt>&effort=<seconds> paints one 8x8 stroke after loading and POSTs stats to /__results
+(async () => {
+  if (!params.get('auto')) return;
+  while (!ready) await new Promise((r) => setTimeout(r, 200));
+  await new Promise((r) => setTimeout(r, 500));
+  CONFIG.efforts[effort] = +(params.get('effort') || 10);
+  $('prompt').value = params.get('auto');
+  beacon('painting');
+  const t = performance.now();
+  await paintRegion({ x: 12, y: 12, w: 8, h: 8 });
+  beacon('painted');
+  stats.autoStrokeMs = Math.round(performance.now() - t);
+  stats.ua = navigator.userAgent; stats.lastStatus = $('status').textContent;
+  try { await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(stats) }); } catch (_) {}
+})();
 window.__vqpaint = { grid, stats, get ready() { return ready; }, redrawAll, paintRegion, peers, get room() { return room; },
   setEffortSeconds(s) { CONFIG.efforts[effort] = s; }, setPrompt(p) { $('prompt').value = p; } };
