@@ -4,6 +4,7 @@ import { Decoder, F, clampRegion, expandRegion, readRegion, writeRegion } from '
 import { Clip } from '../lib/clip.js';
 import { Palette } from '../lib/palette.js';
 import { Painter } from '../lib/search.js';
+import { Bank } from '../lib/bank.js';
 import { blitCHW, cropCHW } from '../lib/image.js';
 import { connectRoom } from '../lib/room.js';
 
@@ -22,7 +23,7 @@ localStorage.setItem('vqpaint.color', myColor);
 
 // ---------- state ----------
 const grid = { w: CONFIG.gridW, h: CONFIG.gridH, tokens: new Int32Array(CONFIG.gridW * CONFIG.gridH) };
-let ready = false, room = null, decoder = null, clip = null, palette = null, painter = null, blankToken = 0;
+let ready = false, room = null, decoder = null, clip = null, palette = null, bank = null, painter = null, blankToken = 0;
 let brushSize = CONFIG.brushSizes[1], effort = 'normal';
 let painting = null; // {abort, region}
 const undoStack = [];
@@ -137,7 +138,7 @@ async function paintRegion(region) {
   const cellsOf = (crop) => { const out = []; for (let y = 0; y < crop.h; y++) for (let x = 0; x < crop.w; x++) out.push([crop.x + x, crop.y + y]); return out; };
   try {
     const res = await painter.paint({
-      grid, region, prompt, seconds, margin: 2, keep: 0, seeds: 4, signal: abort.signal, progressEvery: 400,
+      grid, region, prompt, seconds, margin: 2, keep: 0, seeds: 6, signal: abort.signal, progressEvery: 400,
       onProgress: (p) => {
         // show the best-so-far in place (crop = region + margin, we blit only the region's pixels)
         const img = p.image, rx = (region.x - p.crop.x) * F, ry = (region.y - p.crop.y) * F;
@@ -229,8 +230,9 @@ async function boot() {
   decoder = await Decoder.create(ort, decBuf, { ep });          // WebGPU sessions: one at a time
   clip = await Clip.create(ort, { visionBuf: visBuf, textBuf: txtBuf, tokenizerJson: tokJson, visionEp: ep });
   palette = await Palette.load(M + 'palette/');
+  try { bank = await Bank.load(M + 'bank/'); } catch (e) { console.warn('bank not available, palette-only painting', e); bank = null; }
   stats.loadMs = Math.round(performance.now() - t0);
-  painter = new Painter({ decoder, clip, palette });
+  painter = new Painter({ decoder, clip, palette, bank });
   // blank token = brightest low-saturation tile
   let best = -1;
   for (let i = 0; i < palette.n; i++) { const r = palette.rgb[i * 3], g = palette.rgb[i * 3 + 1], b = palette.rgb[i * 3 + 2]; const s = (r + g + b) / 3 - (Math.max(r, g, b) - Math.min(r, g, b)) * 2; if (s > best) { best = s; blankToken = i; } }
@@ -279,4 +281,5 @@ boot().then(() => { if (pendingFill) { room?.setCells(pendingFill); pendingFill 
   $('loading-text').innerHTML = '<b>Could not load the models.</b>';
   $('loading-sub').textContent = String(e.message || e);
 });
-window.__vqpaint = { grid, stats, get ready() { return ready; }, redrawAll, paintRegion, peers };
+window.__vqpaint = { grid, stats, get ready() { return ready; }, redrawAll, paintRegion, peers, get room() { return room; },
+  setEffortSeconds(s) { CONFIG.efforts[effort] = s; }, setPrompt(p) { $('prompt').value = p; } };

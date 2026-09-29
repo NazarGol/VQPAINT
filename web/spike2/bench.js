@@ -2,6 +2,7 @@ import { loadOrt, fetchCached, fetchJsonCached, webgpuInfo } from '../lib/models
 import { Decoder } from '../lib/decoder.js';
 import { Clip } from '../lib/clip.js';
 import { Palette } from '../lib/palette.js';
+import { Bank } from '../lib/bank.js';
 import { Painter } from '../lib/search.js';
 import { blitCHW, chwToDataURL } from '../lib/image.js';
 
@@ -12,7 +13,7 @@ const prompt = q.get('prompt') || 'red forest';
 const seconds = +(q.get('seconds') || 60);
 const G = +(q.get('grid') || 16), R = +(q.get('region') || G);
 const snaps = (q.get('snap') || '10,30,60').split(',').map(Number);
-const opts = { seeds: +(q.get('seeds') || 4), margin: +(q.get('margin') || 2), temperature: +(q.get('temp') || 0.03), topK: +(q.get('topk') || 512), keep: +(q.get('keep') || 0) };
+const opts = { seeds: +(q.get('seeds') || 6), margin: +(q.get('margin') || 2), temperature: +(q.get('temp') || 0.03), topK: +(q.get('topk') || 512), keep: +(q.get('keep') || 0), useBank: q.get('bank') !== '0', bankTop: +(q.get('banktop') || 24) };
 
 const logEl = document.getElementById('log');
 const lines = [];
@@ -49,6 +50,7 @@ async function main() {
     const decoder = await Decoder.create(ort, decBuf);
     const clip = await Clip.create(ort, { visionBuf: visBuf, textBuf: txtBuf, tokenizerJson: tokJson });
     const palette = await Palette.load(MODELS + 'palette/');
+    const bank = opts.useBank ? await Bank.load(MODELS + 'bank/') : null;
     results.timings.sessions_ms = Math.round(performance.now() - t);
     log(`sessions ready in ${results.timings.sessions_ms} ms`);
 
@@ -62,7 +64,7 @@ async function main() {
     const grid = { w: G, h: G, tokens: new Int32Array(G * G) };
     const region = { x: (G - R) >> 1, y: (G - R) >> 1, w: R, h: R };
     const ctxLive = addCanvas(`live: "${prompt}"`, G * 16, G * 16);
-    const painter = new Painter({ decoder, clip, palette });
+    const painter = new Painter({ decoder, clip, palette, bank });
     const snapCtx = {};
     let nextSnap = 0, lastStep = 0, lastT = performance.now();
     const res = await painter.paint({

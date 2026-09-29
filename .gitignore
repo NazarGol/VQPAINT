@@ -14,3 +14,4 @@ web/models/
 *.onnx
 *.onnx.data
 web/spike1/out/
+web/app/test_out/
