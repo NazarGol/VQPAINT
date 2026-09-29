@@ -4,3 +4,13 @@ out/
 state/
 server.log
 nohup.out
+
+# web spikes
+web/export/checkpoints/
+web/export/taming-transformers/
+.venv-export/
+web/node_modules/
+web/models/
+*.onnx
+*.onnx.data
+web/spike1/out/
