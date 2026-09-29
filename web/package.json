@@ -9,11 +9,12 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "dependencies": {
     "onnxruntime-web": "^1.30.0"
   },
   "devDependencies": {
     "playwright": "^1.63.0"
-  }
+  },
+  "private": true
 }
