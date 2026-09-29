@@ -1,5 +1,6 @@
 // MobileCLIP-S0 text + image embeddings via onnxruntime-web.
 import { CLIPTokenizer } from './clip_tokenizer.js';
+import { ortRun } from './models.js';
 
 function normalize(v) {
   let s = 0; for (let i = 0; i < v.length; i++) s += v[i] * v[i];
@@ -19,27 +20,26 @@ export class Clip {
     return new Clip(ort, vision, text, new CLIPTokenizer(tokenizerJson));
   }
 
-  constructor(ort, vision, text, tokenizer) { this.ort = ort; this.vision = vision; this.text = text; this.tok = tokenizer; this.size = 256; this.busy = Promise.resolve(); }
+  constructor(ort, vision, text, tokenizer) { this.ort = ort; this.vision = vision; this.text = text; this.tok = tokenizer; this.size = 256; }
 
-  async embedText(prompt) {
+  embedText(prompt) {
     const { ids } = this.tok.encode(prompt);
-    const t = new this.ort.Tensor('int64', BigInt64Array.from(ids, (x) => BigInt(x)), [1, ids.length]);
-    const out = await this.text.run({ input_ids: t });
-    return normalize(out.text_embeds.data);
+    return ortRun(async () => {
+      const t = new this.ort.Tensor('int64', BigInt64Array.from(ids, (x) => BigInt(x)), [1, ids.length]);
+      const out = await this.text.run({ input_ids: t });
+      return normalize(out.text_embeds.data);
+    });
   }
 
-  /** images: Float32Array(n*3*256*256) CHW in 0..1 → array of n unit embeddings. Serialised. */
+  /** images: Float32Array(n*3*256*256) CHW in 0..1 → array of n unit embeddings. Serialised through the global ORT queue. */
   embedImages(images, n = 1) {
-    const run = async () => {
+    return ortRun(async () => {
       const t = new this.ort.Tensor('float32', images, [n, 3, this.size, this.size]);
       const out = await this.vision.run({ pixel_values: t });
       const d = out.image_embeds.data, k = out.image_embeds.dims[1];
       const res = [];
       for (let i = 0; i < n; i++) res.push(normalize(d.subarray(i * k, (i + 1) * k)));
       return res;
-    };
-    const p = this.busy.then(run, run);
-    this.busy = p.catch(() => {});
-    return p;
+    });
   }
 }

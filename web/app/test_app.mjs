@@ -20,12 +20,10 @@ const server = http.createServer((req, res) => {
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const port = server.address().port;
-const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}`;
+const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/`;
 const outDir = path.join(here, 'test_out'); fs.mkdirSync(outDir, { recursive: true });
 const browser = browserName === 'webkit' ? await webkit.launch({ headless: true }) : await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
 const ctxA = await browser.newContext({ viewport: { width: 1100, height: 760 } }), ctxB = await browser.newContext({ viewport: { width: 1100, height: 760 } });
-// use the local ORT copy instead of the CDN
-for (const c of [ctxA, ctxB]) await c.route('https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/*', (route) => route.continue({ url: route.request().url().replace('https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/', `http://127.0.0.1:${port}/node_modules/onnxruntime-web/dist/`) }));
 const A = await ctxA.newPage(), B = await ctxB.newPage();
 for (const [n, p] of [['A', A], ['B', B]]) { p.on('pageerror', (e) => console.error(`[${n} pageerror]`, e.message)); p.on('console', (m) => { if (m.type() === 'error') console.error(`[${n} console]`, m.text().slice(0, 200)); }); }
 const fails = [];
@@ -43,9 +41,13 @@ check(await A.evaluate(() => window.__vqpaint.peers.size) === 1, 'A sees 1 peer 
 // B moves the cursor over the canvas -> A should see B's cursor
 const box = await B.locator('#canvas').boundingBox();
 await B.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.6); await B.mouse.move(box.x + box.width * 0.31, box.y + box.height * 0.61);
-await A.waitForTimeout(600);
+await A.waitForFunction(() => { const p = [...window.__vqpaint.peers.values()][0]; return p && p.x != null; }, null, { timeout: 8000 }).catch(() => {});
 const cur = await A.evaluate(() => [...window.__vqpaint.peers.values()][0]);
-check(cur && cur.x != null && Math.abs(cur.x - 0.31 * 32) < 1.5, `A sees B's cursor at x≈${cur && cur.x && cur.x.toFixed(1)} (expected ≈9.9)`);
+check(cur && cur.x != null && Math.abs(cur.x - 0.31 * 32) < 1.5, `A sees B's cursor from mouse move at x≈${cur && cur.x != null ? cur.x.toFixed(1) : 'none'} (expected ≈9.9)`);
+await B.evaluate(() => window.__vqpaint.room.sendCursor(12.5, 20.5));
+await A.waitForFunction(() => { const p = [...window.__vqpaint.peers.values()][0]; return p && p.x === 12.5; }, null, { timeout: 8000 }).catch(() => {});
+const cur2 = await A.evaluate(() => [...window.__vqpaint.peers.values()][0]);
+check(cur2 && cur2.x === 12.5, `A sees B's cursor from a direct sendCursor call (x=${cur2 && cur2.x})`);
 // A paints a region
 await A.evaluate((s) => { window.__vqpaint.setEffortSeconds(s); window.__vqpaint.setPrompt('red forest'); }, seconds);
 const tp = Date.now();

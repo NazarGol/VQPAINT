@@ -1,0 +1,55 @@
+{
+  "prompt": "red forest",
+  "seconds": 60,
+  "grid": 16,
+  "region": 16,
+  "opts": {
+    "seeds": 4,
+    "margin": 2,
+    "temperature": 0.03,
+    "topK": 512,
+    "keep": 0
+  },
+  "timings": {
+    "fetch_ms": 378,
+    "sessions_ms": 802,
+    "text_embed_ms": 374,
+    "image_embed_ms": 21
+  },
+  "snapshots": {
+    "10": {
+      "step": 44,
+      "accepted": 10,
+      "score": 0.2438
+    },
+    "30": {
+      "step": 131,
+      "accepted": 17,
+      "score": 0.2675
+    },
+    "60": {
+      "step": 259,
+      "accepted": 22,
+      "score": 0.2824
+    }
+  },
+  "errors": [],
+  "gpu": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "f16": true
+  },
+  "model_bytes": {
+    "decoder_fp16.onnx": 0,
+    "text_model_fp16.onnx": 0,
+    "vision_model_fp16.onnx": 0
+  },
+  "steps_per_s": 4.35,
+  "final": {
+    "score": 0.2824,
+    "steps": 259,
+    "accepted": 22,
+    "elapsed": 60.1,
+    "steps_per_s": 4.31
+  }
+}

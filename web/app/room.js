@@ -70,16 +70,14 @@ function scheduleRedraw(cells) {
 }
 async function redrawRegion(region, margin = 2) {
   const crop = expandRegion(grid, region, margin);
-  const t = performance.now();
   const img = await decoder.decode(readRegion(grid, crop), crop.h, crop.w);
-  stats.decodeMs.push(performance.now() - t);
+  stats.decodeMs.push(decoder.lastMs);
   const sub = cropCHW(img.data, img.w, img.h, (region.x - crop.x) * F, (region.y - crop.y) * F, region.w * F, region.h * F);
   blitCHW(ctx, sub, region.w * F, region.h * F, region.x * F, region.y * F);
 }
 async function redrawAll() {
-  const t = performance.now();
   const img = await decoder.decode(grid.tokens, grid.h, grid.w);
-  stats.fullDecodeMs = Math.round(performance.now() - t);
+  stats.fullDecodeMs = Math.round(decoder.lastMs);
   blitCHW(ctx, img.data, img.w, img.h, 0, 0);
 }
 function drawOverlay() {
@@ -209,7 +207,7 @@ async function boot() {
     $('loading-sub').textContent = 'Painting needs WebGPU to run the model on your GPU. Use Chrome or Edge 113+, or Safari 26+. Falling back to CPU decoding, which is very slow (about 10 s per region).';
   }
   const ep = gpu ? 'webgpu' : 'wasm';
-  const ort = await loadOrt(CONFIG.ortBase);
+  const ort = await loadOrt(params.get('ort') || CONFIG.ortBase);   // ?ort=/node_modules/onnxruntime-web/dist/ for local dev
   const prog = {};
   const onProgress = (p) => {
     prog[p.url] = p;
@@ -233,13 +231,13 @@ async function boot() {
   try { bank = await Bank.load(M + 'bank/'); } catch (e) { console.warn('bank not available, palette-only painting', e); bank = null; }
   stats.loadMs = Math.round(performance.now() - t0);
   painter = new Painter({ decoder, clip, palette, bank });
-  // blank token = brightest low-saturation tile
-  let best = -1;
-  for (let i = 0; i < palette.n; i++) { const r = palette.rgb[i * 3], g = palette.rgb[i * 3 + 1], b = palette.rgb[i * 3 + 2]; const s = (r + g + b) / 3 - (Math.max(r, g, b) - Math.min(r, g, b)) * 2; if (s > best) { best = s; blankToken = i; } }
+  // blank token = tile closest to a light neutral grey
+  let best = Infinity;
+  for (let i = 0; i < palette.n; i++) { const r = palette.rgb[i * 3], g = palette.rgb[i * 3 + 1], b = palette.rgb[i * 3 + 2]; const d = (r - 225) ** 2 + (g - 225) ** 2 + (b - 225) ** 2 + 4 * ((Math.max(r, g, b) - Math.min(r, g, b)) ** 2); if (d < best) { best = d; blankToken = i; } }
   grid.tokens.fill(blankToken);
+  await redrawAll();
   $('loading').hidden = true;
   ready = true;
-  await redrawAll();
   showStats();
   setStatus(`ready in ${(stats.loadMs / 1000).toFixed(1)}s. Press and drag on the canvas, release to paint.`);
 }
@@ -249,7 +247,7 @@ function connect() {
     url: CONFIG.roomsUrl, roomId, name: myName, color: myColor, w: grid.w, h: grid.h,
     onStatus: (s) => { $('conn').textContent = s === 'open' ? 'connected' : s; },
     onState: (st) => {
-      peers.clear(); for (const p of st.peers || []) peers.set(p.id, { ...p, t: 0 });
+      peers.clear(); for (const p of (st.peers instanceof Map ? st.peers.values() : st.peers || [])) if (p && p.id !== st.id) peers.set(p.id, { ...p, t: 0 });
       renderPeers();
       if (st.w !== grid.w || st.h !== grid.h) { setStatus(`room grid is ${st.w}×${st.h}, expected ${grid.w}×${grid.h}`); }
       const fresh = st.tokens.every((t) => t === 0);
@@ -271,7 +269,7 @@ function connect() {
     },
     onCursor: (m) => { const p = peers.get(m.id); if (p) { p.x = m.x; p.y = m.y; p.t = Date.now(); requestAnimationFrame(drawOverlay); } },
     onJoin: (p) => { peers.set(p.id, { ...p, t: 0 }); renderPeers(); },
-    onLeave: (id) => { peers.delete(id); renderPeers(); drawOverlay(); },
+    onLeave: (p) => { peers.delete(p && p.id); renderPeers(); drawOverlay(); },
   });
 }
 let pendingFill = null;

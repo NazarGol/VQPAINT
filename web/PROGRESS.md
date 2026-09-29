@@ -4,15 +4,14 @@
 - Spike 1 — decoder in the browser: PASS. 256 px decode 237 ms Chromium / 409 ms Safari (M1 Pro). fp16 model 89 MiB.
 - Spike 3 — rooms backend: live at https://vqpaint-rooms.vqpaint-rooms.workers.dev (Cloudflare Durable Object, free plan). Two-browser test 19/19, set round-trip median 43 ms.
 - Token palette: MobileCLIP-S0 embedding per codebook token (4 MB). Colours right, structure absent.
-- App skeleton (web/app): landing, room page, brush, undo, export, cursors, sync — untested end to end.
+- App (web/app): landing, room page, brush, undo, export, cursors, sync. Two-browser e2e test passes in Chromium and WebKit.
+- Spike 2 — CLIP-guided token search: PASS with the token bank (v2). 4.3 tries/s at 16×16; face recognisable at 10 s.
 
 ## In progress
-- Spike 2 — CLIP-guided token search. v1 (palette seed + hill-climb) = 4.3 tries/s, 60 s gives colour but nothing recognisable → fallback (a): token bank from real photos as seeds + patch mutations.
+- gh-pages deploy + live checks (load time, cache, Safari).
 
 ## Next
-- Token bank (COCO val2017 + CelebA-HQ) → rerun the 3-prompt test.
-- Wire the app end to end, two-browser test, Safari check.
-- gh-pages deploy, README, PR.
+- README, final numbers, PR.
 
 ## Key numbers
 | what | Chromium | Safari |

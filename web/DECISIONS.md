@@ -9,3 +9,6 @@
 - 2026-09-29 Spike 2 v1 (palette seed + hill-climb, 4.3 tries/s) fails the kill line: right colours, nothing recognisable at 60 s. Going to fallback (a) with a token bank: real photos (COCO val2017 + CelebA-HQ faces) encoded to VQGAN tokens with MobileCLIP embeddings; prompts retrieve token grids as seeds and copy patches from them as mutations. Same data a text→tokens model would train on, but no training run.
 - 2026-09-29 Text encoder = MobileCLIP-S0 fp16 on WebGPU (85 MB): int8 version drifted 10–20% from fp32 and changed palette rankings; fp16 is identical to fp32.
 - 2026-09-29 Palette shipped as PCA-128 fp16 (4 MB) plus a per-token mean-dot term so cosine scores are exact to 0.01.
+- 2026-09-29 Spike 2 v2 (bank seeds + patch mutations) passes: a face is recognisable at 10 s, night sea and forest at 60 s. Kept the hill-climb on top because it lets a prompt reshape a retrieved seed and blend into the surrounding canvas (decode with 2-token margin).
+- 2026-09-29 Default stroke effort in the app = 10 s: CLIP keeps rewarding glitchier images past ~20 s (faces get messier), so long searches are not better.
+- 2026-09-29 Bank compressed to PCA-128 (85% variance) + mean-dot term; 6.5 MB total for 6500 photos at 4 token sizes.

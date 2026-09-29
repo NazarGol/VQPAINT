@@ -38,3 +38,4 @@ input[type=text] { padding: 8px 10px; border: 1px solid var(--line); border-radi
 .progress > div { height: 100%; background: var(--accent); width: 0%; transition: width .2s; }
 .loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: rgba(244,242,238,.9); z-index: 5; text-align: center; padding: 20px; }
 @media (max-width: 800px) { .main { grid-template-columns: 1fr; } }
+.loading[hidden] { display: none; }

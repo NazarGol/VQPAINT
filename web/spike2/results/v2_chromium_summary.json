@@ -1,0 +1,98 @@
+[
+  {
+    "prompt": "red forest",
+    "score": 0.2476,
+    "steps": 262,
+    "accepted": 12,
+    "elapsed": 60.2,
+    "steps_per_s": 4.35,
+    "snapshots": {
+      "10": {
+        "step": 46,
+        "accepted": 2,
+        "score": 0.2141
+      },
+      "30": {
+        "step": 133,
+        "accepted": 4,
+        "score": 0.2226
+      },
+      "60": {
+        "step": 262,
+        "accepted": 12,
+        "score": 0.2476
+      }
+    },
+    "timings": {
+      "fetch_ms": 420,
+      "sessions_ms": 903,
+      "text_embed_ms": 48,
+      "image_embed_ms": 23
+    },
+    "errors": []
+  },
+  {
+    "prompt": "a face",
+    "score": 0.2462,
+    "steps": 262,
+    "accepted": 14,
+    "elapsed": 60.1,
+    "steps_per_s": 4.36,
+    "snapshots": {
+      "10": {
+        "step": 46,
+        "accepted": 4,
+        "score": 0.2186
+      },
+      "30": {
+        "step": 133,
+        "accepted": 6,
+        "score": 0.2166
+      },
+      "60": {
+        "step": 262,
+        "accepted": 14,
+        "score": 0.2462
+      }
+    },
+    "timings": {
+      "fetch_ms": 476,
+      "sessions_ms": 923,
+      "text_embed_ms": 45,
+      "image_embed_ms": 22
+    },
+    "errors": []
+  },
+  {
+    "prompt": "the sea at night",
+    "score": 0.2938,
+    "steps": 261,
+    "accepted": 7,
+    "elapsed": 60.1,
+    "steps_per_s": 4.35,
+    "snapshots": {
+      "10": {
+        "step": 46,
+        "accepted": 4,
+        "score": 0.2589
+      },
+      "30": {
+        "step": 133,
+        "accepted": 5,
+        "score": 0.2652
+      },
+      "60": {
+        "step": 261,
+        "accepted": 7,
+        "score": 0.2938
+      }
+    },
+    "timings": {
+      "fetch_ms": 472,
+      "sessions_ms": 887,
+      "text_embed_ms": 50,
+      "image_embed_ms": 23
+    },
+    "errors": []
+  }
+]
