@@ -1,0 +1,75 @@
+{
+  "model": "../models/decoder_fp16.onnx",
+  "ep": "webgpu",
+  "ort": "/node_modules/onnxruntime-web/dist/",
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36",
+  "timings": {
+    "fetch_ms": 279,
+    "session_create_ms": 863,
+    "first_16x16_ms": 308,
+    "warm_16x16": {
+      "n": 10,
+      "median_ms": 237,
+      "min_ms": 219.2,
+      "max_ms": 301
+    },
+    "random_16x16": {
+      "n": 5,
+      "median_ms": 242.9,
+      "min_ms": 231.2,
+      "max_ms": 243.4
+    },
+    "first_32x32_ms": 873,
+    "warm_32x32": {
+      "n": 10,
+      "median_ms": 977.1,
+      "min_ms": 875,
+      "max_ms": 1000.6
+    },
+    "random_32x32": {
+      "n": 5,
+      "median_ms": 869.3,
+      "min_ms": 848.9,
+      "max_ms": 930.1
+    },
+    "batch4_16x16": {
+      "n": 5,
+      "median_ms": 919.9,
+      "min_ms": 906.3,
+      "max_ms": 940.2
+    }
+  },
+  "errors": [],
+  "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "device": "",
+    "description": "",
+    "f16": true
+  },
+  "entry": "ort.webgpu.min.mjs",
+  "ortVersion": "1.30.0",
+  "model_bytes": 93598613,
+  "output_16x16": {
+    "nan": 0,
+    "min": 0.03,
+    "max": 1,
+    "mean": 0.534,
+    "mean_abs_diff_vs_torch_255": 0.41
+  },
+  "output_32x32": {
+    "nan": 0,
+    "min": 0,
+    "max": 1,
+    "mean": 0.535,
+    "mean_abs_diff_vs_torch_255": 0.38
+  },
+  "browser": "chromium",
+  "files_loaded": [
+    "&model=..%2Fmodels%2Fdecoder_fp16.onnx&ep=webgpu&n=10&entry=ort.webgpu.min.mjs",
+    "ort.webgpu.min.mjs",
+    "ort-wasm-simd-threaded.asyncify.mjs",
+    "ort-wasm-simd-threaded.asyncify.wasm"
+  ],
+  "console_warnings": []
+}

@@ -1,0 +1,68 @@
+{
+  "model": "../models/decoder_fp16.onnx",
+  "ep": "wasm",
+  "ort": "/node_modules/onnxruntime-web/dist/",
+  "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.0.0 Safari/537.36",
+  "timings": {
+    "fetch_ms": 200,
+    "session_create_ms": 761,
+    "first_16x16_ms": 2566,
+    "warm_16x16": {
+      "n": 10,
+      "median_ms": 2317.8,
+      "min_ms": 2285.3,
+      "max_ms": 2355.2
+    },
+    "random_16x16": {
+      "n": 5,
+      "median_ms": 2317.6,
+      "min_ms": 2296.4,
+      "max_ms": 2339.6
+    },
+    "first_32x32_ms": 9276,
+    "warm_32x32": {
+      "n": 10,
+      "median_ms": 9381.2,
+      "min_ms": 9240.9,
+      "max_ms": 9735.3
+    },
+    "random_32x32": {
+      "n": 5,
+      "median_ms": 9332,
+      "min_ms": 9280,
+      "max_ms": 10043.4
+    },
+    "batch4_16x16": {
+      "n": 5,
+      "median_ms": 9338.4,
+      "min_ms": 9292.1,
+      "max_ms": 9553.2
+    }
+  },
+  "errors": [],
+  "entry": "ort.webgpu.min.mjs",
+  "ortVersion": "1.30.0",
+  "model_bytes": 93598613,
+  "output_16x16": {
+    "nan": 0,
+    "min": 0.029,
+    "max": 1,
+    "mean": 0.534,
+    "mean_abs_diff_vs_torch_255": 0.25
+  },
+  "output_32x32": {
+    "nan": 0,
+    "min": 0,
+    "max": 1,
+    "mean": 0.535,
+    "mean_abs_diff_vs_torch_255": 0.25
+  },
+  "browser": "chromium",
+  "files_loaded": [
+    "&model=..%2Fmodels%2Fdecoder_fp16.onnx&ep=wasm&n=10&entry=ort.webgpu.min.mjs",
+    "ort.webgpu.min.mjs",
+    "ort-wasm-simd-threaded.asyncify.mjs",
+    "ort-wasm-simd-threaded.asyncify.wasm"
+  ],
+  "console_warnings": []
+}
