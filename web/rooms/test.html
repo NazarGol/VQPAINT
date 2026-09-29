@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>vqpaint rooms test</title>
+<link rel="icon" href="data:,">
+<style>body{font:13px/1.4 monospace;background:#111;color:#ddd;margin:16px} pre{white-space:pre-wrap}</style>
+<div id="hdr"></div>
+<pre id="out"></pre>
+<script type="module">
+// Minimal page used by test_sync.mjs: connects to ?url=<worker>&room=<id>, exposes window.room,
+// keeps a local grid in window.grid and appends every callback to window.log.
+import { connectRoom, newRoomId } from '../lib/room.js';
+
+const p = new URLSearchParams(location.search);
+const url = p.get('url') || 'http://localhost:8787';
+const roomId = p.get('room') || newRoomId();
+const name = p.get('name') || 'tester';
+const color = p.get('color') || '#ff8800';
+const w = p.get('w') ? +p.get('w') : undefined;
+const h = p.get('h') ? +p.get('h') : undefined;
+
+window.log = [];
+window.grid = null;
+window.gridW = 0;
+window.gridH = 0;
+window.onLog = null;           // optional hook: called synchronously with each entry
+const out = document.getElementById('out');
+document.getElementById('hdr').textContent = `room=${roomId} url=${url} name=${name}`;
+
+function push(t, m) {
+  const entry = { t, ...m, at: performance.now() };
+  window.log.push(entry);
+  if (out.childNodes.length < 400) out.textContent += JSON.stringify(entry).slice(0, 200) + '\n';
+  if (typeof window.onLog === 'function') window.onLog(entry);
+}
+
+window.room = connectRoom({
+  url, roomId, name, color, w, h,
+  onState: (s) => {
+    window.grid = s.tokens; window.gridW = s.w; window.gridH = s.h;
+    push('state', { id: s.id, w: s.w, h: s.h, v: s.v, n: s.tokens.length, peers: [...s.peers.keys()] });
+  },
+  onSet: (m) => {
+    if (window.grid) for (const [x, y, tok] of m.cells) window.grid[y * window.gridW + x] = tok;
+    push('set', { cells: m.cells, from: m.from, v: m.v, own: m.own });
+  },
+  onCursor: (c) => push('cursor', { id: c.id, x: c.x, y: c.y }),
+  onJoin: (peer, peers) => push('join', { peer, peers: [...peers.keys()] }),
+  onLeave: (peer, peers) => push('leave', { id: peer.id, peers: [...peers.keys()] }),
+  onStatus: (st) => push('status', { status: st }),
+});
+</script>
