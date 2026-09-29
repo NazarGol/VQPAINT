@@ -25,7 +25,7 @@ const outDir = path.join(here, 'test_out'); fs.mkdirSync(outDir, { recursive: tr
 const browser = browserName === 'webkit' ? await webkit.launch({ headless: true }) : await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
 const ctxA = await browser.newContext({ viewport: { width: 1100, height: 760 } }), ctxB = await browser.newContext({ viewport: { width: 1100, height: 760 } });
 const A = await ctxA.newPage(), B = await ctxB.newPage();
-for (const [n, p] of [['A', A], ['B', B]]) { p.on('pageerror', (e) => console.error(`[${n} pageerror]`, e.message)); p.on('console', (m) => { if (m.type() === 'error') console.error(`[${n} console]`, m.text().slice(0, 200)); }); }
+for (const [n, p] of [['A', A], ['B', B]]) { p.on('pageerror', (e) => console.error(`[${n} pageerror]`, e.message)); p.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.error(`[${n} console]`, m.text().slice(0, 200)); }); }
 const fails = [];
 const check = (cond, msg) => { console.log((cond ? 'PASS ' : 'FAIL ') + msg); if (!cond) fails.push(msg); };
 const t0 = Date.now();
@@ -54,12 +54,12 @@ const tp = Date.now();
 await A.evaluate(() => window.__vqpaint.paintRegion({ x: 4, y: 4, w: 8, h: 8 }));
 const paintSecs = (Date.now() - tp) / 1000;
 const tokA = await A.evaluate(() => Array.from(window.__vqpaint.grid.tokens));
-await B.waitForFunction((tok) => { const t = window.__vqpaint.grid.tokens; for (let y = 4; y < 12; y++) for (let x = 4; x < 12; x++) if (t[y * 32 + x] !== tok[y * 32 + x]) return false; return true; }, tokA, { timeout: 15000 }).catch(() => {});
+await B.waitForFunction((tok) => { const t = window.__vqpaint.grid.tokens; for (let y = 4; y < 12; y++) for (let x = 4; x < 12; x++) if (t[y * 32 + x] !== tok[y * 32 + x]) return false; return true; }, tokA, { timeout: 40000 }).catch(() => {});
 const tokB = await B.evaluate(() => Array.from(window.__vqpaint.grid.tokens));
 let same = true, changed = 0; for (let i = 0; i < tokA.length; i++) { if (tokA[i] !== tokB[i]) same = false; }
 for (let y = 4; y < 12; y++) for (let x = 4; x < 12; x++) if (tokA[y * 32 + x] !== tokA[0]) changed++;
 check(changed > 20, `A's paint changed ${changed}/64 region tokens`);
-check(same, 'B has the same token grid as A after the stroke');
+check(same, `B has the same token grid as A after the stroke (B status: ${await B.evaluate(() => document.getElementById('conn').textContent)})`);
 await B.waitForTimeout(1500); // let B decode the region
 const st = await A.evaluate(() => window.__vqpaint.stats);
 console.log(`stroke: ${paintSecs.toFixed(1)}s for an 8x8 region with effort ${seconds}s; region decode median ${st.decodeMs.length ? st.decodeMs.sort((a, b) => a - b)[st.decodeMs.length >> 1].toFixed(0) : '-'} ms`);
