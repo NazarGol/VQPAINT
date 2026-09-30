@@ -3,29 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>VQPAINT — paint together, in your browser</title>
+<title>VQPAINT</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="landing">
-  <h1>VQPAINT</h1>
-  <p class="muted">A shared canvas painted with VQGAN + CLIP. Every image is generated in your own browser (WebGPU), nothing runs on a server except a tiny room relay.</p>
-  <div id="gpu-notice" class="notice bad" hidden></div>
-  <div class="card">
-    <h3 style="margin-top:0">Create a room</h3>
-    <div class="row">
-      <input id="name" type="text" placeholder="Your name (optional)" style="max-width:220px">
-      <button id="create" class="primary">Create a room</button>
-    </div>
-  </div>
-  <div class="card">
-    <h3 style="margin-top:0">Join a room</h3>
-    <div class="row">
-      <input id="join-id" type="text" placeholder="Paste an invite link or a room id">
-      <button id="join">Join</button>
-    </div>
-  </div>
-  <p class="muted" style="font-size:13px">First visit downloads about 160 MB of models (kept in the browser cache). Works in Chrome, Edge and Safari 26+ on a laptop. <a href="https://github.com/NazarGol/VQPAINT/tree/web-spikes/web">Source</a></p>
+<div class="home">
+  <span class="pill title">VQPAINT</span>
+  <span class="quiet" style="text-align:center;max-width:320px">A group writes notes. Each note becomes a stroke of one shared painting, generated in your own browser.</span>
+  <div id="gpu-notice" class="pill" hidden style="max-width:320px;white-space:normal;text-align:center"></div>
+  <div class="row"><input id="name" type="text" placeholder="your name (optional)"></div>
+  <div class="row"><button id="create" class="pill active">create a room</button></div>
+  <div class="row"><input id="join-id" type="text" placeholder="paste an invite link or room id"><button id="join" class="pill">join</button></div>
+  <span class="quiet" style="text-align:center;max-width:320px">First visit downloads about 90 MB to watch and 200 MB to paint; kept in the browser cache. Chrome, Edge or Safari 26+. <a href="https://github.com/NazarGol/VQPAINT/tree/web-spikes/web">source</a></span>
 </div>
 <script type="module" src="landing.js"></script>
 </body>
