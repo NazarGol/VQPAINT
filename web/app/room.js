@@ -51,7 +51,7 @@ let pendingText = '', testSeconds = null;
 const stage = $('stage');
 const toast = mountToast(stage);
 const roombar = mountRoombar($('roombar'), { roomId, onInvite: invite });
-const menu = mountMenu($('menu-root'), { helpers: helpersOn, onUndo: undo, onExportPng: exportPng, onExportPdf: () => exportPdf(), onReplay: () => replay(), onExportVideo: () => exportVideo(), onHelpers: (v) => (helpersOn = v) });
+const menu = mountMenu($('menu-root'), { helpers: helpersOn, onUndo: undo, onExportPng: () => exportPng(), onExportPdf: () => exportPdf(), onReplay: () => replay(), onExportVideo: () => exportVideo(), onHelpers: (v) => (helpersOn = v) });
 const tools = mountTools($('tools'), { tool, onChange: (t) => { tool = t; if (t === 'cursor') notes.cancel(); pendingShape = null; updateScene(); } });
 const loading = mountLoading($('loading'));
 const notes = mountNotes(stage, {
@@ -68,6 +68,7 @@ const view = mountCanvas(stage, {
   onViewChange: () => { notes.reposition((n) => (n.note ? view.anchorFor(n.note.crop || n.note._mask) : pendingShape ? view.anchorFor(pendingShape.mask) : null)); scheduleVisibleLayers(); },
 });
 view.canvas.id = 'canvas';
+window.__vqpaintView = view;
 document.addEventListener('pointerdown', (e) => { if (!e.target.closest('.note') && !e.target.closest('.ui') && !e.target.closest('.menu')) { if (tool === 'cursor' || !e.target.closest('canvas')) notes.close(); } });
 const setStatus = (s, ms) => toast.status(s, ms);
 const peerName = (id) => (id === room?.id ? myName : peers.get(id)?.name || 'someone');
@@ -190,15 +191,11 @@ async function invite() {
 }
 
 // ---------- export / replay (lib/export.js is loaded on demand) ----------
-async function exportPng() {
-  setStatus('rendering…');
-  const m = await import('../lib/export.js');
-  await m.exportPng({ strokes, layers, grid, filename: `vqpaint-${roomId}.png`, blank: cssBg() });
-  setStatus('exported PNG');
-}
-async function exportPdf() { setStatus('building the PDF…', 0); const m = await import('../lib/export.js'); await m.exportPdf({ strokes, layers, grid, decoder, filename: `vqpaint-${roomId}.pdf`, blank: cssBg(), room: roomId }); setStatus('exported PDF'); }
-async function replay() { const m = await import('../lib/export.js'); await m.replay({ strokes, layers, grid, view, stage, blank: cssBg() }); }
-async function exportVideo() { setStatus('recording the replay…', 0); const m = await import('../lib/export.js'); await m.exportVideo({ strokes, layers, grid, filename: `vqpaint-${roomId}-replay`, blank: cssBg() }); setStatus('exported replay video'); }
+const guard = (label, fn) => async () => { try { await fn(); } catch (e) { console.error(e); setStatus(label + ' failed: ' + e.message, 6000); } };
+const exportPng = guard('export PNG', async () => { setStatus('rendering…', 0); const m = await import('../lib/export.js'); await m.exportPng({ strokes, layers, grid, filename: `vqpaint-${roomId}.png`, blank: cssBg() }); setStatus('exported PNG'); });
+const exportPdf = guard('export PDF', async () => { setStatus('building the PDF…', 0); const m = await import('../lib/export.js'); await m.exportPdf({ strokes, layers, grid, decoder, filename: `vqpaint-${roomId}.pdf`, blank: cssBg(), room: roomId }); setStatus('exported PDF'); });
+const replay = guard('replay', async () => { notes.close(); const m = await import('../lib/export.js'); await m.replay({ strokes, layers, grid, view, stage, blank: cssBg() }); });
+const exportVideo = guard('export video', async () => { setStatus('recording the replay…', 0); const m = await import('../lib/export.js'); await m.exportVideo({ strokes, layers, grid, filename: `vqpaint-${roomId}-replay`, blank: cssBg() }); setStatus('exported replay video'); });
 const cssBg = () => getComputedStyle(document.documentElement).getPropertyValue('--color-bg').trim();
 
 // ---------- helpers (optional) ----------

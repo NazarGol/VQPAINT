@@ -34,6 +34,17 @@ from PIL import Image  # noqa: E402
 import taming_patch  # noqa: E402
 from prompts import get_prompts  # noqa: E402
 
+# MPS shim: adaptive_avg_pool2d with non-divisible sizes is not implemented on Apple GPUs; use a bilinear resize there.
+import torch as _torch, torch.nn.functional as _F
+_orig_aap = _F.adaptive_avg_pool2d
+def _aap_mps_safe(x, output_size):
+    if x.device.type == "mps":
+        os_ = (output_size, output_size) if isinstance(output_size, int) else tuple(output_size)
+        if x.shape[-2] % os_[0] or x.shape[-1] % os_[1]:
+            return _F.interpolate(x, size=os_, mode="bilinear", align_corners=False)
+    return _orig_aap(x, output_size)
+_F.adaptive_avg_pool2d = _aap_mps_safe
+
 MISSING = np.uint16(65535)
 
 

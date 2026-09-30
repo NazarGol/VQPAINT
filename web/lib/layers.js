@@ -14,25 +14,27 @@ export function decodeTokens(b64) {
   const u = new Uint16Array(b.buffer); return Int32Array.from(u);
 }
 
-/** Feathered polygon alpha for a crop: canvas of crop.w*F x crop.h*F, white inside the path, blurred `feather` px. */
+/** Feathered polygon alpha for a crop: white inside the lasso, fading to 0 over `feather` px outside it.
+ *  No canvas filters (WebKit lacks them): the fade is a stack of outline strokes of decreasing width. */
 export function polygonAlpha(crop, path, feather = 6) {
   const W = crop.w * F, H = crop.h * F;
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   const g = c.getContext('2d');
-  g.filter = `blur(${feather}px)`;
-  g.fillStyle = '#fff'; g.beginPath();
+  g.fillStyle = '#fff'; g.strokeStyle = '#fff'; g.lineJoin = 'round'; g.lineCap = 'round';
+  g.beginPath();
   g.moveTo((path[0][0] - crop.x) * F, (path[0][1] - crop.y) * F);
   for (const [x, y] of path) g.lineTo((x - crop.x) * F, (y - crop.y) * F);
-  g.closePath(); g.fill();
-  // the blur shrinks the shape a little: paint the unblurred shape again at 60% so the interior stays solid
-  g.filter = 'none'; g.globalAlpha = 0.6; g.fill(); g.globalAlpha = 1;
+  g.closePath();
+  g.globalAlpha = 1 / feather;
+  for (let k = feather; k >= 1; k--) { g.lineWidth = 2 * k; g.stroke(); }   // distance d outside gets alpha (feather-d+1)/feather
+  g.globalAlpha = 1; g.fill();
   return g.getImageData(0, 0, W, H);   // use the red channel as alpha
 }
 /** Cell-mask alpha for legacy notes without a path (hard token edges, softened 2 px). */
 export function maskAlpha(crop, mask, feather = 2) {
   const W = crop.w * F, H = crop.h * F;
   const c = document.createElement('canvas'); c.width = W; c.height = H;
-  const g = c.getContext('2d'); g.filter = `blur(${feather}px)`; g.fillStyle = '#fff';
+  const g = c.getContext('2d'); g.fillStyle = '#fff'; void feather;
   for (let y = 0; y < mask.h; y++) for (let x = 0; x < mask.w; x++) if (mask.cells[y * mask.w + x]) g.fillRect((mask.x + x - crop.x) * F, (mask.y + y - crop.y) * F, F, F);
   return g.getImageData(0, 0, W, H);
 }

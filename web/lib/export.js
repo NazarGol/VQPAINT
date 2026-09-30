@@ -87,7 +87,7 @@ export async function exportPdf({ strokes, layers, grid, decoder, filename = 'vq
   doc.text(`vqpaint${room ? ' · ' + room : ''} · ${items.length} note${items.length === 1 ? '' : 's'}`, M, M);
   const big = paintCanvas(items, rect, Math.min(F, 2048 / Math.max(rect.w, rect.h)), blank);
   { const bx = M, by = M + 6, bw = PW - 2 * M, bh = PH - M - by, k = Math.min(bw / big.width, bh / big.height), w = big.width * k, h = big.height * k;
-    addImage(big, bx + (bw - w) / 2, by, w, h); }
+    addImage(big, bx + (bw - w) / 2, by + (bh - h) / 2, w, h); }
   // notes: image at the left, meta + wrapped text at the right; entries flow down the page and continue on new pages
   const lineH = 4.6, metaH = 5.5, gap = 8, imgMax = 48;   // mm
   let y = M; newPage();
