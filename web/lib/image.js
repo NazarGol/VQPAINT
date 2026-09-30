@@ -54,3 +54,16 @@ export function chwToDataURL(data, w, h) {
   blitCHW(c.getContext('2d'), data, w, h);
   return c.toDataURL('image/png');
 }
+
+/** Blend a CHW image onto the canvas at (dx, dy) with a per-pixel alpha map (Float32Array w*h). */
+export function blendCHW(ctx, data, w, h, dx, dy, alpha) {
+  const old = ctx.getImageData(dx, dy, w, h), plane = w * h;
+  for (let i = 0; i < plane; i++) {
+    const a = alpha[i]; if (a <= 0) continue;
+    const o = i * 4;
+    old.data[o] = old.data[o] * (1 - a) + data[i] * 255 * a;
+    old.data[o + 1] = old.data[o + 1] * (1 - a) + data[plane + i] * 255 * a;
+    old.data[o + 2] = old.data[o + 2] * (1 - a) + data[2 * plane + i] * 255 * a;
+  }
+  ctx.putImageData(old, dx, dy);
+}

@@ -1,11 +1,13 @@
 import { CONFIG } from './config.js';
 import { loadOrt, fetchCached, fetchJsonCached, webgpuInfo } from '../lib/models.js';
-import { Decoder, F, clampRegion, expandRegion, readRegion, writeRegion } from '../lib/decoder.js';
+import { Decoder, F, expandRegion, readRegion, writeRegion } from '../lib/decoder.js';
 import { Clip } from '../lib/clip.js';
 import { Palette } from '../lib/palette.js';
-import { Painter } from '../lib/search.js';
 import { Bank } from '../lib/bank.js';
-import { blitCHW, cropCHW } from '../lib/image.js';
+import { Painter } from '../lib/search.js';
+import { blitCHW, blendCHW } from '../lib/image.js';
+import { noisyMask, maskFromCells, maskCells, alphaMap, maskToString } from '../lib/mask.js';
+import { embedLongText } from '../lib/text.js';
 import { connectRoom } from '../lib/room.js';
 
 const $ = (id) => document.getElementById(id);
@@ -25,13 +27,14 @@ localStorage.setItem('vqpaint.color', myColor);
 const grid = { w: CONFIG.gridW, h: CONFIG.gridH, tokens: new Int32Array(CONFIG.gridW * CONFIG.gridH) };
 let ready = false, room = null, decoder = null, clip = null, palette = null, bank = null, painter = null, blankToken = 0;
 let brushSize = CONFIG.brushSizes[1], effort = 'normal';
-let painting = null; // {abort, region}
+let painting = null; // {abort, mask}
 const undoStack = [];
-const peers = new Map(); // id -> {name, color, x, y, t}
+const strokes = [];       // {id, text, author, color, time, mask}
+const peers = new Map();  // id -> {name, color, x, y, t}
 const canvas = $('canvas'), ctx = canvas.getContext('2d');
 const overlay = $('overlay'), octx = overlay.getContext('2d');
 canvas.width = overlay.width = grid.w * F; canvas.height = overlay.height = grid.h * F;
-const stats = { strokes: 0, strokeSeconds: [], decodeMs: [] };
+const stats = { strokes: 0, strokeSeconds: [] };
 
 function fitCanvas() {
   const st = $('stage').getBoundingClientRect();
@@ -40,7 +43,6 @@ function fitCanvas() {
 }
 window.addEventListener('resize', fitCanvas); fitCanvas();
 
-// segmented controls
 function seg(el, items, value, onChange) {
   el.innerHTML = '';
   for (const [k, label] of items) {
@@ -53,26 +55,20 @@ seg($('brush'), CONFIG.brushSizes.map((s) => [s, `${s}×${s}`]), brushSize, (v) 
 seg($('effort'), Object.entries(CONFIG.efforts).map(([k, s]) => [k, `${k} ${s}s`]), effort, (v) => (effort = v));
 
 // ---------- rendering ----------
-const decodeQueue = new Set(); let decodeScheduled = false;
-/** Decode changed cells (with margin) and blit only their pixels. Coalesces bursts. */
-function scheduleRedraw(cells) {
-  for (const c of cells) decodeQueue.add(c);
-  if (decodeScheduled) return;
-  decodeScheduled = true;
-  setTimeout(async () => {
-    decodeScheduled = false;
-    if (!decoder || !decodeQueue.size) return;
-    let x0 = grid.w, y0 = grid.h, x1 = 0, y1 = 0;
-    for (const c of decodeQueue) { const x = c % grid.w, y = (c - x) / grid.w; x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + 1); y1 = Math.max(y1, y + 1); }
-    decodeQueue.clear();
-    await redrawRegion({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
-  }, 120);
+const MARGIN = 2, FEATHER = 20;
+/** Decode mask bbox + margin and crossfade it onto the canvas (alpha 1 on masked cells, fading over FEATHER px). */
+async function renderMask(mask, decoded = null) {
+  if (!decoder || !mask.count) return;
+  const crop = expandRegion(grid, mask, MARGIN);
+  const img = decoded || await decoder.decode(readRegion(grid, crop), crop.h, crop.w);
+  blendCHW(ctx, img.data, img.w, img.h, crop.x * F, crop.y * F, alphaMap(crop, mask, F, FEATHER));
 }
-async function redrawRegion(region, margin = 2) {
-  const crop = expandRegion(grid, region, margin);
-  const img = await decoder.decode(readRegion(grid, crop), crop.h, crop.w);
-  const sub = cropCHW(img.data, img.w, img.h, (region.x - crop.x) * F, (region.y - crop.y) * F, region.w * F, region.h * F);
-  blitCHW(ctx, sub, region.w * F, region.h * F, region.x * F, region.y * F);
+const pendingCells = []; let redrawScheduled = false;
+function scheduleRedraw(cells) {
+  pendingCells.push(...cells);
+  if (redrawScheduled) return;
+  redrawScheduled = true;
+  setTimeout(async () => { redrawScheduled = false; const list = pendingCells.splice(0); if (list.length) await renderMask(maskFromCells(list, grid.w)); }, 120);
 }
 async function redrawAll() {
   const img = await decoder.decode(grid.tokens, grid.h, grid.w);
@@ -82,17 +78,15 @@ async function redrawAll() {
 function drawOverlay() {
   octx.clearRect(0, 0, overlay.width, overlay.height);
   const now = Date.now();
-  for (const [id, p] of peers) {
+  for (const [, p] of peers) {
     if (p.x == null || now - p.t > 15000) continue;
     octx.fillStyle = p.color; octx.beginPath(); octx.arc(p.x * F, p.y * F, 6, 0, Math.PI * 2); octx.fill();
     octx.font = '12px system-ui'; octx.fillStyle = '#fff'; octx.fillText(p.name, p.x * F + 9, p.y * F + 4);
     octx.fillStyle = p.color; octx.fillText(p.name, p.x * F + 8, p.y * F + 3);
   }
-  if (brushPos) {
-    const r = brushRegion(brushPos);
-    octx.strokeStyle = myColor; octx.lineWidth = 3; octx.strokeRect(r.x * F + 1.5, r.y * F + 1.5, r.w * F - 3, r.h * F - 3);
-  }
-  if (painting) { octx.strokeStyle = '#fff'; octx.setLineDash([6, 6]); octx.lineWidth = 2; const r = painting.region; octx.strokeRect(r.x * F + 1, r.y * F + 1, r.w * F - 2, r.h * F - 2); octx.setLineDash([]); }
+  const fillMask = (m, color, alpha) => { octx.globalAlpha = alpha; octx.fillStyle = color; for (const [x, y] of maskCells(m)) octx.fillRect(x * F, y * F, F, F); octx.globalAlpha = 1; };
+  if (brushMask) fillMask(brushMask, myColor, 0.35);
+  if (painting) fillMask(painting.mask, '#ffffff', 0.15);
 }
 function renderPeers() {
   const el = $('peers'); el.innerHTML = '';
@@ -101,80 +95,62 @@ function renderPeers() {
 }
 
 // ---------- brush / pointer ----------
-let brushPos = null;
-function toGrid(ev) {
-  const r = canvas.getBoundingClientRect();
-  return { x: (ev.clientX - r.left) / r.width * grid.w, y: (ev.clientY - r.top) / r.height * grid.h };
-}
-function brushRegion(p) { return clampRegion(grid, { x: Math.round(p.x - brushSize / 2), y: Math.round(p.y - brushSize / 2), w: brushSize, h: brushSize }); }
-let down = false;
-canvas.addEventListener('pointerdown', (ev) => { if (!ready || painting) return; down = true; brushPos = toGrid(ev); canvas.setPointerCapture(ev.pointerId); drawOverlay(); });
-canvas.addEventListener('pointermove', (ev) => {
-  const p = toGrid(ev);
-  room?.sendCursor(p.x, p.y);
-  if (down) { brushPos = p; drawOverlay(); }
-});
-canvas.addEventListener('pointerup', (ev) => {
-  if (!down) return; down = false;
-  const region = brushRegion(toGrid(ev)); brushPos = null; drawOverlay();
-  paintRegion(region);
-});
-canvas.addEventListener('pointercancel', () => { down = false; brushPos = null; drawOverlay(); });
+let brushMask = null, brushSeed = 0, down = false;
+function toGrid(ev) { const r = canvas.getBoundingClientRect(); return { x: (ev.clientX - r.left) / r.width * grid.w, y: (ev.clientY - r.top) / r.height * grid.h }; }
+function makeBrush(p) { return noisyMask({ cx: p.x, cy: p.y, radius: brushSize / 2, gridW: grid.w, gridH: grid.h, seed: brushSeed }); }
+canvas.addEventListener('pointerdown', (ev) => { if (!ready || painting) return; down = true; brushSeed = (Math.random() * 1e9) | 0; brushMask = makeBrush(toGrid(ev)); canvas.setPointerCapture(ev.pointerId); drawOverlay(); });
+canvas.addEventListener('pointermove', (ev) => { const p = toGrid(ev); room?.sendCursor(p.x, p.y); if (down) { brushMask = makeBrush(p); drawOverlay(); } });
+canvas.addEventListener('pointerup', (ev) => { if (!down) return; down = false; const m = makeBrush(toGrid(ev)); brushMask = null; drawOverlay(); paintMask(m); });
+canvas.addEventListener('pointercancel', () => { down = false; brushMask = null; drawOverlay(); });
 
 // ---------- painting ----------
-async function paintRegion(region) {
-  const prompt = $('prompt').value.trim();
-  if (!prompt) { setStatus('Type a prompt first.'); return; }
-  const before = readRegion(grid, region);
+async function paintMask(mask, text = $('prompt').value.trim()) {
+  if (!text) { setStatus('Type a prompt first.'); return; }
+  if (!mask.count) return;
+  const cells = maskCells(mask);
+  const before = cells.map(([x, y]) => grid.tokens[y * grid.w + x]);
   const seconds = CONFIG.efforts[effort];
   const abort = new AbortController();
-  painting = { abort, region };
+  painting = { abort, mask }; drawOverlay();
   $('cancel').disabled = false; $('undo').disabled = true;
   const t0 = performance.now();
-  let lastSend = 0;
-  const cellsOf = (crop) => { const out = []; for (let y = 0; y < crop.h; y++) for (let x = 0; x < crop.w; x++) out.push([crop.x + x, crop.y + y]); return out; };
+  let lastSend = 0, alpha = null;
   try {
+    const { target, chunks, hardSplits } = await embedLongText(clip, text);
+    if (chunks.length > 1) setStatus(`${chunks.length} text chunks blended${hardSplits ? ` (${hardSplits} split mid-sentence)` : ''}`);
     const res = await painter.paint({
-      grid, region, prompt, seconds, margin: 2, keep: 0, seeds: 6, signal: abort.signal, progressEvery: 400,
+      grid, mask, target, seconds, margin: MARGIN, blankToken, signal: abort.signal, progressEvery: 400,
       onProgress: (p) => {
-        // show the best-so-far in place (crop = region + margin, we blit only the region's pixels)
-        const img = p.image, rx = (region.x - p.crop.x) * F, ry = (region.y - p.crop.y) * F;
-        blitCHW(ctx, cropCHW(img.data, img.w, img.h, rx, ry, region.w * F, region.h * F), region.w * F, region.h * F, region.x * F, region.y * F);
+        alpha ||= alphaMap(p.crop, mask, F, FEATHER);
+        blendCHW(ctx, p.image.data, p.image.w, p.image.h, p.crop.x * F, p.crop.y * F, alpha);
         $('paint-bar').style.width = Math.min(100, (p.elapsed / seconds) * 100) + '%';
-        setStatus(`painting "${prompt}" — step ${p.step}, score ${p.score.toFixed(3)}, ${p.elapsed.toFixed(0)}/${seconds}s`);
-        if (room && performance.now() - lastSend > 2000 && !p.final) { lastSend = performance.now(); sendRegion(region, p.tokens, p.crop); }
+        setStatus(`painting — try ${p.step}, score ${p.score.toFixed(3)}, ${p.elapsed.toFixed(0)}/${seconds}s${chunks.length > 1 ? ` · ${chunks.length} chunks` : ''}`);
+        if (room && performance.now() - lastSend > 2000 && !p.final) { lastSend = performance.now(); sendCells(cells); }
       },
     });
     const secs = (performance.now() - t0) / 1000;
     stats.strokes++; stats.strokeSeconds.push(secs);
-    undoStack.push({ region, before }); $('undo').disabled = false;
-    sendRegion(region, res.tokens, res.crop);
+    const stroke = { id: Math.random().toString(36).slice(2, 10), text, author: myName, color: myColor, time: Date.now(), mask: maskToString(mask) };
+    strokes.push(stroke);
+    undoStack.push({ cells, before, stroke }); $('undo').disabled = false;
+    sendCells(cells);
     setStatus(`done: ${res.steps} tries in ${secs.toFixed(1)}s (${(res.steps / secs).toFixed(1)}/s), score ${res.score.toFixed(3)}`);
   } catch (e) {
     console.error(e); setStatus('paint failed: ' + e.message);
-    writeRegion(grid, region, before); redrawRegion(region);
+    cells.forEach(([x, y], i) => (grid.tokens[y * grid.w + x] = before[i])); renderMask(mask);
   } finally {
     painting = null; $('cancel').disabled = true; $('paint-bar').style.width = '0%'; drawOverlay(); showStats();
   }
 }
-/** Send the region's cells (taken from the working crop tokens) to the room. */
-function sendRegion(region, cropTokens, crop) {
-  if (!room) return;
-  const cells = [];
-  for (let y = 0; y < region.h; y++) for (let x = 0; x < region.w; x++) {
-    const gx = region.x + x, gy = region.y + y;
-    cells.push([gx, gy, cropTokens[(gy - crop.y) * crop.w + (gx - crop.x)]]);
-  }
-  room.setCells(cells);
-}
+function sendCells(cells) { room?.setCells(cells.map(([x, y]) => [x, y, grid.tokens[y * grid.w + x]])); }
 $('cancel').onclick = () => painting?.abort.abort();
 $('undo').onclick = () => {
   const u = undoStack.pop(); if (!u) return;
   $('undo').disabled = !undoStack.length;
-  writeRegion(grid, u.region, u.before);
-  const cells = []; for (let y = 0; y < u.region.h; y++) for (let x = 0; x < u.region.w; x++) cells.push([u.region.x + x, u.region.y + y, u.before[y * u.region.w + x]]);
-  room?.setCells(cells);
-  redrawRegion(u.region);
+  u.cells.forEach(([x, y], i) => (grid.tokens[y * grid.w + x] = u.before[i]));
+  const i = strokes.indexOf(u.stroke); if (i >= 0) strokes.splice(i, 1);
+  sendCells(u.cells);
+  renderMask(maskFromCells(u.cells, grid.w));
 };
 $('clear').onclick = () => {
   if (!confirm('Clear the whole canvas for everyone?')) return;
@@ -189,12 +165,12 @@ $('export').onclick = async () => {
   setStatus('exported.');
 };
 $('invite').onclick = async () => {
-  const link = location.href;
+  const link = location.href.split('&')[0];
   try { await navigator.clipboard.writeText(link); setStatus('Invite link copied: ' + link); } catch { prompt('Copy this link', link); }
 };
 function setStatus(s) { $('status').textContent = s; }
 function showStats() {
-  const med = (a) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
+  const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
   const dec = decoder && decoder.times ? decoder.times : [];
   $('stats').textContent = `strokes ${stats.strokes} · median stroke ${stats.strokeSeconds.length ? med(stats.strokeSeconds).toFixed(1) + 's' : '–'} · decode (last ${dec.length}) ${dec.length ? med(dec).toFixed(0) + 'ms' : '–'} · full decode ${stats.fullDecodeMs ? stats.fullDecodeMs + 'ms' : '–'}`;
 }
@@ -211,8 +187,8 @@ async function boot() {
     $('loading-sub').textContent = 'Painting needs WebGPU to run the model on your GPU. Use Chrome or Edge 113+, or Safari 26+. Falling back to CPU decoding, which is very slow (about 10 s per region).';
   }
   const ep = gpu ? 'webgpu' : 'wasm';
-  const ort = await loadOrt(params.get('ort') || CONFIG.ortBase);
-  beacon('ort-loaded');   // ?ort=/node_modules/onnxruntime-web/dist/ for local dev
+  const ort = await loadOrt(params.get('ort') || CONFIG.ortBase);   // ?ort=/node_modules/onnxruntime-web/dist/ for local dev
+  beacon('ort-loaded');
   const prog = {};
   const onProgress = (p) => {
     prog[p.url] = p;
@@ -244,15 +220,25 @@ async function boot() {
   // blank token = tile closest to a light neutral grey
   let best = Infinity;
   for (let i = 0; i < palette.n; i++) { const r = palette.rgb[i * 3], g = palette.rgb[i * 3 + 1], b = palette.rgb[i * 3 + 2]; const d = (r - 225) ** 2 + (g - 225) ** 2 + (b - 225) ** 2 + 4 * ((Math.max(r, g, b) - Math.min(r, g, b)) ** 2); if (d < best) { best = d; blankToken = i; } }
-  grid.tokens.fill(blankToken);
+  if (!roomStateApplied || roomFresh) grid.tokens.fill(blankToken);
   await redrawAll();
   beacon('first-decode-done', { ms: stats.fullDecodeMs });
   $('loading').hidden = true;
   ready = true;
+  fillIfFresh();
   showStats();
   setStatus(`ready in ${(stats.loadMs / 1000).toFixed(1)}s. Press and drag on the canvas, release to paint.`);
 }
 
+let roomStateApplied = false, roomFresh = false;
+/** A brand-new room starts as all zeros: fill it with the blank token and tell the room. */
+function fillIfFresh() {
+  if (!roomFresh || !ready) return;
+  roomFresh = false;
+  grid.tokens.fill(blankToken);
+  const cells = []; for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) cells.push([x, y, blankToken]);
+  room?.setCells(cells);
+}
 function connect() {
   room = connectRoom({
     url: CONFIG.roomsUrl, roomId, name: myName, color: myColor, w: grid.w, h: grid.h,
@@ -260,22 +246,15 @@ function connect() {
     onState: (st) => {
       peers.clear(); for (const p of (st.peers instanceof Map ? st.peers.values() : st.peers || [])) if (p && p.id !== st.id) peers.set(p.id, { ...p, t: 0 });
       renderPeers();
-      if (st.w !== grid.w || st.h !== grid.h) { setStatus(`room grid is ${st.w}×${st.h}, expected ${grid.w}×${grid.h}`); }
-      const fresh = st.tokens.every((t) => t === 0);
-      if (fresh) {
-        // brand-new room: fill with the blank token so everyone starts from the same canvas
-        const cells = []; for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) cells.push([x, y, blankToken]);
-        if (ready) room.setCells(cells); else pendingFill = cells;
-        grid.tokens.fill(blankToken);
-      } else {
-        grid.tokens.set(Int32Array.from(st.tokens.slice(0, grid.w * grid.h)));
-      }
-      if (ready) redrawAll();
+      roomFresh = st.tokens.every((t) => t === 0);
+      if (!roomFresh) grid.tokens.set(Int32Array.from(st.tokens.slice(0, grid.w * grid.h)));
+      roomStateApplied = true;
+      if (ready) { fillIfFresh(); redrawAll(); }
     },
     onSet: (m) => {
-      if (m.from === room.id) return; // our own echo; already applied
+      if (m.from === room.id) return;
       const changed = [];
-      for (const [x, y, tok] of m.cells) { grid.tokens[y * grid.w + x] = tok; changed.push(y * grid.w + x); }
+      for (const [x, y, tok] of m.cells) { grid.tokens[y * grid.w + x] = tok; changed.push([x, y]); }
       if (ready) scheduleRedraw(changed);
     },
     onCursor: (m) => { const p = peers.get(m.id); if (p) { p.x = m.x; p.y = m.y; p.t = Date.now(); requestAnimationFrame(drawOverlay); } },
@@ -283,14 +262,14 @@ function connect() {
     onLeave: (p) => { peers.delete(p && p.id); renderPeers(); drawOverlay(); },
   });
 }
-let pendingFill = null;
 connect();
-boot().then(() => { if (pendingFill) { room?.setCells(pendingFill); pendingFill = null; } }).catch((e) => {
+boot().catch((e) => {
   console.error(e);
   $('loading-text').innerHTML = '<b>Could not load the models.</b>';
   $('loading-sub').textContent = String(e.message || e);
 });
-// dev/test: ?auto=<prompt>&effort=<seconds> paints one 8x8 stroke after loading and POSTs stats to /__results
+
+// dev/test: ?auto=<prompt>&effort=<seconds> paints one stroke after loading and POSTs stats to /__results
 (async () => {
   if (!params.get('auto')) return;
   while (!ready) await new Promise((r) => setTimeout(r, 200));
@@ -299,11 +278,17 @@ boot().then(() => { if (pendingFill) { room?.setCells(pendingFill); pendingFill 
   $('prompt').value = params.get('auto');
   beacon('painting');
   const t = performance.now();
-  await paintRegion({ x: 12, y: 12, w: 8, h: 8 });
+  await paintAt({ cx: 16, cy: 16, radius: 4 });
   beacon('painted');
   stats.autoStrokeMs = Math.round(performance.now() - t);
   stats.ua = navigator.userAgent; stats.lastStatus = $('status').textContent;
   try { await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(stats) }); } catch (_) {}
 })();
-window.__vqpaint = { grid, stats, get ready() { return ready; }, redrawAll, paintRegion, peers, get room() { return room; },
+/** Paint a blob at (cx, cy) tokens with `radius`; used by tests. */
+function paintAt({ cx, cy, radius = brushSize / 2, prompt = null, seed = (Math.random() * 1e9) | 0 }) {
+  if (prompt != null) $('prompt').value = prompt;
+  return paintMask(noisyMask({ cx, cy, radius, gridW: grid.w, gridH: grid.h, seed }));
+}
+function paintRegion(r) { const cells = new Uint8Array(r.w * r.h).fill(1); return paintMask({ x: r.x, y: r.y, w: r.w, h: r.h, cells, count: r.w * r.h }); }
+window.__vqpaint = { grid, stats, strokes, get ready() { return ready; }, redrawAll, paintRegion, paintAt, peers, get room() { return room; },
   setEffortSeconds(s) { CONFIG.efforts[effort] = s; }, setPrompt(p) { $('prompt').value = p; } };

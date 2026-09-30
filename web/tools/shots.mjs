@@ -11,10 +11,10 @@ const root = path.resolve(here, '..');
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, s, i, arr) => { if (s.startsWith('--')) a.push([s.slice(2), arr[i + 1] && !arr[i + 1].startsWith('--') ? arr[i + 1] : 'true']); return a; }, []));
 const tag = args.tag || 'shot', effort = +(args.effort || 8), browserName = args.browser || 'chromium';
 const strokes = [
-  { prompt: 'the sea at night', region: { x: 2, y: 4, w: 10, h: 10 } },
-  { prompt: 'a red forest in autumn', region: { x: 10, y: 8, w: 10, h: 10 } },
-  { prompt: 'a face', region: { x: 18, y: 14, w: 8, h: 8 } },
-  { prompt: 'golden wheat field', region: { x: 6, y: 20, w: 12, h: 8 } },
+  { prompt: 'the sea at night', cx: 7, cy: 9, radius: 5, region: { x: 2, y: 4, w: 10, h: 10 } },
+  { prompt: 'a red forest in autumn', cx: 15, cy: 13, radius: 5, region: { x: 10, y: 8, w: 10, h: 10 } },
+  { prompt: 'a face', cx: 22, cy: 18, radius: 4, region: { x: 18, y: 14, w: 8, h: 8 } },
+  { prompt: 'golden wheat field', cx: 12, cy: 24, radius: 5, region: { x: 6, y: 20, w: 12, h: 8 } },
 ];
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json', '.wasm': 'application/wasm', '.css': 'text/css' };
 const server = http.createServer((req, res) => {
@@ -35,7 +35,7 @@ await page.evaluate((s) => window.__vqpaint.setEffortSeconds(s), effort);
 const out = path.join(root, 'app', 'shots'); fs.mkdirSync(out, { recursive: true });
 const t0 = Date.now();
 for (const s of strokes) {
-  await page.evaluate((s) => { window.__vqpaint.setPrompt(s.prompt); return window.__vqpaint.paintRegion(s.region); }, s);
+  await page.evaluate((s) => { window.__vqpaint.setPrompt(s.prompt); return window.__vqpaint.paintAt ? window.__vqpaint.paintAt({ cx: s.cx, cy: s.cy, radius: s.radius, seed: 42 }) : window.__vqpaint.paintRegion(s.region); }, s);
   console.log(`painted "${s.prompt}" (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
 }
 await page.waitForTimeout(800);
