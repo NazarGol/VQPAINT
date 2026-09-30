@@ -6,7 +6,7 @@ import { View, attachGestures } from '../../lib/view.js';
 import { intersects } from '../../lib/layers.js';
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-export function mountCanvas(stageEl, { getTool, onLasso, onTap, onCursor, onViewChange }) {
+export function mountCanvas(stageEl, { getTool, onLasso, onTap, onCursor, onViewChange, onResize, onUserMove }) {
   const canvas = document.createElement('canvas'); canvas.className = 'world';
   stageEl.prepend(canvas);
   const ctx = canvas.getContext('2d');
@@ -16,8 +16,11 @@ export function mountCanvas(stageEl, { getTool, onLasso, onTap, onCursor, onView
     dpr = Math.min(2, devicePixelRatio || 1); W = stageEl.clientWidth; H = stageEl.clientHeight;
     canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr); canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
     view.resize(W, H);
+    onResize?.(W, H);
   }
   window.addEventListener('resize', resize); resize();
+  canvas.addEventListener('wheel', () => onUserMove?.(), { passive: true });
+  canvas.addEventListener('pointerdown', () => { if (getTool() !== 'brush') onUserMove?.(); });
   const toWorld = (ev) => { const r = canvas.getBoundingClientRect(); return view.toWorld(ev.clientX - r.left, ev.clientY - r.top); };
   const toStage = (ev) => { const r = stageEl.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
   let drawing = null;
