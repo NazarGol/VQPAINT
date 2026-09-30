@@ -19,7 +19,7 @@ const MAX_TOKEN = 16384;        // tokens are 0..16383
 const MIN_DIM = 8, MAX_DIM = 512, DEFAULT_DIM = 256;   // 256 tokens = 4096 px: the canvas is very large, blank everywhere else
 const MAX_NOTES = 5000;         // notes kept per room (oldest dropped)
 const MAX_NOTE_TEXT = 4000;     // chars
-const MAX_NOTE_EXTRA = 24000;   // chars of tokens (base64) + path (json) per note
+const MAX_NOTE_EXTRA = 60000;   // chars of tokens (base64) + path (json) + photo thumbnail per note
 const MAX_MASK_STR = 4000;      // chars of the mask string
 const MAX_REQUESTS = 64;        // open helper requests per room
 const MAX_PREVIEW_BYTES = 200 * 1024; // stroke preview image (JPEG/WebP) stored per note, served to viewers without models
@@ -78,6 +78,10 @@ function cleanNote(n, att) {
   if (typeof n.tokens === 'string') { extra += n.tokens.length; out.tokens = n.tokens; }
   if (Array.isArray(n.path)) { const path = n.path.filter((p) => Array.isArray(p) && Number.isFinite(+p[0]) && Number.isFinite(+p[1])).slice(0, 400).map((p) => [Math.round(+p[0] * 100) / 100, Math.round(+p[1] * 100) / 100]); extra += JSON.stringify(path).length; out.path = path; }
   if (Number.isFinite(+n.realism)) out.realism = Math.max(0, Math.min(1, +n.realism));
+  if (typeof n.parent === 'string' && n.parent.length <= 16) out.parent = n.parent;
+  if (typeof n.photo === 'string' && n.photo.length <= 24000) { extra += n.photo.length; out.photo = n.photo; }
+  if (typeof n.text_en === 'string' && n.text_en.length <= MAX_NOTE_TEXT) out.text_en = n.text_en;
+  if (typeof n.lang === 'string' && n.lang.length <= 8) out.lang = n.lang;
   if (extra > MAX_NOTE_EXTRA) return null;
   return out;
 }
@@ -339,6 +343,11 @@ export class Room {
         if (!r || typeof r.id !== 'string' || r.id.length > 16 || typeof r.text !== 'string' || typeof r.mask !== 'string') return;
         if (r.text.length > MAX_NOTE_TEXT || r.mask.length > MAX_MASK_STR || this.requests.size >= MAX_REQUESTS) return;
         const req = { id: r.id, text: r.text, mask: r.mask, author: att.name, color: att.color, from: att.id, by: null, time: Date.now() };
+        if (Array.isArray(r.path)) req.path = r.path.filter((p) => Array.isArray(p) && Number.isFinite(+p[0]) && Number.isFinite(+p[1])).slice(0, 400).map((p) => [Math.round(+p[0] * 100) / 100, Math.round(+p[1] * 100) / 100]);
+        if (Number.isFinite(+r.realism)) req.realism = Math.max(0, Math.min(1, +r.realism));
+        if (typeof r.parent === 'string' && r.parent.length <= 16) req.parent = r.parent;
+        if (typeof r.photo === 'string' && r.photo.length <= 60000) req.photo = r.photo;       // small JPEG data URL, seeds the shape
+        if (typeof r.lang === 'string' && r.lang.length <= 8) req.lang = r.lang;
         this.requests.set(req.id, req); this.saveRequests();
         this.broadcast(JSON.stringify({ t: 'paint_request', req }), ws);
         return;

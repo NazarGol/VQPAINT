@@ -1,6 +1,6 @@
 // Room page orchestrator: models, room connection, shapes → notes → stroke layers, view, export hooks. UI lives in components/.
 import { CONFIG } from './config.js';
-import { loadOrt, fetchCached, fetchJsonCached, webgpuInfo } from '../lib/models.js';
+import { loadOrt, fetchCached, fetchJsonCached, webgpuInfo, setModelMirror } from '../lib/models.js';
 import { Decoder, F, expandRegion, readRegion } from '../lib/decoder.js';
 import { Clip } from '../lib/clip.js';
 import { Palette } from '../lib/palette.js';
@@ -256,7 +256,8 @@ function onPaintAssigned({ id, by, for: forId }) {
 function onPaintDone({ id, ok }) { openRequests.delete(id); const mine = myRequests.get(id); if (mine) { clearTimeout(mine.timer); myRequests.delete(id); if (!ok) setStatus('the helper could not paint it; try again.'); } setTimeout(claimNextRequest, 300); }
 
 // ---------- models ----------
-const M = CONFIG.modelBase, prog = {};
+const M = (params.get('models') === 'pages' || !CONFIG.modelFallback) ? (CONFIG.modelFallback || CONFIG.modelBase) : CONFIG.modelBase, prog = {};
+if (M === CONFIG.modelBase && CONFIG.modelFallback) setModelMirror(CONFIG.modelBase, CONFIG.modelFallback);   // Hugging Face first, GitHub Pages if it fails
 const onProgress = (p) => {
   prog[p.url] = p;
   const loaded = Object.values(prog).reduce((a, b) => a + b.loaded, 0), total = Object.values(prog).reduce((a, b) => a + (b.total || b.loaded), 0);
