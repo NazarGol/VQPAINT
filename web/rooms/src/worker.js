@@ -22,12 +22,14 @@ const MAX_NOTE_TEXT = 4000;     // chars
 const MAX_NOTE_EXTRA = 24000;   // chars of tokens (base64) + path (json) per note
 const MAX_MASK_STR = 4000;      // chars of the mask string
 const MAX_REQUESTS = 64;        // open helper requests per room
+const MAX_PREVIEW_BYTES = 200 * 1024; // stroke preview image (JPEG/WebP) stored per note, served to viewers without models
 const SAVE_DEBOUNCE_MS = 300;
 const PALETTE = ['#ff8800', '#00b3ff', '#7cff00', '#ff2d95', '#ffd400', '#9d5cff', '#00e5a0', '#ff4d4d'];
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
   'Access-Control-Allow-Headers': '*',
   'Access-Control-Max-Age': '86400',
 };
@@ -90,10 +92,10 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     const url = new URL(req.url);
     if (url.pathname === '/health') return json({ ok: true });
-    const m = url.pathname.match(/^\/room\/([^/]+)\/(ws|state)$/);
+    const m = url.pathname.match(/^\/room\/([^/]+)\/(ws|state|preview\/[a-z0-9]{4,16})$/);
     if (m) {
       if (!ROOM_ID_RE.test(m[1])) return json({ error: 'bad room id, expected [a-z0-9-]{4,32}' }, 400);
-      if (req.method !== 'GET') return json({ error: 'method not allowed' }, 405);
+      if (req.method !== 'GET' && !(req.method === 'POST' && m[2].startsWith('preview/'))) return json({ error: 'method not allowed' }, 405);
       const stub = env.ROOMS.get(env.ROOMS.idFromName(m[1]));
       return stub.fetch(req);
     }
@@ -167,6 +169,21 @@ export class Room {
     try { this.sql().exec('DELETE FROM notes WHERE id = ?', id); } catch (e) { console.error('note delete', e); }
     return this.notes.length !== before;
   }
+  /** Stroke previews: small JPEG/WebP per note, stored in SQLite, served with long caching. */
+  async preview(req, noteId) {
+    try { this.sql().exec('CREATE TABLE IF NOT EXISTS previews (id TEXT PRIMARY KEY, type TEXT, data BLOB)'); } catch (e) { return json({ error: 'no sql' }, 500); }
+    if (req.method === 'POST') {
+      const type = (req.headers.get('Content-Type') || '').split(';')[0];
+      if (!/^image\/(jpeg|webp|png)$/.test(type)) return json({ error: 'jpeg, webp or png only' }, 415);
+      const buf = await req.arrayBuffer();
+      if (buf.byteLength === 0 || buf.byteLength > MAX_PREVIEW_BYTES) return json({ error: 'preview too big' }, 413);
+      this.sql().exec('INSERT OR REPLACE INTO previews (id, type, data) VALUES (?, ?, ?)', noteId, type, buf);
+      return json({ ok: true, bytes: buf.byteLength });
+    }
+    const rows = this.sql().exec('SELECT type, data FROM previews WHERE id = ?', noteId).toArray();
+    if (!rows.length) return json({ error: 'no preview' }, 404);
+    return new Response(rows[0].data, { headers: { 'Content-Type': rows[0].type, 'Cache-Control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*' } });
+  }
   saveRequests() { this.ctx.storage.put('requests', [...this.requests.values()]).catch((e) => console.error('requests save', e)); }
 
   init(params) {
@@ -206,8 +223,9 @@ export class Room {
 
   async fetch(req) {
     const url = new URL(req.url);
-    const m = url.pathname.match(/^\/room\/([^/]+)\/(ws|state)$/);
+    const m = url.pathname.match(/^\/room\/([^/]+)\/(ws|state|preview\/[a-z0-9]{4,16})$/);
     const kind = m ? m[2] : null;
+    if (kind && kind.startsWith('preview/')) return this.preview(req, kind.slice(8));
 
     if (kind === 'state') {
       if (!this.tokens) return json({ error: 'room does not exist yet' }, 404);

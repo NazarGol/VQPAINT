@@ -46,17 +46,53 @@ export function composeLayer(img, alpha) {
 }
 
 /** Cache of rendered layers keyed by note id. render(note) decodes once and keeps an ImageBitmap. */
+/** JPEG preview of a decoded crop (CHW float), longest side <= maxPx. Uploaded by the painter so viewers need no model. */
+export async function makePreviewBlob(img, maxPx = 384, quality = 0.8) {
+  const s = Math.min(1, maxPx / Math.max(img.w, img.h)), w = Math.max(1, Math.round(img.w * s)), h = Math.max(1, Math.round(img.h * s));
+  const src = document.createElement('canvas'); src.width = img.w; src.height = img.h;
+  const plane = img.w * img.h, id = new ImageData(img.w, img.h);
+  for (let i = 0; i < plane; i++) { const o = i * 4; id.data[o] = img.data[i] * 255; id.data[o + 1] = img.data[plane + i] * 255; id.data[o + 2] = img.data[2 * plane + i] * 255; id.data[o + 3] = 255; }
+  src.getContext('2d').putImageData(id, 0, 0);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(src, 0, 0, w, h);
+  src.width = src.height = 0;
+  const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', quality));
+  c.width = c.height = 0;
+  return blob;
+}
+
 export class LayerCache {
-  constructor(decoder, { feather = 6 } = {}) { this.decoder = decoder; this.feather = feather; this.map = new Map(); this.pending = new Map(); }
+  constructor(decoder, { feather = 6, max = 80 } = {}) { this.decoder = decoder; this.feather = feather; this.max = max; this.map = new Map(); this.pending = new Map(); }
+  setDecoder(d) { this.decoder = d; }
   has(id) { return this.map.has(id); }
+  touch(id) { const l = this.map.get(id); if (l) { this.map.delete(id); this.map.set(id, l); } return l; }
+  trim() { while (this.map.size > this.max) { const [id, l] = this.map.entries().next().value; l.bitmap.close?.(); this.map.delete(id); } }
+  clear() { for (const l of this.map.values()) l.bitmap.close?.(); this.map.clear(); }
+  /** layer from a preview image (JPEG without alpha) composed with the lasso alpha: no model needed */
+  async fromPreview(note, blob) {
+    const crop = note.crop, W = crop.w * F, H = crop.h * F;
+    const img = await createImageBitmap(blob);
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(img, 0, 0, W, H); img.close?.();
+    const mask = note._mask || (note._mask = maskFromString(note.mask));
+    const alpha = note.path && note.path.length > 2 ? polygonAlpha(crop, note.path, this.feather) : maskAlpha(crop, mask);
+    const px = g.getImageData(0, 0, W, H);
+    for (let i = 3, k = 0; i < px.data.length; i += 4, k += 4) px.data[i] = alpha.data[k];
+    c.width = c.height = 0;
+    const bitmap = await createImageBitmap(px);
+    const layer = { crop, bitmap, id: note.id, preview: true };
+    this.map.set(note.id, layer); this.trim();
+    return layer;
+  }
   /** register a freshly painted stroke from its decoded image (no re-decode) */
-  async fromImage(note, crop, img, alpha) { const bitmap = await createImageBitmap(composeLayer(img, alpha)); const layer = { crop, bitmap, id: note.id }; this.map.set(note.id, layer); return layer; }
+  async fromImage(note, crop, img, alpha) { const bitmap = await createImageBitmap(composeLayer(img, alpha)); const layer = { crop, bitmap, id: note.id }; this.map.set(note.id, layer); this.trim(); return layer; }
   get(id) { return this.map.get(id) || null; }
   drop(id) { const l = this.map.get(id); if (l) { l.bitmap.close?.(); this.map.delete(id); } }
   /** note: {id, crop, tokens (b64), path?, mask}. gridTokens/gridW: fallback source for legacy notes. Returns {crop, bitmap}. */
   render(note, grid = null) {
     if (this.map.has(note.id)) return Promise.resolve(this.map.get(note.id));
     if (this.pending.has(note.id)) return this.pending.get(note.id);
+    if (!this.decoder) return Promise.resolve(null);
     const p = (async () => {
       let crop = note.crop, tokens = note.tokens ? decodeTokens(note.tokens) : null;
       const mask = note._mask || (note._mask = maskFromString(note.mask));
@@ -70,7 +106,7 @@ export class LayerCache {
       const alpha = note.path && note.path.length > 2 ? polygonAlpha(crop, note.path, this.feather) : maskAlpha(crop, mask);
       const bitmap = await createImageBitmap(composeLayer(img, alpha));
       const layer = { crop, bitmap, id: note.id };
-      this.map.set(note.id, layer); this.pending.delete(note.id);
+      this.map.set(note.id, layer); this.trim(); this.pending.delete(note.id);
       return layer;
     })();
     this.pending.set(note.id, p);

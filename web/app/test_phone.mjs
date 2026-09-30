@@ -27,7 +27,7 @@ const fails = []; const check = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') 
 // desktop helper (Chromium)
 const helperBrowser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
 const H = await helperBrowser.newPage({ viewport: { width: 1100, height: 760 } });
-await H.goto(url); await H.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready && window.__vqpaint.caps.paint, null, { timeout: 180000 });
+await H.goto(url); await H.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready, null, { timeout: 180000 });
 await H.evaluate((s) => window.__vqpaint.setEffortSeconds(s), seconds);
 // the phone
 const isWebKit = dev.defaultBrowserType === 'webkit';
@@ -75,11 +75,12 @@ console.log('cursor tool:', JSON.stringify(dbg));
 await P.click('[data-tool="cursor"]', { force: true, timeout: 5000 }).catch(async () => { await P.evaluate(() => window.__vqpaint.setTool('cursor')); console.log('used setTool fallback'); });
 const gx = await P.evaluate(() => { const s = window.__vqpaint.strokes[0]; if (!s) return null; const m = s.mask.split(':')[0].split(',').map(Number); return [m[0] + m[2] / 2, m[1] + m[3] / 2]; });
 if (gx) {
-  const tx = box.x + (gx[0] / 32) * box.width, ty = box.y + (gx[1] / 32) * box.height;
+  const [tx, ty] = await P.evaluate((g) => { const r = document.getElementById('canvas').getBoundingClientRect(); const [x, y] = window.__vqpaint.view.toScreen(g[0], g[1]); return [r.left + x, r.top + y]; }, gx);
   if (cdp) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tx, y: ty }] }); await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); }
   else await P.touchscreen.tap(tx, ty);
   await P.waitForTimeout(400);
   const vis = await P.evaluate(() => { const n = document.querySelector('.note.done.open'); return n && !n.hidden ? n.textContent : null; });
+  if (!vis) console.log('tap debug:', JSON.stringify(await P.evaluate((g) => ({ tool: document.querySelector('[data-tool].active')?.dataset.tool, hit: !!window.__vqpaint.strokeAt(g[0], g[1]), notes: document.querySelectorAll('.note').length, msg: !!document.querySelector('[data-message]:not([hidden])'), stage: window.__vqpaint.stats.stage }), gx)));
   check(!!vis && /argued/.test(vis), `tap shows the note: ${vis ? JSON.stringify(vis.slice(0, 60)) : 'not shown'}`);
 }
 await P.screenshot({ path: path.join(outDir, `phone_${deviceName.replace(/\s+/g, '_')}_note.png`) });

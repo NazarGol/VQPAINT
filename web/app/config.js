@@ -6,5 +6,7 @@ export const CONFIG = {
   gridW: 256, gridH: 256,                                          // tokens; 256x256 = 4096 px world, blank = page background
   brushSizes: [4, 6, 8],
   efforts: { quick: 5, normal: 10, long: 20 },                     // seconds of search per stroke
+  blankToken: 6328,           // codebook tile nearest #404040 (export/…: palette_rgb); rooms are filled with it
+  blankRgb: 'rgb(68, 61, 60)', // its decoded colour: the page background, so blank canvas has no edge
   version: 'v1',
 };
