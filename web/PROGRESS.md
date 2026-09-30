@@ -1,5 +1,11 @@
 # Progress
 
+## Urgent fix (2026-09-30 evening) — iPhone crash loop
+- Viewing no longer loads any model: strokes arrive as small previews. Emulated iPhone WebKit peak: 1886 MB → ~100 MB. Live.
+- Painting on a phone: best achievable peak ~1.4–1.5 GB in the web process (JSEP build, int8 text on CPU, small crops); too much for an iPhone 13 mini, so phones ask a helper device by default and desktops help by default. Without a helper the phone paints locally (may reload on a 13 mini → safe mode keeps viewing).
+- Loading pills: "loading the painting… n/m", "preparing the brush… N%". Crash-loop guard: a visit that never reached "ok" starts in viewing-only safe mode.
+- Tools: `tools/measure_memory.mjs` (process-tree RSS per stage), `tools/probe_ort_memory.mjs` (ORT alone).
+
 ## Phase 4 (2026-09-30) — infinite canvas, layers, phones on their own
 0. **Tokens / your items**: Kaggle token stored (`~/.kaggle/access_token`). Kaggle run blocked by the account (no kernel internet, dataset creation 403) → needs phone verification (NEEDS_NAZAR). Hugging Face: waiting for `~/.config/vqpaint/hf_token`. PR #1 merge: pending the final checks.
 1. **Seamless canvas**: 256×256-token world (4096 px), blank = page background colour exactly, pan/zoom/pinch per device, joiners fitted to the painting, only visible layers decoded and cached. Rooms store the grid in chunks and send it run-length encoded.

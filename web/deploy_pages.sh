@@ -25,7 +25,7 @@ sync_file "$WEB/models/decoder_fp16.onnx" models/decoder_fp16.onnx
 for f in decoder.onnx decoder.bin decoder.json clip_vision.onnx clip_vision.bin clip_vision.json clip_text.onnx clip_text.bin clip_text.json; do sync_file "$WEB/models/pack/$f" "models/pack/$f"; done
 sync_file "$WEB/models/decoder_int8.onnx" models/decoder_int8.onnx
 sync_file "$WEB/models/mobileclip_s0/tokenizer.json" models/mobileclip_s0/tokenizer.json
-for f in vision_model_fp16.onnx text_model_fp16.onnx; do sync_file "$WEB/models/mobileclip_s0/onnx/$f" "models/mobileclip_s0/onnx/$f"; done
+for f in vision_model_fp16.onnx text_model_fp16.onnx text_model_quantized.onnx; do sync_file "$WEB/models/mobileclip_s0/onnx/$f" "models/mobileclip_s0/onnx/$f"; done
 for f in palette.json palette_pca128.f16 palette_basis.f32 palette_rgb.u8 palette_meandot.f32; do sync_file "$WEB/models/palette/$f" "models/palette/$f"; done
 for f in bank.json bank_tokens_4.u16 bank_tokens_6.u16 bank_tokens_8.u16 bank_tokens_16.u16 bank_pca128.f16 bank_basis.f32 bank_meandot.f32; do sync_file "$WEB/models/bank/$f" "models/bank/$f"; done
 touch .nojekyll

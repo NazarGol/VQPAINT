@@ -64,7 +64,7 @@ function rle(tokens) {
 }
 function cleanCaps(c) {
   if (!c || typeof c !== 'object') return null;
-  return { paint: !!c.paint, speed: Number.isFinite(+c.speed) ? Math.round(+c.speed) : null, gpu: !!c.gpu };
+  return { paint: !!c.paint, speed: Number.isFinite(+c.speed) ? Math.round(+c.speed) : null, gpu: !!c.gpu, helper: !!c.helper };
 }
 function cleanNote(n, att) {
   if (!n || typeof n !== 'object' || typeof n.id !== 'string' || !n.id || n.id.length > 16) return null;
