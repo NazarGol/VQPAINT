@@ -1,16 +1,17 @@
 // Room page orchestrator: models, room connection, shapes → notes → stroke layers, view, export hooks. UI lives in components/.
 import { CONFIG } from './config.js';
-import { loadOrt, fetchCached, fetchJsonCached, webgpuInfo } from '../lib/models.js';
+import { loadOrt, fetchCached, fetchJsonCached, webgpuInfo, setModelMirror } from '../lib/models.js';
 import { Decoder, F, expandRegion, readRegion } from '../lib/decoder.js';
 import { Clip } from '../lib/clip.js';
 import { Palette } from '../lib/palette.js';
 import { Bank } from '../lib/bank.js';
 import { Painter } from '../lib/search.js';
-import { maskCells, maskToString, maskFromString, maskHas, noisyMask } from '../lib/mask.js';
+import { maskCells, maskToString, maskFromString, maskHas, maskTouches, noisyMask } from '../lib/mask.js';
+import { t, lang, setLang } from './i18n.js';
 import { lassoMask } from '../lib/lasso.js';
 import { embedLongText } from '../lib/text.js';
 import { connectRoom } from '../lib/room.js';
-import { LayerCache, encodeTokens, paintedBounds, polygonAlpha, maskAlpha, composeLayer, intersects, makePreviewBlob } from '../lib/layers.js';
+import { LayerCache, encodeTokens, decodeTokens, paintedBounds, polygonAlpha, maskAlpha, composeLayer, intersects, makePreviewBlob } from '../lib/layers.js';
 import { mountRoombar } from './components/roombar.js';
 import { mountTools } from './components/tools.js';
 import { mountMenu } from './components/menu.js';
@@ -19,6 +20,10 @@ import { mountToast } from './components/toast.js';
 import { mountNotes } from './components/notes.js';
 import { mountCanvas } from './components/canvas.js';
 import { loadPacked } from '../lib/pack.js';
+import { readPhotoFile, encodePhoto, dataUrlToImage, thumbOf } from '../lib/photo.js';
+import { imageToCHW } from '../lib/encoder.js';
+import { detectLanguage, translateToEnglish, releaseTranslator, translatorLoaded } from '../lib/translate.js';
+import { Metaphors } from '../lib/metaphors.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -48,18 +53,21 @@ const lowMem = isPhone || safeMode || params.get('lowmem') === '1';   // release
 let grid = null;                  // {w, h, tokens} from the room (256x256 by default), the search context
 let roomBlank = 0;                // the room's blank token (set by its creator)
 let ready = false, room = null, ort = null, ep = 'webgpu', decoder = null, clip = null, palette = null, bank = null, painter = null, blankToken = 0, layers = null, modelsLoaded = false, mode = 'view';
-let tool = 'brush', painting = null, pendingShape = null, viewFitted = false, userMoved = false;
+let tool = 'brush', painting = null, pendingShape = null, viewFitted = false, userMoved = false, replyTo = null;   // replyTo: the note the next shape answers
 const undoStack = [], strokes = [], peers = new Map(), othersPainting = new Map(), openRequests = new Map(), myRequests = new Map();
 const stats = { strokes: 0, strokeSeconds: [], modelBytes: 0 };
 const MARGIN = lowMem ? 1 : 2;
-let pendingText = '', testSeconds = null;
+let pendingText = '', testSeconds = null, metaphors = null, translatorTimer = null;
+const metaphorsOn = params.get('metaphors') !== '0';   // ?metaphors=0 paints the raw text target (for comparison screenshots)
 
 // ---------- UI ----------
 const stage = $('stage');
 const toast = mountToast(stage);
 const roombar = mountRoombar($('roombar'), { roomId, onInvite: invite });
-const menu = mountMenu($('menu-root'), { helpers: helpersOn, phone: lowMem, onUndo: undo, onExportPng: () => exportPng(), onExportPdf: () => exportPdf(), onReplay: () => replay(), onExportVideo: () => exportVideo(), onHelpers: (v) => (helpersOn = v) });
-const tools = mountTools($('tools'), { tool, onChange: (t) => { tool = t; if (t === 'cursor') notes.cancel(); pendingShape = null; updateScene(); if (t === 'brush' && ready && !safeMode) ensureBrush().catch((e) => setStatus('could not prepare the brush: ' + e.message, 8000)); } });
+const menu = mountMenu($('menu-root'), { helpers: helpersOn, phone: lowMem, onUndo: undo, onExportPng: () => exportPng(), onExportPdf: () => exportPdf(), onReplay: () => replay(), onExportVideo: () => exportVideo(), onHelpers: (v) => (helpersOn = v),
+  onLang: () => { setLang(lang === 'uk' ? 'en' : 'uk'); const u = new URL(location.href); u.searchParams.delete('lang'); location.replace(u.href); } });   // the whole UI re-renders in the other language; the room state is on the server
+function selectTool(name) { tool = name; if (name === 'cursor') { notes.cancel(); replyTo = null; } pendingShape = null; updateScene(); if (name === 'brush' && ready && !safeMode && !lowMem) ensureBrush().catch((e) => setStatus(t('status.brushFailed', { error: e.message }), 8000)); }
+const tools = mountTools($('tools'), { tool, onChange: selectTool });
 const loading = mountLoading($('loading'));
 const previewUrl = (id) => `${CONFIG.roomsUrl}/room/${roomId}/preview/${id}`;
 async function fetchPreview(note) {
@@ -67,15 +75,25 @@ async function fetchPreview(note) {
   note._previewTries = (note._previewTries || 0) + 1;
   try { const r = await fetch(previewUrl(note.id)); if (!r.ok) return null; return await r.blob(); } catch { return null; }
 }
+const threadOf = (note) => ({ parent: note.parent ? strokes.find((s) => s.id === note.parent) || null : null, replies: strokes.filter((s) => s.parent === note.id) });
+const briefText = (s, n = 40) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s; };
 const notes = mountNotes(stage, {
   anchorFor: () => null,
-  defaultRealism: 0.6,
-  onSubmit: (text, realism) => { const p = pendingShape; pendingShape = null; updateScene(); if (p) startStroke(p.mask, text, p.points, realism); },
-  onCancel: () => { pendingShape = null; updateScene(); },
+  defaultRealism: 0.6, phone: isPhone, threadOf,
+  onSubmit: (text, realism, extra = {}) => { const p = pendingShape, parent = extra.replyTo; pendingShape = null; replyTo = null; updateScene(); if (p) startStroke(p.mask, text, p.points, realism, { parent: parent ? parent.id : null, photo: extra.photo || null }); },
+  onCancel: () => { pendingShape = null; replyTo = null; updateScene(); },
+  onReply: (note) => startReply(note),
+  onOpen: (id) => openNote(id),
+  onPhoto: (file) => readPhoto(file),
 });
+/** "reply": the next lasso must touch this note's shape; its painting grows from the note's tokens */
+function startReply(noteOrId) { const note = typeof noteOrId === 'string' ? strokes.find((s) => s.id === noteOrId) : noteOrId; if (!note) return; replyTo = note; notes.close(); tools.set('brush'); selectTool('brush'); setStatus(t('note.reply.draw', { text: briefText(note.text) }), 6000); }
+function openNote(id) { const st = strokes.find((s) => s.id === id); if (!st) return; st._mask ||= maskFromString(st.mask); notes.open(st, view.anchorFor(st.crop || st._mask)); noteOpenedAt = performance.now(); }
 const view = mountCanvas(stage, {
   getTool: () => tool,
-  onLasso: (pts) => { if (!ready || painting || !grid) return; const p = limitLasso(pts); const m = lassoMask(p, grid.w, grid.h); if (!m.count) return; pendingShape = { mask: m, points: p }; updateScene(); notes.edit(view.anchorFor(m)); },
+  onLasso: (pts) => { if (!ready || painting || !grid) return; const p = limitLasso(pts); const m = lassoMask(p, grid.w, grid.h); if (!m.count) return;
+    if (replyTo && !maskTouches(m, replyTo._mask ||= maskFromString(replyTo.mask))) { setStatus(t('note.reply.mustTouch'), 5000); return; }
+    pendingShape = { mask: m, points: p }; updateScene(); notes.edit(view.anchorFor(m), '', { replyTo }); },
   onTap: (w) => { const st = strokeAt(w[0], w[1]); if (st && notes.openedId !== st.id) { notes.open(st, view.anchorFor(st.crop || st._mask)); noteOpenedAt = performance.now(); } else notes.close(); },
   onCursor: (w) => room?.sendCursor(w[0], w[1]),
   onResize: () => { if (ready && grid && !userMoved) fitToPainting(); },   // phones report a tiny stage before their first layout settles
@@ -87,7 +105,7 @@ window.__vqpaintView = view;
 let noteOpenedAt = 0;
 document.addEventListener('pointerdown', (e) => { if (performance.now() - noteOpenedAt < 600) return; if (!e.target.closest('.note') && !e.target.closest('.ui') && !e.target.closest('.menu')) { if (tool === 'cursor' || !e.target.closest('canvas')) notes.close(); } });
 const setStatus = (s, ms) => toast.status(s, ms);
-const peerName = (id) => (id === room?.id ? myName : peers.get(id)?.name || 'someone');
+const peerName = (id) => (id === room?.id ? myName : peers.get(id)?.name || t('someone'));
 function limitLasso(pts) {           // phones: keep strokes small enough to decode quickly (max 14 tokens across)
   const max = lowMem ? 8 : 40;
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
@@ -117,13 +135,13 @@ function scheduleVisibleLayers() {
     todo.sort((a, b) => dist(a) - dist(b));
     function dist(s) { const c = s.crop || s._mask; return Math.hypot(c.x + c.w / 2 - cx, c.y + c.h / 2 - cy); }
     const total = todo.length; let done = 0;
-    if (total) loading.set(`loading the painting… ${done}/${total}`);
+    if (total) loading.set(t('load.paintingN', { done, total }));
     for (const s of todo) {
       if (layers.has(s.id)) { done++; continue; }
       let ok = false;
       if (s.crop && s.path) { const blob = await fetchPreview(s); if (blob) { try { await layers.fromPreview(s, blob); ok = true; } catch (e) { console.warn('preview', e); } } }
       if (!ok && decoder) { await layers.render(s, grid); ok = true; }
-      done++; loading.set(`loading the painting… ${done}/${total}`); updateScene();
+      done++; loading.set(t('load.paintingN', { done, total })); updateScene();
     }
     if (!ensuring) loading.hide();
     if (strokes.some((s) => !layers.has(s.id) && s.crop && (s._previewTries || 0) < 3)) setTimeout(scheduleVisibleLayers, 2500);   // just-painted strokes: retry the preview
@@ -131,7 +149,7 @@ function scheduleVisibleLayers() {
 }
 function renderPeers() {
   roombar.setPeers([{ name: myName, color: myColor, me: true, busy: !!painting }, ...[...peers.values()].map((p) => ({ name: p.name, color: p.color, busy: [...othersPainting.values()].some((j) => j.by === p.id) }))]);
-  roombar.setActivity([...othersPainting.values()].map((j) => `${peerName(j.by)} is painting “${j.text}”${j.for ? ` for ${peerName(j.for)}` : ''}`).join(' · '));
+  roombar.setActivity([...othersPainting.values()].map((j) => t('status.painting', { name: peerName(j.by), text: j.text }) + (j.for ? t('status.paintingFor', { name: peerName(j.for) }) : '')).join(t('activity.sep')));
 }
 function fitToPainting() {
   const b = paintedBounds(strokes);
@@ -148,15 +166,36 @@ function realismParams(r) {
 }
 
 // ---------- strokes ----------
-async function startStroke(mask, text, points = null, realism = 0.6) {
-  if (!text) { setStatus('Write the note first.'); return; }
+async function startStroke(mask, text, points = null, realism = 0.6, extra = {}) {
+  if (!text) { setStatus(t('note.writeFirst')); return; }
   if (!mask.count || !grid) return;
-  if (helpersOn) { const h = bestHelper(); if (h && (forceNoPaint || lowMem || !caps.gpu)) return requestHelp(mask, text, points, realism); }   // phones, no-WebGPU and forced devices ask; desktops paint themselves
-  if (forceNoPaint) { setStatus('this device cannot paint and no helper is available.'); return; }
+  const parent = extra.parent && strokes.some((s) => s.id === extra.parent) ? extra.parent : null;
+  const noteLang = detectLanguage(text);
+  if (helpersOn) { const h = bestHelper(); if (h && (forceNoPaint || lowMem || !caps.gpu)) return requestHelp(mask, text, points, realism, { parent, photo: extra.photo || null, lang: noteLang }); }   // phones, no-WebGPU and forced devices ask; desktops paint themselves
+  if (forceNoPaint) { setStatus(t('status.noPaint')); return; }
+  const photo = extra.photo || null;
+  if (photo && lowMem) { try { await encodePhotoTokens(photo); } catch (e) { console.warn('photo', e); setStatus(t('status.paintFailed', { error: e.message }), 6000); return; } }
   await ensureBrush();
-  return paintMask(mask, text, { points, realism });
+  return paintMask(mask, text, { points, realism, parent, photo, lang: noteLang });
 }
-async function paintMask(mask, text, { author = myName, color = myColor, forId = null, reqId = null, points = null, realism = 0.6 } = {}) {
+/** the tokens a reply grows from: the parent note's crop tokens (null when the parent is unknown or has no tokens) */
+function parentSeed(parentId) {
+  const p = parentId && strokes.find((s) => s.id === parentId);
+  if (!p || !p.crop || !p.tokens) return null;
+  try { return { crop: p.crop, tokens: decodeTokens(p.tokens) }; } catch (_) { return null; }
+}
+/** Ukrainian (or other non-English) notes are translated for CLIP only, on devices with memory for it; the note keeps its original text */
+async function textForClip(text, noteLang) {
+  if (!noteLang || noteLang === 'en' || noteLang === 'other' || lowMem || params.get('translate') === '0') return null;   // phones: the translator peaks at ~1.7 GB in WebKit, so they ask a helper or paint the original text
+  setStage('translate');
+  const seen = {}; let total = 106 * 2 ** 20;
+  const onP = (p) => { if (p.status === 'progress' || p.status === 'done') { seen[p.file] = p.loaded || p.total || 0; const loaded = Object.values(seen).reduce((a, b) => a + b, 0); loading.set(t('load.translator', { pct: Math.min(99, Math.round(loaded / total * 100)) })); } if (p.status === 'ready') loading.set(t('translating')); };
+  if (!translatorLoaded()) loading.set(t('load.translator', { pct: 0 })); else loading.set(t('translating'));
+  try { const t0 = performance.now(); const en = await translateToEnglish(text, { onProgress: onP }); stats.lastTranslateMs = Math.round(performance.now() - t0); return en || null; }
+  catch (e) { console.warn('translation failed', e); return null; }
+  finally { loading.hide(); clearTimeout(translatorTimer); translatorTimer = setTimeout(() => releaseTranslator().catch(() => {}), 90000); }   // freed after use (90 s idle: the next note in a Ukrainian session reuses it)
+}
+async function paintMask(mask, text, { author = myName, color = myColor, forId = null, reqId = null, points = null, realism = 0.6, parent = null, photo = null, lang: noteLang = null } = {}) {
   const cells = maskCells(mask);
   const before = cells.map(([x, y]) => grid.tokens[y * grid.w + x]);
   const rp = realismParams(realism);
@@ -170,12 +209,27 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
   const t0 = performance.now();
   let lastSend = 0, ok = false, crop = null, finalImg = null, alphaImg = null;
   try {
+    if (photo && !photo.tokens) await encodePhotoTokens(photo);
+    noteLang ||= detectLanguage(text);
+    const textEn = await textForClip(text, noteLang);
+    if (textEn) setStatus(t('note.translated', { text: briefText(textEn, 80) }), 5000);
     setStage('embed-text');
-    const { target, chunks, hardSplits } = await embedLongText(clip, text);
+    let { target, chunks, hardSplits } = await embedLongText(clip, textEn || text);
+    if (metaphorsOn) {   // practical notes borrow imagery from the nearest metaphors
+      if (!metaphors) { try { metaphors = await Metaphors.load(M + 'metaphors/'); } catch (e) { console.warn('metaphors', e); } }
+      if (metaphors) { const b = metaphors.blend(target); target = b.target; stats.lastMetaphors = b.used; stats.lastMetaphorWeight = b.weight; }
+    } else stats.lastMetaphors = null;
+    if (photo && photo.chw) {   // the photo guides CLIP too: target = text + photo embedding (more with realism)
+      const [pe] = await clip.embedImages(photo.chw.length === 3 * clip.size * clip.size ? photo.chw : imageToCHW(await dataUrlToImage(photo.data), clip.size, clip.size), 1);
+      const w = 0.3 + 0.25 * realism, mixed = new Float32Array(target.length); let n = 0;
+      for (let k = 0; k < mixed.length; k++) { mixed[k] = (1 - w) * target[k] + w * pe[k]; n += mixed[k] * mixed[k]; }
+      n = Math.sqrt(n) + 1e-8; for (let k = 0; k < mixed.length; k++) mixed[k] /= n; target = mixed;
+    }
     setStage('search');
-    if (chunks.length > 1) setStatus(`${chunks.length} text chunks blended${hardSplits ? ` (${hardSplits} split mid-sentence)` : ''}`);
+    if (chunks.length > 1) setStatus(t('status.chunks', { n: chunks.length }) + (hardSplits ? t('status.chunksSplit', { n: hardSplits }) : ''));
     const res = await painter.paint({
-      grid, mask, target, seconds: rp.seconds, margin: MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500,
+      grid, mask, target, seconds: rp.seconds, margin: MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, parent: parentSeed(parent),
+      photo: photo && photo.tokens ? { w: photo.side, h: photo.side, tokens: photo.tokens } : null, photoMix: 0.45 + 0.4 * realism,
       seeds: rp.seeds, sources: rp.sources, patch: rp.patch, growEdge: rp.growEdge, temperature: rp.temperature, mutation: rp.mutation, anneal: rp.anneal, bankPatch: rp.bankPatch,
       onProgress: async (p) => {
         crop = p.crop; finalImg = p.image;
@@ -188,7 +242,8 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     });
     const secs = (performance.now() - t0) / 1000;
     stats.strokes++; stats.strokeSeconds.push(secs); stats.lastTries = res.steps; stats.lastStatus = `${res.steps} tries in ${secs.toFixed(1)}s`;
-    const note = { id: Math.random().toString(36).slice(2, 10), text, author, color, time: Date.now(), mask: maskToString(mask), crop: res.crop, tokens: encodeTokens(res.tokens), path: path || undefined, realism };
+    const note = { id: Math.random().toString(36).slice(2, 10), text, author, color, time: Date.now(), mask: maskToString(mask), crop: res.crop, tokens: encodeTokens(res.tokens), path: path || undefined, realism, parent: parent || undefined, photo: photo ? (photo.thumb || thumbOf(await dataUrlToImage(photo.data))) : undefined,
+      lang: noteLang && noteLang !== 'en' ? noteLang : undefined, text_en: textEn || undefined };
     strokes.push(note);
     await layers.fromImage(note, res.crop, res.image, alphaImg || (path ? polygonAlpha(res.crop, path, 6) : maskAlpha(res.crop, mask)));
     undoStack.push({ cells, before, note }); menu.setUndoEnabled(true);
@@ -201,7 +256,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     room?.sendNote(note);
     ok = true;
   } catch (e) {
-    console.error(e); setStatus('painting failed: ' + e.message);
+    console.error(e); setStatus(t('status.paintFailed', { error: e.message }));
     cells.forEach(([x, y], i) => (grid.tokens[y * grid.w + x] = before[i]));
   } finally {
     try { wake?.release(); } catch (_) {}
@@ -223,44 +278,68 @@ function undo() {
 }
 async function invite() {
   const link = location.origin + location.pathname + '?r=' + roomId;
-  try { await navigator.clipboard.writeText(link); roombar.setInviteLabel('link copied'); setTimeout(() => roombar.setInviteLabel('invite'), 2000); } catch { prompt('Copy this link', link); }
+  try { await navigator.clipboard.writeText(link); roombar.setInviteLabel(t('bar.copied')); setTimeout(() => roombar.setInviteLabel(t('bar.invite')), 2000); } catch { prompt(t('bar.copyPrompt'), link); }
+}
+
+// ---------- photo in a note ----------
+/** the "add photo" button: resize in the browser; only the 256 px JPEG (for the painter) and a 128 px thumbnail (for the note) exist afterwards */
+async function readPhoto(file) { setStatus(t('note.photo.reading'), 0); try { const p = await readPhotoFile(file); stats.lastPhotoBytes = p.data.length; return p; } finally { setStatus('', 1); } }
+/** photo -> tokens with a short-lived encoder (phones: before the brush loads, so only one model is in memory) */
+async function encodePhotoTokens(photo) {
+  if (photo.tokens) return photo;
+  setStage('photo-encode');
+  const onP = (p) => loading.set(t('load.photoModel', { pct: Math.min(99, Math.round(p.loaded / (33 * 2 ** 20) * 100)) }));
+  if (!ort) { ort = await loadOrt(params.get('ort') || CONFIG.ortBase, params.get('entry') || (lowMem ? 'ort.all.min.mjs' : 'ort.webgpu.min.mjs')); ort.env.wasm.numThreads = 1; ort.env.wasm.proxy = false; }
+  const r = await encodePhoto(ort, M, photo.data, { ep: caps.gpu ? epFor(ep) : 'wasm', onProgress: onP, sessionOpts: sessionOpts() });
+  photo.tokens = r.tokens; photo.side = r.side; photo.chw = r.chw; stats.lastPhotoEncodeMs = r.ms;
+  if (!painter) loading.hide();
+  setStage('photo-encoded');
+  return photo;
 }
 
 // ---------- export / replay (lib/export.js is loaded on demand) ----------
-const guard = (label, fn) => async () => { try { await fn(); } catch (e) { console.error(e); setStatus(label + ' failed: ' + e.message, 6000); } };
-const exportPng = guard('export PNG', async () => { setStatus('rendering…', 0); const m = await import('../lib/export.js'); await m.exportPng({ strokes, layers, grid, filename: `vqpaint-${roomId}.png`, blank: cssBg() }); setStatus('exported PNG'); });
-const exportPdf = guard('export PDF', async () => { setStatus('building the PDF…', 0); const m = await import('../lib/export.js'); await m.exportPdf({ strokes, layers, grid, decoder, filename: `vqpaint-${roomId}.pdf`, blank: cssBg(), room: roomId }); setStatus('exported PDF'); });
-const replay = guard('replay', async () => { notes.close(); const m = await import('../lib/export.js'); await m.replay({ strokes, layers, grid, view, stage, blank: cssBg() }); });
-const exportVideo = guard('export video', async () => { setStatus('recording the replay…', 0); const m = await import('../lib/export.js'); await m.exportVideo({ strokes, layers, grid, filename: `vqpaint-${roomId}-replay`, blank: cssBg() }); setStatus('exported replay video'); });
+const guard = (label, fn) => async () => { try { await fn(); } catch (e) { console.error(e); setStatus(t('status.failed', { what: label, error: e.message }), 6000); } };
+const exportPng = guard('PNG', async () => { setStatus(t('status.rendering'), 0); const m = await import('../lib/export.js'); await m.exportPng({ strokes, layers, grid, filename: `vqpaint-${roomId}.png`, blank: cssBg() }); setStatus(t('status.exportedPng')); });
+const exportPdf = guard('PDF', async () => { setStatus(t('status.pdf'), 0); const m = await import('../lib/export.js'); await m.exportPdf({ strokes, layers, grid, decoder, filename: `vqpaint-${roomId}.pdf`, blank: cssBg(), room: roomId, lang }); setStatus(t('status.exportedPdf')); });
+const replay = guard(t('menu.replay'), async () => { notes.close(); const m = await import('../lib/export.js'); await m.replay({ strokes, layers, grid, view, stage, blank: cssBg() }); });
+const exportVideo = guard(t('menu.video'), async () => { setStatus(t('status.recording'), 0); const m = await import('../lib/export.js'); await m.exportVideo({ strokes, layers, grid, filename: `vqpaint-${roomId}-replay`, blank: cssBg() }); setStatus(t('status.exportedVideo')); });
 const cssBg = () => getComputedStyle(document.documentElement).getPropertyValue('--color-bg').trim();
 
 // ---------- helpers (optional) ----------
 function bestHelper() { let best = null; for (const p of peers.values()) { const c = p.caps; if (c && (c.paint || c.helper) && !p.busy && (!best || (c.speed || 1e9) < (best.caps.speed || 1e9))) best = p; } return best; }
-function requestHelp(mask, text, points, realism) {
-  const req = { id: Math.random().toString(36).slice(2, 10), text, mask: maskToString(mask), path: points, realism };
-  if (!room) { setStatus('Not connected.'); return; }
+function requestHelp(mask, text, points, realism, { parent = null, photo = null, lang: noteLang = null } = {}) {
+  const req = { id: Math.random().toString(36).slice(2, 10), text, mask: maskToString(mask), path: points, realism, parent: parent || undefined, photo: photo ? photo.data : undefined, lang: noteLang || undefined };
+  if (!room) { setStatus(t('status.notConnected')); return; }
   room.paintRequest(req);
-  const entry = { req, mask, points, realism, timer: null, assigned: null };
+  const entry = { req, mask, text, points, realism, parent, photo, lang: noteLang, timer: null, assigned: null };
   myRequests.set(req.id, entry);
-  setStatus(`${peerName(bestHelper().id)} will paint this for you…`, 6000);
-  entry.timer = setTimeout(async () => { if (!myRequests.has(req.id) || entry.assigned) return; myRequests.delete(req.id); room.paintDone(req.id, false); await ensureBrush(); paintMask(mask, text, { points, realism }); }, 8000);
+  setStatus(t('status.helperWill', { name: peerName(bestHelper().id) }), 6000);
+  entry.timer = setTimeout(() => { if (!myRequests.has(req.id) || entry.assigned) return; myRequests.delete(req.id); room.paintDone(req.id, false); paintHere(entry); }, 12000);   // nobody claimed: paint here if this device can
+}
+/** the fallback when no helper takes (or finishes) a request: paint on this device, or say why not */
+async function paintHere(e) {
+  if (forceNoPaint) { setStatus(t('status.noPaint'), 6000); return; }
+  try { if (e.photo && lowMem) await encodePhotoTokens(e.photo); await ensureBrush(); } catch (err) { setStatus(t('status.brushFailed', { error: err.message }), 8000); return; }
+  paintMask(e.mask, e.text, { points: e.points, realism: e.realism, parent: e.parent, photo: e.photo, lang: e.lang });
 }
 function onPaintRequest(req) { if (!req || req.from === room?.id || !helpersOn) return; openRequests.set(req.id, req); setTimeout(claimNextRequest, 200 + Math.min(2000, (caps.speed || 1000) / 4) + Math.random() * 300); }
-async function claimNextRequest() { if (!helpersOn || lowMem || painting || !room || safeMode) return; const req = [...openRequests.values()].find((r) => !r.by); if (!req) return; try { await ensureBrush(); } catch { return; } room.paintClaim(req.id); }
+function claimNextRequest() { if (!helpersOn || lowMem || painting || ensuring || !room || safeMode) return; const req = [...openRequests.values()].find((r) => !r.by); if (!req) return; room.paintClaim(req.id); }   // claim first (instant), load the brush once assigned
 function onPaintAssigned({ id, by, for: forId }) {
   const req = openRequests.get(id), mine = myRequests.get(id);
-  if (mine) { mine.assigned = by; setStatus(`${peerName(by)} is painting this for you…`, 6000); }
+  if (mine) { mine.assigned = by; setStatus(t('status.helperIs', { name: peerName(by) }), 6000); }
   if (req) req.by = by;
-  if (req && by === room?.id && !painting) { openRequests.delete(id); paintMask(maskFromString(req.mask), req.text, { author: req.author, color: req.color, forId, reqId: id, points: req.path || null, realism: req.realism ?? 0.6 }); }
+  if (req && by === room?.id && !painting) { openRequests.delete(id); (async () => { try { await ensureBrush(); } catch (e) { console.warn('helper brush', e); room.paintDone(id, false); return; }
+    paintMask(maskFromString(req.mask), req.text, { author: req.author, color: req.color, forId, reqId: id, points: req.path || null, realism: req.realism ?? 0.6, parent: req.parent || null, photo: req.photo ? { data: req.photo } : null, lang: req.lang || null }); })(); }
 }
-function onPaintDone({ id, ok }) { openRequests.delete(id); const mine = myRequests.get(id); if (mine) { clearTimeout(mine.timer); myRequests.delete(id); if (!ok) setStatus('the helper could not paint it; try again.'); } setTimeout(claimNextRequest, 300); }
+function onPaintDone({ id, ok }) { openRequests.delete(id); const mine = myRequests.get(id); if (mine) { clearTimeout(mine.timer); myRequests.delete(id); if (!ok) { setStatus(t('status.helperFailed'), 5000); paintHere(mine); } } setTimeout(claimNextRequest, 300); }
 
 // ---------- models ----------
-const M = CONFIG.modelBase, prog = {};
+const M = (params.get('models') === 'pages' || !CONFIG.modelFallback) ? (CONFIG.modelFallback || CONFIG.modelBase) : CONFIG.modelBase, prog = {};
+if (M === CONFIG.modelBase && CONFIG.modelFallback) setModelMirror(CONFIG.modelBase, CONFIG.modelFallback);   // Hugging Face first, GitHub Pages if it fails
 const onProgress = (p) => {
   prog[p.url] = p;
   const loaded = Object.values(prog).reduce((a, b) => a + b.loaded, 0), total = Object.values(prog).reduce((a, b) => a + (b.total || b.loaded), 0);
-  loading.set(`loading models ${(loaded / 2 ** 20).toFixed(0)} / ${(total / 2 ** 20).toFixed(0)} MB${Object.values(prog).every((x) => x.cached) ? ' · cached' : ''}`);
+  loading.set(t('load.models', { loaded: (loaded / 2 ** 20).toFixed(0), total: (total / 2 ** 20).toFixed(0) }) + (Object.values(prog).every((x) => x.cached) ? t('load.cached') : ''));
   stats.modelBytes = total;
 };
 let ensuring = null;
@@ -272,7 +351,7 @@ const setStage = (s) => { stats.stage = s; beacon('stage', { s }); };
 function ensureBrush() {
   if (painter) return Promise.resolve();
   if (safeMode) {
-    toast.message('Safari reloaded this page last time, so it is in low-memory mode: viewing only.<br><span class="quiet">Painting loads about 105 MB of models.</span><br><br><button class="pill" data-try>try painting anyway</button> <button class="pill" data-no>keep viewing</button>');
+    toast.message(`${t('msg.safeMode')}<br><span class="quiet">${t('msg.safeMode.size')}</span><br><br><button class="pill" data-try>${t('msg.tryPaint')}</button> <button class="pill" data-no>${t('msg.keepViewing')}</button>`);
     const m = document.querySelector('[data-message]'); m.querySelector('[data-try]').onclick = () => { safeMode = false; m.hidden = true; ensureBrush(); }; m.querySelector('[data-no]').onclick = () => { m.hidden = true; };
     return Promise.reject(new Error('low-memory mode'));
   }
@@ -280,8 +359,8 @@ function ensureBrush() {
     mode = 'brush'; sessionStorage.setItem('vqpaint.boot', 'painting');
     const total = 105 * 2 ** 20, seen = {};
     const cachedSeen = {};
-    const onP = (p) => { seen[p.url] = p.loaded; cachedSeen[p.url] = !!p.cached; const loaded = Object.values(seen).reduce((a, b) => a + b, 0); loading.set(`preparing the brush… ${Math.min(99, Math.round(loaded / total * 100))}%`); stats.cached = Object.values(cachedSeen).every(Boolean); stats.modelBytes = loaded; };
-    loading.set('preparing the brush… 0%');
+    const onP = (p) => { seen[p.url] = p.loaded; cachedSeen[p.url] = !!p.cached; const loaded = Object.values(seen).reduce((a, b) => a + b, 0); loading.set(t('load.brush', { pct: Math.min(99, Math.round(loaded / total * 100)) })); stats.cached = Object.values(cachedSeen).every(Boolean); stats.modelBytes = loaded; };
+    loading.set(t('load.brush', { pct: 0 }));
     setStage('ort'); if (!ort) { ort = await loadOrt(params.get('ort') || CONFIG.ortBase, params.get('entry') || (lowMem ? 'ort.all.min.mjs' : 'ort.webgpu.min.mjs')); ort.env.wasm.numThreads = 1; ort.env.wasm.proxy = false; }   // JSEP build on low-memory devices: it gives memory back on release
     if (!decoder) {
       setStage('decoder-fetch');
@@ -330,11 +409,11 @@ window.addEventListener('unhandledrejection', (e) => beacon('unhandledrejection'
 async function boot() {
   const gpu = params.get('nogpu') === '1' ? null : await webgpuInfo();
   beacon('gpu', { gpu }); caps.gpu = !!gpu;
-  if (!gpu) toast.message('This browser has no WebGPU: painting runs on the CPU and takes a few minutes per stroke.<br><span class="quiet">Chrome or Edge 113+, or Safari 26+, paint in seconds.</span><br><br><button class="pill" onclick="this.closest(\'.message\').hidden=true">ok</button>');
+  if (!gpu) toast.message(`${t('msg.noGpu')}<br><span class="quiet">${t('msg.noGpu.hint')}</span><br><br><button class="pill" onclick="this.closest('.message').hidden=true">${t('ok')}</button>`);
   ep = gpu ? 'webgpu' : 'wasm';
   caps.helper = !!gpu && !lowMem && !forceNoPaint && helpersOn;   // a desktop with WebGPU can paint for phones (loads models when it claims)
   const t0 = performance.now();
-  loading.set('loading the painting…');
+  loading.set(t('load.painting'));
   document.documentElement.style.setProperty('--color-bg', CONFIG.blankRgb);   // the exact decoded colour of blank canvas
   palette = await Palette.load(M + 'palette/');                       // 4 MB (colour proposals); no model is loaded for viewing
   blankToken = CONFIG.blankToken;
@@ -385,12 +464,12 @@ function connect() {
     onLeave: (p) => { peers.delete(p && p.id); for (const [id, j] of othersPainting) if (j.by === (p && p.id)) othersPainting.delete(id); renderPeers(); updateScene(); },
   });
 }
-boot().catch((e) => { console.error(e); toast.message('Could not load the models.<br><span class="quiet">' + String(e.message || e) + '</span>'); });
+boot().catch((e) => { console.error(e); toast.message(t('msg.modelsFailed') + '<br><span class="quiet">' + String(e.message || e) + '</span>'); });
 
 // ---------- dev/test hooks ----------
 function paintAt({ cx, cy, radius = 3, prompt = null, seed = (Math.random() * 1e9) | 0, realism = 0.6 }) { const m = noisyMask({ cx, cy, radius, gridW: grid.w, gridH: grid.h, seed }); const pts = []; for (let a = 0; a < Math.PI * 2; a += 0.35) pts.push([cx + radius * Math.cos(a), cy + radius * 0.9 * Math.sin(a)]); return startStroke(m, prompt ?? pendingText, pts, realism); }
 function paintRegion(r, prompt = null) { const cells = new Uint8Array(r.w * r.h).fill(1); return startStroke({ x: r.x, y: r.y, w: r.w, h: r.h, cells, count: r.w * r.h }, prompt ?? pendingText, null, 0.6); }
-function lassoPaint(points, prompt, realism = 0.6) { return startStroke(lassoMask(points, grid.w, grid.h), prompt ?? pendingText, points, realism); }
+function lassoPaint(points, prompt, realism = 0.6, extra = {}) { return startStroke(lassoMask(points, grid.w, grid.h), prompt ?? pendingText, points, realism, extra); }
 (async () => {
   if (!params.get('auto')) return;
   while (!ready || !grid) await new Promise((r) => setTimeout(r, 200));
@@ -404,4 +483,4 @@ function lassoPaint(points, prompt, realism = 0.6) { return startStroke(lassoMas
   try { await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(stats) }); } catch (_) {}
 })();
 window.__vqpaint = { get grid() { return grid; }, stats, strokes, caps, get ready() { return ready; }, get mode() { return mode; }, get modelsLoaded() { return modelsLoaded; }, ensureBrush, releaseBrush, get safeMode() { return safeMode; }, get decodeTimes() { return decoder && decoder.times ? decoder.times : []; }, paintRegion, paintAt, lassoPaint, peers, get room() { return room; },
-  get painting() { return painting; }, othersPainting, myRequests, ensurePainter: ensureBrush, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, setTool(t) { tool = t; tools.set(t); }, strokeAt, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; } };
+  get painting() { return painting; }, othersPainting, myRequests, ensurePainter: ensureBrush, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, setTool(t) { tool = t; tools.set(t); }, strokeAt, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; }, startReply, openNote, get replyTo() { return replyTo; }, threadOf, maskTouches: (a, b) => maskTouches(a, b), lassoMask: (pts) => lassoMask(pts, grid.w, grid.h), readPhoto, get lang() { return lang; } };

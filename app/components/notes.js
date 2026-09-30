@@ -1,7 +1,9 @@
-// Notes: an editing box (strong lilac, with the abstract↔realistic slider) next to a closed shape, and one open note at a time.
-// Nothing shows on the canvas by default; a note opens on click/tap of its shape and closes on a click elsewhere.
+// Notes: an editing box (strong lilac, with the abstract↔realistic slider, reply header, photo button) next to a closed shape,
+// and one open note at a time. Nothing shows on the canvas by default; a note opens on click/tap of its shape and closes on
+// a click elsewhere. An open note shows its thread: the note it replies to (click to open) and its replies, indented.
 import { escapeHtml } from './roombar.js';
-export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, defaultRealism = 0.6 }) {
+import { t } from '../i18n.js';
+export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = null, onOpen = null, onPhoto = null, threadOf = null, defaultRealism = 0.6, phone = false }) {
   const layer = document.createElement('div'); layer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:6'; stageEl.appendChild(layer);
   let editing = null, opened = null; // {el, note}
   function place(el, anchor) {
@@ -14,27 +16,48 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, defaultReal
     el.style.left = Math.round(x) + 'px'; el.style.top = Math.round(Math.max(8, y)) + 'px';
   }
   const grow = (ta) => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, innerHeight * 0.4) + 'px'; };
+  const brief = (s, n = 60) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s; };
+  const who = (n) => escapeHtml(n.author || t('someone'));
   const api = {
-    edit(anchor, initial = '') {
+    /** anchor in stage px; opts.replyTo: the parent note when this shape is a reply */
+    edit(anchor, initial = '', { replyTo = null } = {}) {
       api.cancel(); api.close();
       const el = document.createElement('div'); el.className = 'note editing'; el.style.pointerEvents = 'auto';
-      el.innerHTML = `<textarea data-note-input rows="1" placeholder="Write the note for this shape…"></textarea>
-        <label class="slider"><span>abstract</span><input type="range" min="0" max="1" step="0.05" value="${defaultRealism}" data-realism><span>realistic</span></label>
-        <div class="hint">Enter to paint · Shift+Enter for a new line · Esc to discard</div>`;
+      el.innerHTML = `${replyTo ? `<div class="meta" data-reply-head><span class="dot" style="background:${escapeHtml(replyTo.color || '#888')}"></span>${t('note.replyingTo', { name: who(replyTo) })} · <span class="quiet">${escapeHtml(brief(replyTo.text, 48))}</span></div>` : ''}
+        <div class="photo-row" data-photo-row hidden><img data-photo-thumb alt=""><button type="button" class="link" data-photo-remove>${t('note.photo.remove')}</button></div>
+        <textarea data-note-input rows="1" placeholder="${escapeHtml(t(replyTo ? 'note.reply.placeholder' : 'note.placeholder'))}"></textarea>
+        <label class="slider"><span>${t('note.abstract')}</span><input type="range" min="0" max="1" step="0.05" value="${defaultRealism}" data-realism><span>${t('note.realistic')}</span></label>
+        <div class="hint">${onPhoto ? `<button type="button" class="link" data-photo>${t('note.photo')}</button><input type="file" accept="image/*" data-photo-file hidden> · ` : ''}${t(phone ? 'note.hint.phone' : 'note.hint')}</div>`;
       const ta = el.querySelector('textarea'); ta.value = initial;
       ta.addEventListener('input', () => grow(ta));
       ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); api.submit(); } else if (e.key === 'Escape') { e.preventDefault(); api.cancel(true); } });
-      layer.appendChild(el); editing = { el, anchor }; place(el, anchor); grow(ta); ta.focus();
+      layer.appendChild(el); editing = { el, anchor, replyTo, photo: null }; place(el, anchor); grow(ta); ta.focus();
+      if (onPhoto) {
+        const file = el.querySelector('[data-photo-file]'), row = el.querySelector('[data-photo-row]');
+        el.querySelector('[data-photo]').onclick = () => file.click();
+        file.onchange = async () => { const f = file.files && file.files[0]; file.value = ''; if (!f || !editing) return;
+          try { const p = await onPhoto(f); if (!editing || !p) return; editing.photo = p; row.querySelector('img').src = p.thumb; row.hidden = false; place(el, editing.anchor); } catch (e) { console.warn('photo', e); } };
+        el.querySelector('[data-photo-remove]').onclick = () => { if (!editing) return; editing.photo = null; row.hidden = true; place(el, editing.anchor); };
+      }
     },
-    submit() { if (!editing) return; const text = editing.el.querySelector('textarea').value.trim(); if (!text) return; const realism = +editing.el.querySelector('[data-realism]').value; editing.el.remove(); editing = null; onSubmit(text, realism); },
+    submit() { if (!editing) return; const text = editing.el.querySelector('textarea').value.trim(); if (!text) return; const realism = +editing.el.querySelector('[data-realism]').value; const { replyTo, photo } = editing; editing.el.remove(); editing = null; onSubmit(text, realism, { replyTo, photo }); },
     cancel(byUser = false) { if (!editing) return; editing.el.remove(); editing = null; if (byUser) onCancel?.(); },
     get isEditing() { return !!editing; },
-    /** open one note: {text, author, color, time}; anchor in stage px */
+    get editingText() { return editing ? editing.el.querySelector('textarea').value : ''; },
+    set editingText(v) { if (editing) { const ta = editing.el.querySelector('textarea'); ta.value = v; grow(ta); } },
+    /** open one note: {text, author, color, time, parent?, photo?, text_en?}; anchor in stage px */
     open(note, anchor) {
       api.close();
       const el = document.createElement('div'); el.className = 'note done open'; el.style.pointerEvents = 'auto';
       const when = note.time ? new Date(note.time).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) : '';
-      el.innerHTML = `<div class="meta"><span class="dot" style="background:${note.color || '#888'}"></span>${escapeHtml(note.author || 'someone')} · ${when}</div>${escapeHtml(note.text)}`;
+      const th = threadOf ? threadOf(note) : { parent: null, replies: [] };
+      const parentLine = th.parent ? `<div class="meta thread-parent" data-open="${escapeHtml(th.parent.id)}"><span class="dot" style="background:${escapeHtml(th.parent.color || '#888')}"></span>${t('note.inReplyTo', { name: who(th.parent) })} · <span class="quiet">${escapeHtml(brief(th.parent.text, 40))}</span></div>` : '';
+      const replies = th.replies && th.replies.length ? `<div class="replies"><div class="meta">${th.replies.length === 1 ? t('note.reply1') : t('note.replies', { n: th.replies.length })}</div>${th.replies.map((r) => `<div class="reply" data-open="${escapeHtml(r.id)}"><span class="dot" style="background:${escapeHtml(r.color || '#888')}"></span><span class="meta">${who(r)}</span> ${escapeHtml(brief(r.text, 80))}</div>`).join('')}</div>` : '';
+      const photo = note.photo ? `<img class="thumb" src="${escapeHtml(note.photo)}" alt="">` : '';
+      const translated = note.text_en && note.lang && note.lang !== 'en' ? `<div class="meta quiet">${t('note.translated', { text: escapeHtml(brief(note.text_en, 80)) })}</div>` : '';
+      el.innerHTML = `${parentLine}<div class="meta"><span class="dot" style="background:${escapeHtml(note.color || '#888')}"></span>${who(note)} · ${when}${onReply ? ` · <button type="button" class="link" data-reply>${t('note.reply')}</button>` : ''}</div>${photo}<div class="text">${escapeHtml(note.text)}</div>${translated}${replies}`;
+      if (onReply) el.querySelector('[data-reply]').onclick = (e) => { e.stopPropagation(); onReply(note); };
+      for (const r of el.querySelectorAll('[data-open]')) r.onclick = (e) => { e.stopPropagation(); onOpen?.(r.dataset.open); };
       layer.appendChild(el); opened = { el, note, anchor }; place(el, anchor);
     },
     close() { if (opened) { opened.el.remove(); opened = null; } },
