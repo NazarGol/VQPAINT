@@ -12,11 +12,14 @@ const ROOM_ID_RE = /^[a-z0-9-]{4,32}$/;
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const MAX_CONN = 32;            // sockets per room; extra ones are closed with 1013
 const MAX_MSG_CHARS = 64 * 1024; // text frames above this are closed with 1009
-const MAX_CELLS = 4096;         // cells per "set" message; bigger messages are dropped
+const MAX_CELLS = 2048;         // cells per "set" message; bigger messages are dropped
+const SET_RATE = { window: 10000, max: 40 }; // set messages per socket per 10 s: strokes fit easily, wiping a room does not
+const CHUNK = 8192;             // tokens per storage chunk (32 KiB, under the 128 KiB value limit)
 const MAX_TOKEN = 16384;        // tokens are 0..16383
-const MIN_DIM = 8, MAX_DIM = 64, DEFAULT_DIM = 32;
+const MIN_DIM = 8, MAX_DIM = 512, DEFAULT_DIM = 256;   // 256 tokens = 4096 px: the canvas is very large, blank everywhere else
 const MAX_NOTES = 5000;         // notes kept per room (oldest dropped)
 const MAX_NOTE_TEXT = 4000;     // chars
+const MAX_NOTE_EXTRA = 24000;   // chars of tokens (base64) + path (json) per note
 const MAX_MASK_STR = 4000;      // chars of the mask string
 const MAX_REQUESTS = 64;        // open helper requests per room
 const SAVE_DEBOUNCE_MS = 300;
@@ -51,6 +54,12 @@ function clampDim(raw) {
   return Math.min(MAX_DIM, Math.max(MIN_DIM, n));
 }
 
+/** run-length encode tokens: [value, count, value, count, ...] */
+function rle(tokens) {
+  const out = []; let i = 0;
+  while (i < tokens.length) { const v = tokens[i]; let j = i + 1; while (j < tokens.length && tokens[j] === v) j++; out.push(v, j - i); i = j; }
+  return out;
+}
 function cleanCaps(c) {
   if (!c || typeof c !== 'object') return null;
   return { paint: !!c.paint, speed: Number.isFinite(+c.speed) ? Math.round(+c.speed) : null, gpu: !!c.gpu };
@@ -59,8 +68,16 @@ function cleanNote(n, att) {
   if (!n || typeof n !== 'object' || typeof n.id !== 'string' || !n.id || n.id.length > 16) return null;
   if (typeof n.text !== 'string' || !n.text.trim() || n.text.length > MAX_NOTE_TEXT) return null;
   if (typeof n.mask !== 'string' || !n.mask || n.mask.length > MAX_MASK_STR) return null;
-  return { id: n.id, text: n.text, author: typeof n.author === 'string' ? n.author.slice(0, 24) : att.name, color: typeof n.color === 'string' && COLOR_RE.test(n.color) ? n.color : att.color,
-           time: Number.isFinite(+n.time) ? +n.time : Date.now(), mask: n.mask, by: att.id };
+  const out = { id: n.id, text: n.text, author: typeof n.author === 'string' ? n.author.slice(0, 24) : att.name, color: typeof n.color === 'string' && COLOR_RE.test(n.color) ? n.color : att.color,
+                time: Number.isFinite(+n.time) ? +n.time : Date.now(), mask: n.mask, by: att.id };
+  // layer data for pixel-precise rendering and replay: crop rect, its tokens (base64 uint16), lasso path, realism
+  let extra = 0;
+  if (n.crop && typeof n.crop === 'object') { const c = n.crop; if ([c.x, c.y, c.w, c.h].every(Number.isInteger)) out.crop = { x: c.x, y: c.y, w: c.w, h: c.h }; }
+  if (typeof n.tokens === 'string') { extra += n.tokens.length; out.tokens = n.tokens; }
+  if (Array.isArray(n.path)) { const path = n.path.filter((p) => Array.isArray(p) && Number.isFinite(+p[0]) && Number.isFinite(+p[1])).slice(0, 400).map((p) => [Math.round(+p[0] * 100) / 100, Math.round(+p[1] * 100) / 100]); extra += JSON.stringify(path).length; out.path = path; }
+  if (Number.isFinite(+n.realism)) out.realism = Math.max(0, Math.min(1, +n.realism));
+  if (extra > MAX_NOTE_EXTRA) return null;
+  return out;
 }
 function defaultColor(id) {
   let h = 0;
@@ -113,11 +130,18 @@ export class Room {
     this.v = meta.v | 0;
     const n = this.w * this.h;
     this.tokens = new Int32Array(n);
-    const buf = await this.ctx.storage.get('tokens');
+    this.blank = meta.blank | 0;
+    const buf = await this.ctx.storage.get('tokens');      // old single-blob rooms
     if (buf instanceof ArrayBuffer && buf.byteLength % 4 === 0) {
       const src = new Int32Array(buf);
       this.tokens.set(src.subarray(0, Math.min(n, src.length)));
+    } else {
+      if (this.blank) this.tokens.fill(this.blank);
+      const keys = []; for (let i = 0; i * CHUNK < n; i++) keys.push('tokens:' + i);
+      const chunks = await this.ctx.storage.get(keys);
+      for (const [k, v] of chunks) { const i = +k.split(':')[1]; if (v instanceof ArrayBuffer) this.tokens.set(new Int32Array(v).subarray(0, Math.min(CHUNK, n - i * CHUNK)), i * CHUNK); }
     }
+    this.dirtyChunks = new Set();
     this.loadNotes();
     const reqs = await this.ctx.storage.get('requests');
     if (Array.isArray(reqs)) for (const r of reqs) this.requests.set(r.id, r);
@@ -149,10 +173,14 @@ export class Room {
     this.w = clampDim(params.get('w'));
     this.h = clampDim(params.get('h'));
     this.v = 0;
-    this.tokens = new Int32Array(this.w * this.h);
+    const b = parseInt(params.get('blank') || '0', 10);
+    this.blank = Number.isInteger(b) && b >= 0 && b < MAX_TOKEN ? b : 0;   // the creator's blank token fills the room
+    this.tokens = new Int32Array(this.w * this.h).fill(this.blank);
+    this.dirtyChunks = new Set();
     this.dirty = true;
     return this.save(); // fix the size immediately
   }
+  markDirty(idx) { this.dirtyChunks.add((idx / CHUNK) | 0); }
 
   scheduleSave() {
     this.dirty = true;
@@ -166,10 +194,12 @@ export class Room {
   async save() {
     if (!this.dirty || !this.tokens) return;
     this.dirty = false;
-    await this.ctx.storage.put({
-      meta: { w: this.w, h: this.h, v: this.v },
-      tokens: this.tokens.slice().buffer,
-    });
+    const put = { meta: { w: this.w, h: this.h, v: this.v, blank: this.blank } };
+    const chunks = this.dirtyChunks.size ? [...this.dirtyChunks] : (await this.ctx.storage.get('tokens')) ? [...Array(Math.ceil(this.tokens.length / CHUNK)).keys()] : [];
+    for (const i of chunks) put['tokens:' + i] = this.tokens.slice(i * CHUNK, Math.min(this.tokens.length, (i + 1) * CHUNK)).buffer;
+    this.dirtyChunks.clear();
+    await this.ctx.storage.put(put);
+    if (chunks.length && (await this.ctx.storage.get('tokens'))) await this.ctx.storage.delete('tokens');   // migrated old blob
   }
 
   // ---- HTTP entry ----------------------------------------------------------
@@ -181,7 +211,7 @@ export class Room {
 
     if (kind === 'state') {
       if (!this.tokens) return json({ error: 'room does not exist yet' }, 404);
-      return json({ w: this.w, h: this.h, v: this.v, tokens: Array.from(this.tokens), notes: this.notes });
+      return json({ w: this.w, h: this.h, v: this.v, blank: this.blank, tokens: Array.from(this.tokens), notes: this.notes });
     }
 
     if (kind === 'ws') {
@@ -224,8 +254,8 @@ export class Room {
         att = { id: att.id, ready: true, name, color, caps };
         ws.serializeAttachment(att);
         ws.send(JSON.stringify({
-          t: 'state', id: att.id, w: this.w, h: this.h, v: this.v,
-          tokens: Array.from(this.tokens),
+          t: 'state', id: att.id, w: this.w, h: this.h, v: this.v, blank: this.blank,
+          rle: rle(this.tokens),
           peers: this.peers().filter((p) => p.id !== att.id),
           notes: this.notes,
           requests: [...this.requests.values()],
@@ -244,6 +274,9 @@ export class Room {
       case 'set': {
         const cells = data.cells;
         if (!Array.isArray(cells) || cells.length === 0 || cells.length > MAX_CELLS) return;
+        const now = Date.now(); att.sets = (att.sets || []).filter((t) => now - t < SET_RATE.window);
+        if (att.sets.length >= SET_RATE.max) { ws.serializeAttachment(att); return; }   // too many edits: dropped (no wiping rooms)
+        att.sets.push(now); ws.serializeAttachment(att);
         const valid = [];
         for (const c of cells) {
           if (!Array.isArray(c) || c.length < 3) continue;
@@ -251,6 +284,7 @@ export class Room {
           if (!Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(tok)) continue;
           if (x < 0 || x >= this.w || y < 0 || y >= this.h || tok < 0 || tok >= MAX_TOKEN) continue;
           this.tokens[y * this.w + x] = tok; // last writer wins
+          this.markDirty(y * this.w + x);
           valid.push([x, y, tok]);
         }
         if (valid.length === 0) return;

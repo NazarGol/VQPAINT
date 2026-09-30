@@ -34,7 +34,7 @@ function push(t, m) {
 }
 
 window.room = connectRoom({
-  url, roomId, name, color, w, h,
+  url, roomId, name, color, w: w || 32, h: h || 32,   // the protocol test uses a small room; the app defaults to 256x256
   onState: (s) => {
     window.grid = s.tokens; window.gridW = s.w; window.gridH = s.h;
     push('state', { id: s.id, w: s.w, h: s.h, v: s.v, n: s.tokens.length, peers: [...s.peers.keys()] });

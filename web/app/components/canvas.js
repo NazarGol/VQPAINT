@@ -1,69 +1,64 @@
-// Full-screen stage: fitted canvas + overlay. Brush tool draws a lasso; cursor tool hovers/taps.
+// Screen-sized canvas over an effectively infinite world (token units). Draws cached stroke layers through the view
+// transform, the lasso being drawn, shapes in progress and peer cursors. Cursor tool: drag pans, wheel/pinch zooms,
+// tap opens a note. Brush tool: drag draws a lasso in world coordinates.
 import { F } from '../../lib/decoder.js';
-import { maskCells } from '../../lib/mask.js';
+import { View, attachGestures } from '../../lib/view.js';
+import { intersects } from '../../lib/layers.js';
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-export function mountCanvas(stageEl, { gridW, gridH, getTool, onLasso, onHover, onTap, onCursor, onResize }) {
-  const canvas = document.createElement('canvas'), overlay = document.createElement('canvas');
-  overlay.className = 'overlay';
-  canvas.width = overlay.width = gridW * F; canvas.height = overlay.height = gridH * F;
-  stageEl.prepend(overlay); stageEl.prepend(canvas);
-  const ctx = canvas.getContext('2d', { willReadFrequently: true }), octx = overlay.getContext('2d');
-  let scale = 1, ox = 0, oy = 0;
-  function fit() {
-    const W = stageEl.clientWidth, H = stageEl.clientHeight;
-    scale = Math.min(W / (gridW * F), H / (gridH * F));
-    ox = Math.round((W - gridW * F * scale) / 2);
-    oy = H > W * 1.2 ? Math.min(64, Math.round((H - gridH * F * scale) / 2)) : Math.round((H - gridH * F * scale) / 2);   // portrait: sit under the top pills
-    for (const c of [canvas, overlay]) { c.style.width = gridW * F * scale + 'px'; c.style.height = gridH * F * scale + 'px'; c.style.left = ox + 'px'; c.style.top = oy + 'px'; }
-    onResize?.();
+export function mountCanvas(stageEl, { getTool, onLasso, onTap, onCursor, onViewChange }) {
+  const canvas = document.createElement('canvas'); canvas.className = 'world';
+  stageEl.prepend(canvas);
+  const ctx = canvas.getContext('2d');
+  const view = new View({ zoom: 16 });
+  let dpr = 1, W = 0, H = 0;
+  function resize() {
+    dpr = Math.min(2, devicePixelRatio || 1); W = stageEl.clientWidth; H = stageEl.clientHeight;
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr); canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    view.resize(W, H);
   }
-  window.addEventListener('resize', fit); fit();
-  const toGrid = (ev) => { const r = canvas.getBoundingClientRect(); return [(ev.clientX - r.left) / r.width * gridW, (ev.clientY - r.top) / r.height * gridH]; };
+  window.addEventListener('resize', resize); resize();
+  const toWorld = (ev) => { const r = canvas.getBoundingClientRect(); return view.toWorld(ev.clientX - r.left, ev.clientY - r.top); };
   const toStage = (ev) => { const r = stageEl.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
-  /** shape bounding box in stage px for a mask */
-  const anchorFor = (m) => ({ left: ox + m.x * F * scale, top: oy + m.y * F * scale, right: ox + (m.x + m.w) * F * scale, bottom: oy + (m.y + m.h) * F * scale });
-  let drawing = null; // lasso points in grid coords
-  let down = null;
-  canvas.addEventListener('pointerdown', (ev) => {
-    canvas.setPointerCapture(ev.pointerId);
-    down = { x: ev.clientX, y: ev.clientY, t: performance.now(), touch: ev.pointerType === 'touch' };
-    if (getTool() === 'brush') { drawing = [toGrid(ev)]; redraw(); }
+  let drawing = null;
+  attachGestures(canvas, view, {
+    shouldPan: () => getTool() !== 'brush',
+    onDragStart: (ev) => { drawing = [toWorld(ev)]; requestRender(); },
+    onDrag: (ev) => { if (drawing) { drawing.push(toWorld(ev)); requestRender(); } },
+    onDragEnd: (ev, moved) => { const pts = drawing; drawing = null; requestRender(); if (pts && pts.length >= 3 && moved) onLasso?.(pts); },
+    onTap: (ev) => onTap?.(toWorld(ev), toStage(ev)),
   });
-  canvas.addEventListener('pointermove', (ev) => {
-    const g = toGrid(ev);
-    onCursor?.(g);
-    if (drawing) { drawing.push(g); redraw(); }
-    else if (!down && ev.pointerType !== 'touch') onHover?.(g, toStage(ev));
-  });
-  const end = (ev) => {
-    if (!down) return;
-    const d = down; down = null;
-    if (drawing) { const pts = drawing; drawing = null; redraw(); if (pts.length >= 3) onLasso?.(pts); return; }
-    if (getTool() === 'cursor' && !d.moved) onTap?.(toGrid(ev), toStage(ev));
-  };
-  canvas.addEventListener('pointerup', end);
-  canvas.addEventListener('pointercancel', () => { down = null; drawing = null; redraw(); });
-  canvas.addEventListener('pointerleave', (ev) => { if (ev.pointerType !== 'touch' && !drawing) onHover?.(null); });
-  let state = { peers: [], shapes: [] };
-  /** shapes: [{mask, alpha, color, label, points}] — with `points` (lasso, grid coords) the smooth polygon is drawn instead of cells */
-  function drawOverlay(s) { state = s; redraw(); }
-  function redraw() {
-    octx.clearRect(0, 0, overlay.width, overlay.height);
-    const fill = (m, color, alpha) => { octx.globalAlpha = alpha; octx.fillStyle = color; for (const [x, y] of maskCells(m)) octx.fillRect(x * F, y * F, F + 0.5, F + 0.5); octx.globalAlpha = 1; };
-    const poly = (pts, color, alpha) => { octx.globalAlpha = alpha; octx.fillStyle = color; octx.beginPath(); octx.moveTo(pts[0][0] * F, pts[0][1] * F); for (const [x, y] of pts) octx.lineTo(x * F, y * F); octx.closePath(); octx.fill(); octx.lineWidth = 3; octx.strokeStyle = color; octx.lineJoin = 'round'; octx.stroke(); octx.globalAlpha = 1; };
+  canvas.addEventListener('pointermove', (ev) => onCursor?.(toWorld(ev)));
+  view.onChange(() => { requestRender(); onViewChange?.(view); });
+  // ---- rendering
+  let state = { layers: [], live: null, shapes: [], peers: [] }, raf = 0;
+  function requestRender() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(); }); }
+  /** layers: [{crop, bitmap}] in order; live: {crop, bitmap|imageData, alpha} own stroke in progress; shapes: [{points|mask, alpha, color, label}] */
+  function setScene(s) { state = { ...state, ...s }; requestRender(); }
+  function render() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const z = view.zoom, r = view.rect();
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    const draw = (bitmap, crop) => { const [sx, sy] = view.toScreen(crop.x, crop.y); ctx.drawImage(bitmap, sx, sy, crop.w * z, crop.h * z); };
+    for (const l of state.layers) if (intersects(r, l.crop)) draw(l.bitmap, l.crop);
+    if (state.live && state.live.bitmap) { ctx.globalAlpha = 1; draw(state.live.bitmap, state.live.crop); }
+    const zf = z / F;
+    ctx.save(); ctx.translate(-view.x * z, -view.y * z); ctx.scale(z, z); ctx.lineJoin = 'round';
     for (const sh of state.shapes) {
-      if (sh.points && sh.points.length > 2) poly(sh.points, sh.color || css('--color-shape') || '#fff', sh.alpha);
-      else fill(sh.mask, sh.color || css('--color-shape') || '#fff', sh.alpha);
-      if (sh.label) { octx.font = `${css('--font-size-small') || '12px'} ${css('--font-family') || 'sans-serif'}`; const w = octx.measureText(sh.label).width + 10; octx.fillStyle = css('--color-pill') || '#E3D0E6'; octx.beginPath(); octx.roundRect(sh.mask.x * F, sh.mask.y * F - 20, w, 18, 6); octx.fill(); octx.fillStyle = css('--color-text') || '#1A1A1A'; octx.fillText(sh.label, sh.mask.x * F + 5, sh.mask.y * F - 7); }
+      ctx.globalAlpha = sh.alpha; ctx.fillStyle = sh.color || css('--color-shape') || '#fff'; ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 2 / z;
+      if (sh.points && sh.points.length > 2) { ctx.beginPath(); ctx.moveTo(sh.points[0][0], sh.points[0][1]); for (const [x, y] of sh.points) ctx.lineTo(x, y); ctx.closePath(); ctx.fill(); ctx.stroke(); }
+      else if (sh.mask) { for (let y = 0; y < sh.mask.h; y++) for (let x = 0; x < sh.mask.w; x++) if (sh.mask.cells[y * sh.mask.w + x]) ctx.fillRect(sh.mask.x + x, sh.mask.y + y, 1.02, 1.02); }
+      ctx.globalAlpha = 1;
     }
-    const r = parseFloat(css('--cursor-dot')) || 5, now = Date.now();
-    for (const p of state.peers) { if (p.x == null || now - p.t > 15000) continue; octx.fillStyle = p.color; octx.beginPath(); octx.arc(p.x * F, p.y * F, r, 0, Math.PI * 2); octx.fill(); }
-    if (drawing && drawing.length > 1) {
-      octx.globalAlpha = parseFloat(css('--shape-drawing-alpha')) || 1; octx.fillStyle = css('--color-shape') || '#fff';
-      octx.beginPath(); octx.moveTo(drawing[0][0] * F, drawing[0][1] * F); for (const [x, y] of drawing) octx.lineTo(x * F, y * F); octx.closePath(); octx.fill();
-      octx.lineWidth = 3; octx.strokeStyle = css('--color-shape') || '#fff'; octx.lineJoin = 'round'; octx.stroke(); octx.globalAlpha = 1;
-    }
+    if (drawing && drawing.length > 1) { ctx.globalAlpha = parseFloat(css('--shape-drawing-alpha')) || 1; ctx.fillStyle = css('--color-shape') || '#fff'; ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 3 / z; ctx.beginPath(); ctx.moveTo(drawing[0][0], drawing[0][1]); for (const [x, y] of drawing) ctx.lineTo(x, y); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.globalAlpha = 1; }
+    ctx.restore();
+    for (const sh of state.shapes) if (sh.label) { const [sx, sy] = view.toScreen(sh.anchor ? sh.anchor[0] : sh.points?.[0]?.[0] ?? sh.mask.x, sh.anchor ? sh.anchor[1] : sh.points?.[0]?.[1] ?? sh.mask.y); ctx.font = `${css('--font-size-small') || '12px'} ${css('--font-family') || 'sans-serif'}`; const w = ctx.measureText(sh.label).width + 10; ctx.fillStyle = css('--color-pill') || '#E3D0E6'; ctx.beginPath(); ctx.roundRect(sx, sy - 22, w, 18, 6); ctx.fill(); ctx.fillStyle = css('--color-text') || '#1A1A1A'; ctx.fillText(sh.label, sx + 5, sy - 9); }
+    const rr = parseFloat(css('--cursor-dot')) || 5, now = Date.now();
+    for (const p of state.peers) { if (p.x == null || now - p.t > 15000) continue; const [sx, sy] = view.toScreen(p.x, p.y); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(sx, sy, rr, 0, Math.PI * 2); ctx.fill(); }
+    void zf;
   }
-  return { canvas, overlay, ctx, fit, drawOverlay, anchorFor, toGrid };
+  /** screen-space bbox of a world rect {x,y,w,h} */
+  const anchorFor = (c) => { const [l, t] = view.toScreen(c.x, c.y); return { left: l, top: t, right: l + c.w * view.zoom, bottom: t + c.h * view.zoom }; };
+  return { canvas, ctx, view, setScene, requestRender, anchorFor, toWorld, get size() { return { w: W, h: H }; } };
 }
