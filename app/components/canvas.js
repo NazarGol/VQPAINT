@@ -19,6 +19,7 @@ export function mountCanvas(stageEl, { getTool, onLasso, onTap, onCursor, onView
     onResize?.(W, H);
   }
   window.addEventListener('resize', resize); resize();
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => { if (stageEl.clientWidth !== W || stageEl.clientHeight !== H) resize(); }).observe(stageEl);   // stylesheet/font load or URL-bar changes resize the stage without a window resize
   canvas.addEventListener('wheel', () => onUserMove?.(), { passive: true });
   canvas.addEventListener('pointerdown', () => { if (getTool() !== 'brush') onUserMove?.(); });
   const toWorld = (ev) => { const r = canvas.getBoundingClientRect(); return view.toWorld(ev.clientX - r.left, ev.clientY - r.top); };
