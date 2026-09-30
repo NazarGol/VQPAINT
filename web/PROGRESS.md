@@ -1,40 +1,33 @@
 # Progress
 
-## Phase 3 (2026-09-30) — new UI to Nazar's design
-- Design text: `web/design/DESIGN.md`. Tokens: `app/tokens.css`. Components: roombar, tools, menu, notes, canvas, loading, toast.
-- Brush = lasso (any free shape), white while drawing; note box appears next to the closed shape; Enter paints; the box turns muted and stays attached. Cursor tool: hover (desktop) / tap (phone) opens the full note.
-- Progress shows as the white shape fading out. Export PNG + notes, undo, clear and effort in the ⋯ menu. Home page and no-WebGPU message in the same style.
-- Engine: free-form masks; blending only where shapes touch painted cells.
-- Screenshots: `app/shots/ui_desktop.png`, `ui_desktop_drawing.png`, `ui_desktop_notebox.png`, `ui_phone.png`, `ui_phone_note.png`, `ui_home.png`, `ui_home_phone.png`.
+## Phase 4 (2026-09-30) — infinite canvas, layers, phones on their own
+0. **Tokens / your items**: Kaggle token stored (`~/.kaggle/access_token`). Kaggle run blocked by the account (no kernel internet, dataset creation 403) → needs phone verification (NEEDS_NAZAR). Hugging Face: waiting for `~/.config/vqpaint/hf_token`. PR #1 merge: pending the final checks.
+1. **Seamless canvas**: 256×256-token world (4096 px), blank = page background colour exactly, pan/zoom/pinch per device, joiners fitted to the painting, only visible layers decoded and cached. Rooms store the grid in chunks and send it run-length encoded.
+2. **Notes hidden**: nothing on the canvas; click/tap a shape opens its note (author, time small); click elsewhere closes.
+3. **Clear canvas removed**; backend caps 2048 cells per message and 40 messages / 10 s per socket.
+4. **Export** (⋯ menu): PNG cropped to the painting; PDF = painting page + one entry per note (crop + text, author, time). `lib/export.js`, test `tools/test_export.mjs` (13/13).
+5. **Smooth edges**: each stroke is a layer (its own crop tokens + lasso path) composited with a feathered polygon alpha → edges follow the lasso, no token steps, no borders between shapes (`app/shots/ui_desktop_edge_closeup.png`).
+6. **Replay** in the ⋯ menu (notes appear one by one) and **export replay video** (WebM in Chrome, MP4 in Safari untested).
+7. **Phones paint themselves**: packed int8 models (decoder 45 MB, CLIP 53 MB), decoder first, CLIP on first stroke; lasso capped at 14 tokens, 1.3× longer search; wake lock while painting; painter pauses in hidden tabs; CPU fallback with the int8 decoder finishes strokes; helpers off by default (⋯ menu). Realism slider (abstract ↔ realistic) in the note box replaces effort.
 
-## Done (phase 2, 2026-09-30) — "notes become a painting"
-1. **Strokes ≠ pasted photos**: irregular masks, mosaic seeds from 4 bank grids in 4×4 patches, edges grown from the canvas, changed-cell crossfade. Before/after: `app/shots/before_after.png`. The painterly look needs the painting bank: notebook ready in `export/paintings/` (NEEDS_NAZAR item 0).
-2. **Long text**: sentence chunks ≤ 75 CLIP tokens, blended target; the status line shows the chunk count and any mid-sentence splits.
-3. **Notes**: every stroke stores text, author, colour, time and mask in the room (Durable Object SQLite). Hover shows it on desktop, tap on touch. Export = PNG + `notes.json`.
-4. **No hard borders**: noisy blob masks, seam crossfade (alpha 1 on changed cells, 0.5→0 over 16 px). A faint ghost of the mask remains on blank canvas.
-5. **Phone**: touch drag paints, tap reads; scrolling layout with the note box first. Lite loading: 89 MB to view (decoder only), +115 MB on first paint. No-WebGPU devices load an int8 decoder (57 MB) and ask the room for a helper; helpers claim, paint with the requester's name, and everyone sees "X is painting … for Y".
-6. **Figma-ready**: `app/tokens.css` holds every colour/font/space/radius/shadow; UI is five DOM components in `app/components/` (topbar, panel, loading, note, canvas).
-
-## Phase 1 (2026-09-29) — still true
-- Live site https://nazargol.github.io/VQPAINT/, rooms on Cloudflare, decoder 237 ms / 256 px Chromium, 409 ms Safari.
-
-## Tests (all pass)
-- `app/test_app.mjs`: two desktop browsers + late joiner + lite joiner + a no-WebGPU peer helped by a desktop.
-- `app/test_phone.mjs --device "iPhone 15" | "Pixel 7"`: emulated phones with a desktop helper.
-- `rooms/npm test`: protocol test against the deployed worker.
-
-## Key numbers
-| what | Chromium (M1 Pro) | Safari 26.6 | iPhone 15 (emulated) | Pixel 7 (emulated) |
+## Numbers (Playwright emulation on the M1 Pro — proves the flow and sizes, not real phone speed)
+| | Chromium desktop | iPhone 15 (WebKit) | Pixel 7 (Chromium) | iPhone, no WebGPU (CPU) |
 |---|---|---|---|---|
-| first download to view | 204 MB (all) | 204 MB | 89 MB | 89 MB |
-| extra download on first paint | – | – | +115 MB | +115 MB |
-| ready to view (local files) | 3.8 s | ~4 s | 2.8 s | 2.1 s |
-| stroke, 6×6 brush, 10 s effort | 10.1 s, 6.5 tries/s | 10.1 s, 4.2 tries/s | 10.7 s, 3.8 tries/s | 10.8 s, 7.4 tries/s |
-| int8 decoder on CPU (no WebGPU), 256 px | 383 ms (Python ORT) vs 1094 ms fp32 | – | – | – |
-| room set round-trip | 43 ms median | | | |
+| download to view | 49 MB (decoder pack + palette) | 49 MB | 49 MB | 61 MB (int8 QDQ decoder) |
+| extra to paint (first stroke) | +59 MB (CLIP pack + bank) | +59 MB | +59 MB | +59 MB |
+| ready to view (local files) | 2–4 s | 1.6 s | 2.8 s | 8.2 s |
+| first stroke incl. CLIP load, 6 s search | 6 s | 18.9 s | 19.2 s | 26.6 s |
+| 16×16-token decode | 220 ms | 420 ms | 232 ms | 6.6 s |
+| e2e tests | all pass | all pass | all pass | pass |
 
-Phone numbers come from Playwright device emulation on the Mac's GPU: they prove the touch flow and the download sizes, not real phone speed. Real devices still to test: WebGPU on iOS 26 Safari, memory for the 512 px full decode, and download over cellular.
+Full painting pack = 108 MB (was 204 MB). Realism 0.6 default = 14 s search on desktop, 18 s on phones.
 
-## Open
-- Painting bank (Kaggle run) — NEEDS_NAZAR item 0.
-- Hugging Face hosting — NEEDS_NAZAR item 1.
+## Real phone test list (what emulation cannot tell)
+1. Open the live link on the phone, create a room: does the decoder load (45 MB) and does the page show the dark canvas within ~30 s on Wi-Fi?
+2. Draw a lasso with one finger (brush tool), type a note, press Enter: does a stroke appear within ~40 s? Does the phone stay awake?
+3. Cursor tool: one-finger pan, pinch zoom, tap a shape → note opens, tap elsewhere → closes.
+4. Switch apps mid-stroke and come back: the stroke should continue and finish.
+5. Join from the phone a room painted on the laptop: it should open looking at the painting.
+6. Safari on iPhone: ⋯ → export replay video (the MP4 path is untested).
+
+## Earlier phases: see git history and DECISIONS.md.

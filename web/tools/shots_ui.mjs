@@ -79,14 +79,15 @@ if (fs.existsSync(path.join(root, 'lib', 'export.js'))) {
   await D.screenshot({ path: path.join(out, 'ui_desktop_replay.png') });
   await D.waitForTimeout(6000);
 }
-console.log('desktop done');
+console.log('desktop done, room', roomId, 'server notes:', (await (await fetch(`https://vqpaint-rooms.vqpaint-rooms.workers.dev/room/${roomId}/state`)).json()).notes.length);
 const Hd = await browser.newPage({ viewport: { width: 1280, height: 800 } }); await Hd.goto(base + 'index.html'); await Hd.waitForTimeout(800); await Hd.screenshot({ path: path.join(out, 'ui_home.png') }); await Hd.close();
 // phone (iPhone emulation) joins the same room: fitted to the painting; tap a note
 const wk = await webkit.launch({ headless: true });
 const pctx = await wk.newContext({ ...devices['iPhone 15'] });
 const P = await pctx.newPage();
 await P.goto(base + 'room.html' + q);
-await P.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready && window.__vqpaint.strokes.length >= 3 && window.__vqpaint.layers && window.__vqpaint.layers.has(window.__vqpaint.strokes[0].id), null, { timeout: 180000 });
+P.on('pageerror', (e) => console.log('[phone pageerror]', e.message)); P.on('console', (m) => { if (m.type() === 'error') console.log('[phone console]', m.text().slice(0, 160)); });
+for (let i = 0; i < 60; i++) { const st = await P.evaluate(() => ({ ready: !!(window.__vqpaint && window.__vqpaint.ready), strokes: window.__vqpaint ? window.__vqpaint.strokes.length : -1, has: !!(window.__vqpaint && window.__vqpaint.layers && window.__vqpaint.strokes[0] && window.__vqpaint.layers.has(window.__vqpaint.strokes[0].id)) })); if (i % 5 === 0) console.log('phone', i, JSON.stringify(st)); if (st.ready && st.strokes >= 3 && st.has) break; await P.waitForTimeout(2000); }
 await P.waitForTimeout(1500);
 await P.screenshot({ path: path.join(out, 'ui_phone.png') });
 await P.click('[data-tool="cursor"]', { force: true });

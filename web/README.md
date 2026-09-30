@@ -115,7 +115,13 @@ git clone --depth 1 https://github.com/CompVis/taming-transformers.git web/expor
 
 ## UI
 
-The design is the text in `design/DESIGN.md`. Whole screen is the canvas; the brush is a lasso; a note box appears next to the closed shape; Enter paints it; the cursor tool reads notes on hover or tap. Tokens in `app/tokens.css`, components in `app/components/` (roombar, tools, menu, notes, canvas, loading, toast).
+The design is the text in `design/DESIGN.md`. The whole screen is a window onto a large canvas (pan with the cursor tool, wheel/pinch to zoom); the brush is a lasso; a note box with an abstract↔realistic slider appears next to the closed shape; Enter paints it. Notes are hidden until you click or tap a shape. The ⋯ menu has undo, export PNG, export PDF (painting + one entry per note), replay and replay video. Tokens in `app/tokens.css`, components in `app/components/`.
+
+### How a stroke is stored
+Each note carries its crop tokens, its lasso path and the realism value. Browsers decode the crop once, apply a feathered polygon alpha and cache the bitmap (`lib/layers.js`); the canvas is the composition of these layers in time order, so edges follow the lasso and replay/export come from the same data. The shared token grid (256×256, run-length synced) is the search context for new strokes.
+
+### Models
+Weight-only int8 packs rebuilt to fp16 in the browser (`lib/pack.js`, `export/pack_weights.py`): decoder 45 MB, CLIP vision 12 MB, CLIP text 41 MB. Phones load the decoder first and the CLIP pack on the first stroke. Devices without WebGPU use the int8 QDQ decoder on the CPU.
 
 ## Layout
 
