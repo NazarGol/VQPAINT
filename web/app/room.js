@@ -388,7 +388,7 @@ function ensureBrush() {
       vis = txt = null; }
       setStage('clip-ready'); beacon('clip-ready');
     }
-    if (!bank) { try { bank = await Bank.load(M + 'bank/'); } catch (e) { console.warn('bank not available', e); bank = null; } }
+    if (!bank) { try { bank = await Bank.load(M + (/^[a-z_]+$/.test(params.get('bank') || '') ? params.get('bank') : 'bank') + '/'); } catch (e) { console.warn('bank not available', e); bank = null; } }   // ?bank=bank_photos keeps the old photo bank for comparisons
     painter = new Painter({ decoder, clip, palette, bank });
     setStage('brush-ready');
     modelsLoaded = true; caps.paint = true; room?.setCaps(caps);
