@@ -1,0 +1,57 @@
+{
+  "prompt": "the sea at night",
+  "seconds": 60,
+  "grid": 16,
+  "region": 16,
+  "opts": {
+    "seeds": 6,
+    "margin": 2,
+    "temperature": 0.03,
+    "topK": 512,
+    "keep": 0,
+    "useBank": true,
+    "bankTop": 24
+  },
+  "timings": {
+    "fetch_ms": 472,
+    "sessions_ms": 887,
+    "text_embed_ms": 50,
+    "image_embed_ms": 23
+  },
+  "snapshots": {
+    "10": {
+      "step": 46,
+      "accepted": 4,
+      "score": 0.2589
+    },
+    "30": {
+      "step": 133,
+      "accepted": 5,
+      "score": 0.2652
+    },
+    "60": {
+      "step": 261,
+      "accepted": 7,
+      "score": 0.2938
+    }
+  },
+  "errors": [],
+  "gpu": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "f16": true
+  },
+  "model_bytes": {
+    "decoder_fp16.onnx": 0,
+    "vision_model_fp16.onnx": 0,
+    "text_model_fp16.onnx": 0
+  },
+  "steps_per_s": 4.34,
+  "final": {
+    "score": 0.2938,
+    "steps": 261,
+    "accepted": 7,
+    "elapsed": 60.1,
+    "steps_per_s": 4.35
+  }
+}

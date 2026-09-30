@@ -1,0 +1,47 @@
+{
+  "prompt": "a face",
+  "seconds": 20,
+  "grid": 16,
+  "region": 16,
+  "opts": {
+    "seeds": 6,
+    "margin": 2,
+    "temperature": 0.03,
+    "topK": 512,
+    "keep": 0,
+    "useBank": true,
+    "bankTop": 24
+  },
+  "timings": {
+    "fetch_ms": 287,
+    "sessions_ms": 1276,
+    "text_embed_ms": 49,
+    "image_embed_ms": 23
+  },
+  "snapshots": {
+    "10": {
+      "step": 23,
+      "accepted": 0,
+      "score": 0.2042
+    }
+  },
+  "errors": [],
+  "gpu": {
+    "vendor": "apple",
+    "architecture": "apple",
+    "f16": true
+  },
+  "model_bytes": {
+    "decoder_fp16.onnx": 0,
+    "vision_model_fp16.onnx": 0,
+    "text_model_fp16.onnx": 0
+  },
+  "steps_per_s": 2.28,
+  "final": {
+    "score": 0.2068,
+    "steps": 46,
+    "accepted": 2,
+    "elapsed": 20.2,
+    "steps_per_s": 2.27
+  }
+}

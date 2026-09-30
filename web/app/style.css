@@ -1,0 +1,62 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap");
+@import url("tokens.css");
+/* Layout and components. Only tokens are used for colour, type, spacing, radius. No borders, no shadows. */
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--color-bg); color: var(--color-text-on-bg); font: var(--font-weight) var(--font-size)/var(--line-height) var(--font-family); }
+button, input, textarea { font: inherit; color: var(--color-text); border: 0; outline: 0; }
+a { color: inherit; }
+.pill { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--pill-padding); border-radius: var(--radius); background: var(--color-pill); color: var(--color-text); white-space: nowrap; cursor: default; }
+button.pill { cursor: pointer; transition: background var(--transition); }
+button.pill:disabled { opacity: 0.5; cursor: default; }
+.pill.active { background: var(--color-pill-active); }
+.pill.done { background: var(--color-pill-done); color: var(--color-text-on-done); }
+.quiet { color: var(--color-text-on-bg); font-size: var(--font-size-small); }
+.dot { width: var(--dot-size); height: var(--dot-size); border-radius: 50%; display: inline-block; }
+/* room: the stage covers the viewport; the canvas is centred and fitted; UI floats on top */
+.stage { position: fixed; inset: 0; overflow: hidden; background: var(--color-bg); }
+.stage canvas { position: absolute; touch-action: none; }
+.stage canvas.overlay { pointer-events: none; z-index: 1; }
+.ui { position: fixed; z-index: var(--z-ui); display: flex; gap: var(--space-2); align-items: center; }
+.ui.top-left { top: var(--space-3); left: var(--space-3); flex-wrap: wrap; max-width: calc(100vw - 24px); }
+.ui.top-right { top: var(--space-3); right: var(--space-3); }
+.ui.bottom-centre { bottom: var(--space-4); left: 50%; transform: translateX(-50%); }
+.ui.bottom-left { bottom: var(--space-4); left: var(--space-3); }
+.peers { display: inline-flex; gap: var(--space-1); align-items: center; padding: 0 var(--space-1); }
+.tool { width: var(--tool-size); height: var(--tool-size); padding: 0; justify-content: center; }
+.tool svg { width: 20px; height: 20px; display: block; }
+.menu { position: relative; }
+.menu .items { position: absolute; right: 0; top: calc(100% + var(--space-2)); display: flex; flex-direction: column; gap: var(--space-1); background: var(--color-pill); border-radius: var(--radius); padding: var(--space-1); min-width: 180px; }
+.menu .items[hidden] { display: none; }
+.menu .items button { text-align: left; background: transparent; padding: var(--pill-padding); border-radius: var(--radius); cursor: pointer; }
+.menu .items button:hover, .menu .items button.on { background: var(--color-pill-active); }
+/* note boxes attached to shapes */
+.note { position: absolute; z-index: var(--z-note); max-width: var(--note-max-width); border-radius: var(--radius); padding: var(--pill-padding); background: var(--color-pill-active); color: var(--color-text); }
+.note textarea { width: 240px; min-height: 1.4em; max-height: 40vh; resize: none; background: transparent; padding: 0; display: block; overflow: hidden; }
+.note .hint { font-size: var(--font-size-small); opacity: 0.7; margin-top: var(--space-1); }
+.note.done { background: var(--color-pill-done); color: var(--color-text-on-done); max-width: var(--note-pill-max-width); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
+.note.done.open { max-width: var(--note-max-width); white-space: pre-wrap; z-index: calc(var(--z-note) + 1); }
+.note.done .meta { font-size: var(--font-size-small); opacity: 0.8; }
+.note[hidden] { display: none; }
+/* status pill, loading pill, messages */
+.toast { pointer-events: none; }
+.toast[hidden] { display: none; }
+.message { position: fixed; z-index: var(--z-ui); left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: min(360px, calc(100vw - 32px)); white-space: normal; text-align: center; padding: var(--space-4); }
+.message[hidden] { display: none; }
+/* home page */
+.home { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); padding: var(--space-6); }
+.home .title { font-weight: var(--font-weight-medium); }
+.home input { padding: var(--pill-padding); border-radius: var(--radius); background: var(--color-pill); width: 260px; }
+.home .row { display: flex; gap: var(--space-2); flex-wrap: wrap; justify-content: center; }
+/* phone */
+@media (max-width: 700px) {
+  .ui.top-left { max-width: calc(100vw - 24px); }
+  .note textarea { width: min(240px, calc(100vw - 60px)); }
+  .note.editing { position: fixed; left: var(--space-3); right: var(--space-3); bottom: calc(var(--space-4) + var(--tool-size) + var(--space-4)); max-width: none; }
+  .note.editing textarea { width: 100%; }
+  .home input { width: min(260px, calc(100vw - 48px)); }
+}
+/* infinite canvas: the world canvas covers the stage; slider in the note box */
+.stage canvas.world { position: absolute; inset: 0; touch-action: none; }
+.note .slider { display: flex; align-items: center; gap: var(--space-2); font-size: var(--font-size-small); margin-top: var(--space-1); }
+.note .slider input { flex: 1; accent-color: var(--color-pill-done); }

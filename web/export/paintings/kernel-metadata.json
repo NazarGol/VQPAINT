@@ -1,0 +1,17 @@
+{
+  "id": "noi3noi3/vqpaint-paintings",
+  "title": "vqpaint paintings",
+  "code_file": "vqpaint_paintings_kaggle.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "dataset_sources": [
+    "noi3noi3/vqpaint-assets"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

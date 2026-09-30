@@ -1,0 +1,30 @@
+<!doctype html><meta charset="utf-8"><title>cache probe</title><pre id="o">probing Cache Storage…</pre>
+<script type="module">
+// Stores blobs of several sizes in Cache Storage, reloads once, reports which ones survive. POSTs results to /__results.
+const o = document.getElementById('o');
+const sizes = [1, 10, 50, 100];
+const key = 'vqpaint-cache-probe';
+const res = { ua: navigator.userAgent, phase: sessionStorage.getItem(key) ? 'after-reload' : 'first', results: {}, errors: [] };
+try {
+  const c = await caches.open('vqpaint-cache-probe');
+  if (res.phase === 'first') {
+    for (const mb of sizes) {
+      try { await c.put(`/probe/${mb}mb`, new Response(new Uint8Array(mb * 1e6), { headers: { 'Content-Type': 'application/octet-stream' } })); res.results[mb] = 'stored'; }
+      catch (e) { res.results[mb] = 'put failed: ' + e.message; }
+    }
+    for (const mb of sizes) { const m = await c.match(`/probe/${mb}mb`); res.results[mb] += m ? ` / match ok (${(await m.arrayBuffer()).byteLength})` : ' / match MISSING before reload'; }
+    if (navigator.storage && navigator.storage.estimate) res.estimate = await navigator.storage.estimate();
+    sessionStorage.setItem(key, '1');
+    o.textContent = JSON.stringify(res, null, 1);
+    await fetch('/__results_first', { method: 'POST', body: '{}' }).catch(() => {});
+    location.reload();
+  } else {
+    for (const mb of sizes) { const m = await c.match(`/probe/${mb}mb`); res.results[mb] = m ? `survived reload (${(await m.arrayBuffer()).byteLength})` : 'GONE after reload'; }
+    if (navigator.storage && navigator.storage.estimate) res.estimate = await navigator.storage.estimate();
+    sessionStorage.removeItem(key);
+    await c.keys().then((ks) => Promise.all(ks.map((k) => c.delete(k))));
+    o.textContent = JSON.stringify(res, null, 1);
+    await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(res) }).catch(() => {});
+  }
+} catch (e) { res.errors.push(String(e)); o.textContent = JSON.stringify(res, null, 1); await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(res) }).catch(() => {}); }
+</script>

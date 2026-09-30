@@ -1,0 +1,24 @@
+[
+  {
+    "prompt": "a face",
+    "score": 0.2068,
+    "steps": 46,
+    "accepted": 2,
+    "elapsed": 20.2,
+    "steps_per_s": 2.27,
+    "snapshots": {
+      "10": {
+        "step": 23,
+        "accepted": 0,
+        "score": 0.2042
+      }
+    },
+    "timings": {
+      "fetch_ms": 287,
+      "sessions_ms": 1276,
+      "text_embed_ms": 49,
+      "image_embed_ms": 23
+    },
+    "errors": []
+  }
+]
