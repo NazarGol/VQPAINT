@@ -311,20 +311,27 @@ function requestHelp(mask, text, points, realism, { parent = null, photo = null,
   const req = { id: Math.random().toString(36).slice(2, 10), text, mask: maskToString(mask), path: points, realism, parent: parent || undefined, photo: photo ? photo.data : undefined, lang: noteLang || undefined };
   if (!room) { setStatus(t('status.notConnected')); return; }
   room.paintRequest(req);
-  const entry = { req, mask, points, realism, timer: null, assigned: null };
+  const entry = { req, mask, text, points, realism, parent, photo, lang: noteLang, timer: null, assigned: null };
   myRequests.set(req.id, entry);
   setStatus(t('status.helperWill', { name: peerName(bestHelper().id) }), 6000);
-  entry.timer = setTimeout(async () => { if (!myRequests.has(req.id) || entry.assigned) return; myRequests.delete(req.id); room.paintDone(req.id, false); await ensureBrush(); paintMask(mask, text, { points, realism, parent, photo, lang: noteLang }); }, 8000);
+  entry.timer = setTimeout(() => { if (!myRequests.has(req.id) || entry.assigned) return; myRequests.delete(req.id); room.paintDone(req.id, false); paintHere(entry); }, 12000);   // nobody claimed: paint here if this device can
+}
+/** the fallback when no helper takes (or finishes) a request: paint on this device, or say why not */
+async function paintHere(e) {
+  if (forceNoPaint) { setStatus(t('status.noPaint'), 6000); return; }
+  try { if (e.photo && lowMem) await encodePhotoTokens(e.photo); await ensureBrush(); } catch (err) { setStatus(t('status.brushFailed', { error: err.message }), 8000); return; }
+  paintMask(e.mask, e.text, { points: e.points, realism: e.realism, parent: e.parent, photo: e.photo, lang: e.lang });
 }
 function onPaintRequest(req) { if (!req || req.from === room?.id || !helpersOn) return; openRequests.set(req.id, req); setTimeout(claimNextRequest, 200 + Math.min(2000, (caps.speed || 1000) / 4) + Math.random() * 300); }
-async function claimNextRequest() { if (!helpersOn || lowMem || painting || !room || safeMode) return; const req = [...openRequests.values()].find((r) => !r.by); if (!req) return; try { await ensureBrush(); } catch { return; } room.paintClaim(req.id); }
+function claimNextRequest() { if (!helpersOn || lowMem || painting || ensuring || !room || safeMode) return; const req = [...openRequests.values()].find((r) => !r.by); if (!req) return; room.paintClaim(req.id); }   // claim first (instant), load the brush once assigned
 function onPaintAssigned({ id, by, for: forId }) {
   const req = openRequests.get(id), mine = myRequests.get(id);
   if (mine) { mine.assigned = by; setStatus(t('status.helperIs', { name: peerName(by) }), 6000); }
   if (req) req.by = by;
-  if (req && by === room?.id && !painting) { openRequests.delete(id); paintMask(maskFromString(req.mask), req.text, { author: req.author, color: req.color, forId, reqId: id, points: req.path || null, realism: req.realism ?? 0.6, parent: req.parent || null, photo: req.photo ? { data: req.photo } : null, lang: req.lang || null }); }
+  if (req && by === room?.id && !painting) { openRequests.delete(id); (async () => { try { await ensureBrush(); } catch (e) { console.warn('helper brush', e); room.paintDone(id, false); return; }
+    paintMask(maskFromString(req.mask), req.text, { author: req.author, color: req.color, forId, reqId: id, points: req.path || null, realism: req.realism ?? 0.6, parent: req.parent || null, photo: req.photo ? { data: req.photo } : null, lang: req.lang || null }); })(); }
 }
-function onPaintDone({ id, ok }) { openRequests.delete(id); const mine = myRequests.get(id); if (mine) { clearTimeout(mine.timer); myRequests.delete(id); if (!ok) setStatus(t('status.helperFailed')); } setTimeout(claimNextRequest, 300); }
+function onPaintDone({ id, ok }) { openRequests.delete(id); const mine = myRequests.get(id); if (mine) { clearTimeout(mine.timer); myRequests.delete(id); if (!ok) { setStatus(t('status.helperFailed'), 5000); paintHere(mine); } } setTimeout(claimNextRequest, 300); }
 
 // ---------- models ----------
 const M = (params.get('models') === 'pages' || !CONFIG.modelFallback) ? (CONFIG.modelFallback || CONFIG.modelBase) : CONFIG.modelBase, prog = {};
