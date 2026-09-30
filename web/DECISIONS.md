@@ -16,3 +16,10 @@
 - 2026-09-29 Model bytes kept in Cache Storage (not IndexedDB): survives reloads in Chromium and real Safari 26 (probe: 100 MB entries kept, quota 82 GB). Playwright's headless WebKit profile drops them, so the WebKit e2e cache check is expected to fail.
 - 2026-09-29 Rooms tested at 10 s strokes: two browsers on the live site stay in sync; no server-side decode anywhere.
 - 2026-09-29 Painter pauses while `document.visibilityState` is hidden: real Safari 26 stalls WebGPU runs in background tabs (108 s for one decode), which is what broke every automated Safari run of the app; Chromium and Playwright WebKit do not stall.
+- 2026-09-30 Strokes are irregular masks (value-noise blob per brush), not rectangles; decoded with a 2-token margin and crossfaded with a per-pixel alpha (1 on changed cells, 0.5→0 over 16 px). Ghost outlines on blank canvas are much weaker but not zero.
+- 2026-09-30 Seeds are mosaics: each stroke mixes 4 of the 24 retrieved bank grids in 4×4-token patches, and edge cells copy their neighbouring canvas tokens, so no stroke is one pasted image. Painterly look waits on the painting bank (notebook in web/export/paintings).
+- 2026-09-30 Long notes: sentence chunks ≤75 CLIP tokens, merged greedily, one blended unit target weighted by √tokens. Mid-sentence splits are counted and shown, never silent.
+- 2026-09-30 Notes live in the room's Durable Object (SQLite table, cap 5000) and travel in `state`; export = PNG + notes JSON with masks.
+- 2026-09-30 Helpers: a device that cannot paint (no WebGPU, or lite + a 2× faster idle peer) sends `paint_request`; first `paint_claim` wins; the helper paints with the requester's name on the note; `paint_start/end` show who paints what. If nobody claims in 8 s the requester paints itself when it can.
+- 2026-09-30 No-WebGPU devices get an int8 QDQ decoder (57 MB, 3× faster on CPU than fp16, mean pixel error 0.04); phones load the decoder first and the CLIP models on first paint.
+- 2026-09-30 UI = five components (topbar, panel, loading, note, canvas) on plain DOM; every colour/font/space/radius is a custom property in app/tokens.css; style.css only references tokens.

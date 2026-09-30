@@ -8,6 +8,7 @@ Each photo is centre-cropped and encoded at 4 sizes: 64/96/128/256 px -> 4x4, 6x
 Writes ../models/bank/: bank_tokens_{4,6,8,16}.u16, bank_pca128.f16, bank_basis.f32, bank_meandot.f32, bank.json
 and contact sheets to ../spike2/results/bank_top8_*.png.
 """
+import argparse
 import glob
 import io
 import json
@@ -29,7 +30,13 @@ MODELS = os.path.normpath(os.path.join(HERE, "..", "models"))
 OUT = os.path.join(MODELS, "bank"); RES = os.path.normpath(os.path.join(HERE, "..", "spike2", "results"))
 os.makedirs(OUT, exist_ok=True); os.makedirs(RES, exist_ok=True)
 SIZES = [4, 6, 8, 16]
-MAX_FACES = int(os.environ.get("MAX_FACES", 1500))
+ap = argparse.ArgumentParser(description="Build the token bank from COCO + CelebA (default) and/or folders of images (e.g. generated paintings).")
+ap.add_argument("--images-dir", action="append", default=[], metavar="DIR", help="folder of *.png/*.jpg (recursive), labelled source='paintings'; repeatable")
+ap.add_argument("--no-coco", action="store_true", help="skip data/val2017")
+ap.add_argument("--no-celeba", action="store_true", help="skip data/celeba_val.parquet")
+ap.add_argument("--max-faces", type=int, default=int(os.environ.get("MAX_FACES", 1500)), help="CelebA images to use (default 1500 or $MAX_FACES)")
+args = ap.parse_args()
+MAX_FACES = args.max_faces
 B = 32
 dev = "mps" if torch.backends.mps.is_available() else "cpu"
 
@@ -47,17 +54,21 @@ def center_crop(im, side):
 
 
 def images():
-    for p in sorted(glob.glob(os.path.join(HERE, "data", "val2017", "*.jpg"))):
+    for p in sorted(glob.glob(os.path.join(HERE, "data", "val2017", "*.jpg"))) if not args.no_coco else []:
         try: yield "coco", Image.open(p).convert("RGB")
         except Exception: continue
     pq_path = os.path.join(HERE, "data", "celeba_val.parquet")
-    if os.path.exists(pq_path):
+    if os.path.exists(pq_path) and not args.no_celeba:
         import pyarrow.parquet as pq
         t = pq.read_table(pq_path)
         col = next(c for c in t.column_names if "image" in c)
         for i, row in enumerate(t.column(col).to_pylist()):
             if i >= MAX_FACES: break
             yield "celeba", Image.open(io.BytesIO(row["bytes"])).convert("RGB")
+    for d in args.images_dir:  # e.g. web/export/data/paintings from web/export/paintings/gen_paintings.py
+        for p in sorted(p for ext in ("*.png", "*.jpg", "*.jpeg") for p in glob.glob(os.path.join(d, "**", ext), recursive=True)):
+            try: yield "paintings", Image.open(p).convert("RGB")
+            except Exception: continue
 
 
 tokens = {s: [] for s in SIZES}; embs = []; sources = []; thumbs = []
@@ -88,8 +99,9 @@ for i, (src, im) in enumerate(images()):
             print(f"[bank] {i + 1} images, {time.time() - t0:.0f}s", flush=True)
 flush()
 N = len(sources)
+if N == 0: sys.exit("[bank] no images found (check --images-dir / --no-coco / --no-celeba)")
 emb = np.concatenate(embs); thumbs = np.concatenate(thumbs)
-print(f"[bank] {N} images ({sources.count('coco')} coco, {sources.count('celeba')} celeba) in {time.time() - t0:.0f}s")
+print(f"[bank] {N} images ({sources.count('coco')} coco, {sources.count('celeba')} celeba, {sources.count('paintings')} paintings) in {time.time() - t0:.0f}s")
 
 mean = emb.mean(0)
 U, S, Vt = np.linalg.svd(emb - mean, full_matrices=False)
@@ -99,8 +111,9 @@ for s in SIZES: np.concatenate(tokens[s]).astype(np.uint16).tofile(os.path.join(
 proj.astype(np.float16).tofile(os.path.join(OUT, "bank_pca128.f16"))
 np.concatenate([mean, comps.ravel()]).astype(np.float32).tofile(os.path.join(OUT, "bank_basis.f32"))
 (emb @ mean).astype(np.float32).tofile(os.path.join(OUT, "bank_meandot.f32"))
-json.dump({"n": N, "sizes": SIZES, "pca_dim": 128, "embed_dim": 512, "mean_norm2": float(mean @ mean), "sources": {"coco": sources.count("coco"), "celeba": sources.count("celeba")},
-           "license_note": "COCO val2017 (Flickr, CC licences) and CelebA-HQ (research use). Token grids only, no pixels shipped."},
+json.dump({"n": N, "sizes": SIZES, "pca_dim": 128, "embed_dim": 512, "mean_norm2": float(mean @ mean), "sources": {"coco": sources.count("coco"), "celeba": sources.count("celeba"), "paintings": sources.count("paintings")},
+           "license_note": "COCO val2017 (Flickr, CC licences) and CelebA-HQ (research use). Token grids only, no pixels shipped."
+           + (" Paintings: generated with VQGAN+CLIP (web/export/paintings)." if sources.count("paintings") else "")},
           open(os.path.join(OUT, "bank.json"), "w"))
 print("[bank] sizes:", {f: f"{os.path.getsize(os.path.join(OUT, f)) / 2**20:.2f} MiB" for f in sorted(os.listdir(OUT))})
 

@@ -15,6 +15,10 @@ const MAX_MSG_CHARS = 64 * 1024; // text frames above this are closed with 1009
 const MAX_CELLS = 4096;         // cells per "set" message; bigger messages are dropped
 const MAX_TOKEN = 16384;        // tokens are 0..16383
 const MIN_DIM = 8, MAX_DIM = 64, DEFAULT_DIM = 32;
+const MAX_NOTES = 5000;         // notes kept per room (oldest dropped)
+const MAX_NOTE_TEXT = 4000;     // chars
+const MAX_MASK_STR = 4000;      // chars of the mask string
+const MAX_REQUESTS = 64;        // open helper requests per room
 const SAVE_DEBOUNCE_MS = 300;
 const PALETTE = ['#ff8800', '#00b3ff', '#7cff00', '#ff2d95', '#ffd400', '#9d5cff', '#00e5a0', '#ff4d4d'];
 
@@ -47,6 +51,17 @@ function clampDim(raw) {
   return Math.min(MAX_DIM, Math.max(MIN_DIM, n));
 }
 
+function cleanCaps(c) {
+  if (!c || typeof c !== 'object') return null;
+  return { paint: !!c.paint, speed: Number.isFinite(+c.speed) ? Math.round(+c.speed) : null, gpu: !!c.gpu };
+}
+function cleanNote(n, att) {
+  if (!n || typeof n !== 'object' || typeof n.id !== 'string' || !n.id || n.id.length > 16) return null;
+  if (typeof n.text !== 'string' || !n.text.trim() || n.text.length > MAX_NOTE_TEXT) return null;
+  if (typeof n.mask !== 'string' || !n.mask || n.mask.length > MAX_MASK_STR) return null;
+  return { id: n.id, text: n.text, author: typeof n.author === 'string' ? n.author.slice(0, 24) : att.name, color: typeof n.color === 'string' && COLOR_RE.test(n.color) ? n.color : att.color,
+           time: Number.isFinite(+n.time) ? +n.time : Date.now(), mask: n.mask, by: att.id };
+}
 function defaultColor(id) {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
@@ -79,6 +94,8 @@ export class Room {
     this.tokens = null; // Int32Array(w*h) once the room exists
     this.dirty = false;
     this.saveTimer = null;
+    this.notes = [];             // [{id, text, author, color, time, mask}] in insertion order (SQLite table 'notes')
+    this.requests = new Map();   // helper jobs: id -> {id, text, mask, author, color, from, by}
     // Pings are answered by the runtime without waking a hibernated object.
     try {
       ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"t":"ping"}', '{"t":"pong"}'));
@@ -101,7 +118,32 @@ export class Room {
       const src = new Int32Array(buf);
       this.tokens.set(src.subarray(0, Math.min(n, src.length)));
     }
+    this.loadNotes();
+    const reqs = await this.ctx.storage.get('requests');
+    if (Array.isArray(reqs)) for (const r of reqs) this.requests.set(r.id, r);
   }
+
+  // ---- notes (SQLite) -------------------------------------------------------
+  sql() { return this.ctx.storage.sql; }
+  loadNotes() {
+    try {
+      this.sql().exec('CREATE TABLE IF NOT EXISTS notes (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE, json TEXT)');
+      this.notes = this.sql().exec('SELECT json FROM notes ORDER BY seq').toArray().map((r) => JSON.parse(r.json));
+    } catch (e) { console.error('notes table', e); this.notes = []; }
+  }
+  addNote(note) {
+    this.notes = this.notes.filter((n) => n.id !== note.id); this.notes.push(note);
+    try {
+      this.sql().exec('INSERT OR REPLACE INTO notes (id, json) VALUES (?, ?)', note.id, JSON.stringify(note));
+      if (this.notes.length > MAX_NOTES) { const drop = this.notes.splice(0, this.notes.length - MAX_NOTES); for (const n of drop) this.sql().exec('DELETE FROM notes WHERE id = ?', n.id); }
+    } catch (e) { console.error('note insert', e); }
+  }
+  removeNote(id) {
+    const before = this.notes.length; this.notes = this.notes.filter((n) => n.id !== id);
+    try { this.sql().exec('DELETE FROM notes WHERE id = ?', id); } catch (e) { console.error('note delete', e); }
+    return this.notes.length !== before;
+  }
+  saveRequests() { this.ctx.storage.put('requests', [...this.requests.values()]).catch((e) => console.error('requests save', e)); }
 
   init(params) {
     this.w = clampDim(params.get('w'));
@@ -139,7 +181,7 @@ export class Room {
 
     if (kind === 'state') {
       if (!this.tokens) return json({ error: 'room does not exist yet' }, 404);
-      return json({ w: this.w, h: this.h, v: this.v, tokens: Array.from(this.tokens) });
+      return json({ w: this.w, h: this.h, v: this.v, tokens: Array.from(this.tokens), notes: this.notes });
     }
 
     if (kind === 'ws') {
@@ -178,14 +220,17 @@ export class Room {
       case 'hello': {
         const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim().slice(0, 24) : 'anon';
         const color = typeof data.color === 'string' && COLOR_RE.test(data.color) ? data.color.toLowerCase() : defaultColor(att.id);
-        att = { id: att.id, ready: true, name, color };
+        const caps = cleanCaps(data.caps);
+        att = { id: att.id, ready: true, name, color, caps };
         ws.serializeAttachment(att);
         ws.send(JSON.stringify({
           t: 'state', id: att.id, w: this.w, h: this.h, v: this.v,
           tokens: Array.from(this.tokens),
           peers: this.peers().filter((p) => p.id !== att.id),
+          notes: this.notes,
+          requests: [...this.requests.values()],
         }));
-        this.broadcast(JSON.stringify({ t: 'join', peer: { id: att.id, name, color } }), ws);
+        this.broadcast(JSON.stringify({ t: 'join', peer: { id: att.id, name, color, caps } }), ws);
         return;
       }
       case 'ping':
@@ -220,6 +265,55 @@ export class Room {
         this.broadcast(JSON.stringify({ t: 'cursor', id: att.id, x, y }), ws);
         return;
       }
+      case 'caps': {
+        att.caps = cleanCaps(data.caps); ws.serializeAttachment(att);
+        this.broadcast(JSON.stringify({ t: 'peer', peer: { id: att.id, name: att.name, color: att.color, caps: att.caps } }), ws);
+        return;
+      }
+      case 'note': {
+        const n = cleanNote(data.note, att);
+        if (!n) return;
+        this.addNote(n);
+        this.broadcast(JSON.stringify({ t: 'note', note: n }), ws);
+        return;
+      }
+      case 'note_delete': {
+        if (typeof data.id !== 'string') return;
+        if (this.removeNote(data.id)) this.broadcast(JSON.stringify({ t: 'note_delete', id: data.id }), ws);
+        return;
+      }
+      case 'paint_request': {   // a device that cannot paint asks the room to paint for it
+        const r = data.req;
+        if (!r || typeof r.id !== 'string' || r.id.length > 16 || typeof r.text !== 'string' || typeof r.mask !== 'string') return;
+        if (r.text.length > MAX_NOTE_TEXT || r.mask.length > MAX_MASK_STR || this.requests.size >= MAX_REQUESTS) return;
+        const req = { id: r.id, text: r.text, mask: r.mask, author: att.name, color: att.color, from: att.id, by: null, time: Date.now() };
+        this.requests.set(req.id, req); this.saveRequests();
+        this.broadcast(JSON.stringify({ t: 'paint_request', req }), ws);
+        return;
+      }
+      case 'paint_claim': {
+        const req = this.requests.get(data.id);
+        if (!req || req.by) return;                       // first claim wins
+        req.by = att.id; this.saveRequests();
+        this.broadcast(JSON.stringify({ t: 'paint_assigned', id: req.id, by: att.id, for: req.from }));
+        return;
+      }
+      case 'paint_done': {
+        const req = this.requests.get(data.id);
+        if (!req || (req.by !== att.id && req.from !== att.id)) return;
+        this.requests.delete(req.id); this.saveRequests();
+        this.broadcast(JSON.stringify({ t: 'paint_done', id: req.id, ok: data.ok !== false }));
+        return;
+      }
+      case 'paint_start': {
+        if (typeof data.mask !== 'string' || data.mask.length > MAX_MASK_STR) return;
+        this.broadcast(JSON.stringify({ t: 'paint_start', id: String(data.id || '').slice(0, 16), by: att.id, for: typeof data.for === 'string' ? data.for.slice(0, 16) : null, mask: data.mask, text: String(data.text || '').slice(0, 80) }), ws);
+        return;
+      }
+      case 'paint_end': {
+        this.broadcast(JSON.stringify({ t: 'paint_end', id: String(data.id || '').slice(0, 16), by: att.id }), ws);
+        return;
+      }
     }
   }
 
@@ -243,6 +337,13 @@ export class Room {
     if (att && att.ready) {
       try { ws.serializeAttachment({ ...att, ready: false }); } catch { /* ignore */ }
       this.broadcast(JSON.stringify({ t: 'leave', id: att.id }), ws);
+      // helper jobs: drop what this peer asked for, re-offer what it was painting
+      let changed = false;
+      for (const req of [...this.requests.values()]) {
+        if (req.from === att.id) { this.requests.delete(req.id); changed = true; this.broadcast(JSON.stringify({ t: 'paint_done', id: req.id, ok: false }), ws); }
+        else if (req.by === att.id) { req.by = null; changed = true; this.broadcast(JSON.stringify({ t: 'paint_request', req }), ws); }
+      }
+      if (changed) this.saveRequests();
     }
   }
 
@@ -251,7 +352,7 @@ export class Room {
     for (const s of this.ctx.getWebSockets()) {
       let a = null;
       try { a = s.deserializeAttachment(); } catch { continue; }
-      if (a && a.ready) out.push({ id: a.id, name: a.name, color: a.color });
+      if (a && a.ready) out.push({ id: a.id, name: a.name, color: a.color, caps: a.caps || null });
     }
     return out;
   }

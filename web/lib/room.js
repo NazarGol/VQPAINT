@@ -37,7 +37,9 @@ function toWsBase(url) {
 }
 
 export function connectRoom(opts = {}) {
-  const { url, roomId, name = 'anon', color, w, h, onState, onSet, onCursor, onJoin, onLeave, onStatus } = opts;
+  const { url, roomId, name = 'anon', color, w, h, caps = null, onState, onSet, onCursor, onJoin, onLeave, onStatus,
+          onNote, onNoteDelete, onPaintRequest, onPaintAssigned, onPaintDone, onPaintStart, onPaintEnd } = opts;
+  let myCaps = caps;
   if (!url) throw new Error('connectRoom: url is required');
   if (!roomId) throw new Error('connectRoom: roomId is required');
 
@@ -76,7 +78,7 @@ export function connectRoom(opts = {}) {
         attempt = 0;
         peers.clear();
         for (const p of m.peers || []) if (p && p.id) peers.set(p.id, p);
-        emit(onState, { id, w: m.w, h: m.h, v: m.v, tokens: Int32Array.from(m.tokens || []), peers });
+        emit(onState, { id, w: m.w, h: m.h, v: m.v, tokens: Int32Array.from(m.tokens || []), peers, notes: m.notes || [], requests: m.requests || [] });
         break;
       }
       case 'set':
@@ -97,6 +99,14 @@ export function connectRoom(opts = {}) {
         emit(onLeave, p, peers);
         break;
       }
+      case 'note': emit(onNote, m.note); break;
+      case 'note_delete': emit(onNoteDelete, m.id); break;
+      case 'paint_request': emit(onPaintRequest, m.req); break;          // {id, text, mask, author, color, from}
+      case 'paint_assigned': emit(onPaintAssigned, { id: m.id, by: m.by, for: m.for }); break;
+      case 'paint_done': emit(onPaintDone, { id: m.id, ok: m.ok !== false }); break;
+      case 'paint_start': emit(onPaintStart, { id: m.id, by: m.by, for: m.for || null, mask: m.mask, text: m.text }); break;
+      case 'paint_end': emit(onPaintEnd, { id: m.id, by: m.by }); break;
+      case 'peer': if (m.peer && m.peer.id) { const q = peers.get(m.peer.id); if (q) Object.assign(q, m.peer); else peers.set(m.peer.id, m.peer); } break;
       default:
         break; // pong etc.
     }
@@ -116,7 +126,7 @@ export function connectRoom(opts = {}) {
     sock.onopen = () => {
       if (sock !== ws) return;
       setStatus('open');
-      sock.send(JSON.stringify({ t: 'hello', name: String(name).slice(0, 24), color }));
+      sock.send(JSON.stringify({ t: 'hello', name: String(name).slice(0, 24), color, caps: myCaps || undefined }));
       flushQueue();
     };
     sock.onmessage = (ev) => { if (sock === ws && typeof ev.data === 'string') handle(ev.data); };
@@ -181,7 +191,16 @@ export function connectRoom(opts = {}) {
 
   connect();
 
+  const sendNote = (note) => send({ t: 'note', note });
+  const deleteNote = (noteId) => send({ t: 'note_delete', id: noteId });
+  const paintRequest = (req) => send({ t: 'paint_request', req });
+  const paintClaim = (reqId) => send({ t: 'paint_claim', id: reqId });
+  const paintDone = (reqId, ok = true) => send({ t: 'paint_done', id: reqId, ok });
+  const paintStart = (info) => send({ t: 'paint_start', ...info });
+  const paintEnd = (jobId) => send({ t: 'paint_end', id: jobId });
+  const setCaps = (c) => { myCaps = c; send({ t: 'caps', caps: c }); };
   return {
+    sendNote, deleteNote, paintRequest, paintClaim, paintDone, paintStart, paintEnd, setCaps,
     setCells,
     sendCursor,
     close,
