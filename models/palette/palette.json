@@ -1,0 +1,1 @@
+{"n": 16384, "tile": 8, "pca_dim": 128, "embed_dim": 512, "clip": "Xenova/mobileclip_s0", "variance_kept": 0.9960355758666992, "mean_norm2": 0.9838321208953857}

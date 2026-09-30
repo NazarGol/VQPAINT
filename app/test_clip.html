@@ -1,0 +1,37 @@
+<!doctype html><meta charset="utf-8"><title>clip probe</title><pre id="o">probing…</pre>
+<script type="module">
+// Step-by-step probe: which model/EP combination stalls in this browser? Beacons to /__progress, results to /__results.
+import { loadOrt, fetchCached, fetchJsonCached } from '../lib/models.js';
+import { Clip } from '../lib/clip.js';
+import { Decoder } from '../lib/decoder.js';
+const q = new URLSearchParams(location.search);
+const o = document.getElementById('o'); const res = { ua: navigator.userAgent, steps: {} };
+let frames = 0; (function tick() { frames++; requestAnimationFrame(tick); })();
+const beacon = (phase, extra = {}) => fetch('/__progress', { method: 'POST', keepalive: true, body: JSON.stringify({ phase, t: Math.round(performance.now()), vis: document.visibilityState, focus: document.hasFocus(), frames, ...extra }) }).catch(() => {});
+const step = async (name, fn) => { const t = performance.now(); beacon('start ' + name); try { const r = await fn(); res.steps[name] = { ms: Math.round(performance.now() - t), ...(r || {}) }; } catch (e) { res.steps[name] = { error: String(e && e.message || e) }; } beacon('done ' + name, res.steps[name]); o.textContent = JSON.stringify(res, null, 1); };
+const textEp = q.get('textEp') || 'webgpu', textFile = q.get('textFile') || 'text_model_fp16.onnx';
+const ort = await loadOrt(q.get('ort') || '../node_modules/onnxruntime-web/dist/', q.get('entry') || 'ort.webgpu.min.mjs');
+res.entry = q.get('entry') || 'ort.webgpu.min.mjs';
+// dual=1: a second, independent ORT instance (separate wasm + WebGPU device) for CLIP
+const ort2 = q.get('dual') ? await loadOrt(q.get('ort') || '../node_modules/onnxruntime-web/dist/', (q.get('entry') || 'ort.webgpu.min.mjs') + '?i=2') : ort;
+res.dual = !!q.get('dual');
+const M = '../models/';
+const [decBuf, visBuf, txtBuf, tokJson] = await Promise.all([fetchCached(M + 'decoder_fp16.onnx'), fetchCached(M + 'mobileclip_s0/onnx/vision_model_fp16.onnx'), fetchCached(M + 'mobileclip_s0/onnx/' + textFile), fetchJsonCached(M + 'mobileclip_s0/tokenizer.json')]);
+beacon('fetched');
+let decoder, clip;
+await step('decoder.create', async () => { decoder = await Decoder.create(ort, decBuf); });
+await step('decode 16x16', async () => { await decoder.decode(new Int32Array(256), 16, 16); });
+await step('clip.create text=' + textEp + ' ' + textFile, async () => { clip = await Clip.create(ort2, { visionBuf: visBuf, textBuf: txtBuf, tokenizerJson: tokJson, visionEp: 'webgpu', textEp }); });
+await step('embedImages', async () => { await clip.embedImages(new Float32Array(3 * 256 * 256), 1); });
+await step('embedText', async () => { const e = await clip.embedText('a face'); return { e0: +e[0].toFixed(4) }; });
+await step('embedText again', async () => { await clip.embedText('the sea at night'); });
+const blank = new Float32Array(3 * 256 * 256);
+await step('decode x2', async () => { await decoder.decode(new Int32Array(256), 16, 16); await decoder.decode(new Int32Array(256), 16, 16); });
+await step('embed x2', async () => { await clip.embedImages(blank, 1); await clip.embedImages(blank, 1); });
+await step('decode then embed(blank)', async () => { await decoder.decode(new Int32Array(256), 16, 16); await clip.embedImages(blank, 1); });
+await step('embed then decode', async () => { await clip.embedImages(blank, 1); await decoder.decode(new Int32Array(256), 16, 16); });
+await step('decode then embed(decoded data)', async () => { const img = await decoder.decode(new Int32Array(256), 16, 16); await clip.embedImages(img.data, 1); });
+await step('decode then embed(copy of decoded data)', async () => { const img = await decoder.decode(new Int32Array(256), 16, 16); await clip.embedImages(Float32Array.from(img.data), 1); });
+await step('decode+embed x3', async () => { for (let i = 0; i < 3; i++) { const img = await decoder.decode(new Int32Array(256), 16, 16); await clip.embedImages(img.data, 1); } });
+await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(res) }).catch(() => {});
+</script>

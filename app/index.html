@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VQPAINT — paint together, in your browser</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="landing">
+  <h1>VQPAINT</h1>
+  <p class="muted">A shared canvas painted with VQGAN + CLIP. Every image is generated in your own browser (WebGPU), nothing runs on a server except a tiny room relay.</p>
+  <div id="gpu-notice" class="notice bad" hidden></div>
+  <div class="card">
+    <h3 style="margin-top:0">Create a room</h3>
+    <div class="row">
+      <input id="name" type="text" placeholder="Your name (optional)" style="max-width:220px">
+      <button id="create" class="primary">Create a room</button>
+    </div>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Join a room</h3>
+    <div class="row">
+      <input id="join-id" type="text" placeholder="Paste an invite link or a room id">
+      <button id="join">Join</button>
+    </div>
+  </div>
+  <p class="muted" style="font-size:13px">First visit downloads about 160 MB of models (kept in the browser cache). Works in Chrome, Edge and Safari 26+ on a laptop. <a href="https://github.com/NazarGol/VQPAINT/tree/web-spikes/web">Source</a></p>
+</div>
+<script type="module" src="landing.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+[A console] [0;93m2026-09-29 22:39:53.828000 [W:onnxruntime:, session_state.cc:1397 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an 
+[A console] [0;93m2026-09-29 22:39:53.828999 [W:onnxruntime:, session_state.cc:1399 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.[m
+[B console] [0;93m2026-09-29 22:39:54.098998 [W:onnxruntime:, session_state.cc:1397 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an 
+[B console] [0;93m2026-09-29 22:39:54.098998 [W:onnxruntime:, session_state.cc:1399 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.[m
+[B console] [0;93m2026-09-29 22:39:54.672999 [W:onnxruntime:, session_state.cc:1397 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an 
+[A console] [0;93m2026-09-29 22:39:54.672000 [W:onnxruntime:, session_state.cc:1397 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an 
+[B console] [0;93m2026-09-29 22:39:54.672999 [W:onnxruntime:, session_state.cc:1399 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.[m
+[A console] [0;93m2026-09-29 22:39:54.672000 [W:onnxruntime:, session_state.cc:1399 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.[m
+[A console] [0;93m2026-09-29 22:39:54.797999 [W:onnxruntime:, session_state.cc:1397 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an 
+[A console] [0;93m2026-09-29 22:39:54.800000 [W:onnxruntime:, session_state.cc:1399 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.[m
+[B console] [0;93m2026-09-29 22:39:54.801999 [W:onnxruntime:, session_state.cc:1397 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an 
+[B console] [0;93m2026-09-29 22:39:54.801999 [W:onnxruntime:, session_state.cc:1399 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.[m
+models ready: A in 5.1s (fetch 472 ms, load 2296 ms, full decode 2785 ms)
+PASS A sees 1 peer (B)
+PASS A sees B's cursor from mouse move at x≈9.6 (expected ≈9.9)
+PASS A sees B's cursor from a direct sendCursor call (x=12.5)
+PASS A's paint changed 63/64 region tokens
+PASS B has the same token grid as A after the stroke (B status: connected)
+stroke: 6.1s for an 8x8 region with effort 6s; region decode median 1569 ms
+PASS undo restored the region on A and B
+[A console] [0;93m2026-09-29 22:40:09.816000 [W:onnxruntime:, session_state.cc:1397 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an 
+[A console] [0;93m2026-09-29 22:40:09.816000 [W:onnxruntime:, session_state.cc:1399 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.[m
+[A console] [0;93m2026-09-29 22:40:10.148000 [W:onnxruntime:, session_state.cc:1397 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an 
+[A console] [0;93m2026-09-29 22:40:10.148000 [W:onnxruntime:, session_state.cc:1399 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.[m
+[A console] [0;93m2026-09-29 22:40:10.256000 [W:onnxruntime:, session_state.cc:1397 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an 
+[A console] [0;93m2026-09-29 22:40:10.260000 [W:onnxruntime:, session_state.cc:1399 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.[m
+second load (reload): ready in 2.9s, fetch 269 ms, models from cache: false
+FAIL models came from Cache Storage on the second load
+FAILED: models came from Cache Storage on the second load

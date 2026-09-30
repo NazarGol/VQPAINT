@@ -1,0 +1,1 @@
+{"n": 6500, "sizes": [4, 6, 8, 16], "pca_dim": 128, "embed_dim": 512, "mean_norm2": 0.210859477519989, "sources": {"coco": 5000, "celeba": 1500}, "license_note": "COCO val2017 (Flickr, CC licences) and CelebA-HQ (research use). Token grids only, no pixels shipped."}
