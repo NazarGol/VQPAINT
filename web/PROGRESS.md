@@ -19,8 +19,8 @@
 | first visit download (~210 MB) | network-bound: 95 s at ~2.5 MB/s | same |
 | second visit (cached) to ready | 1.7 s | not measured (see README, Safari hidden-tab throttling) |
 | decode 16×16 tokens (256 px) | 237 ms | 409 ms |
-| decode whole 32×32 canvas (512 px) | 0.9–1.0 s | 1.8 s |
+| decode whole 32×32 canvas (512 px) | 0.9–1.0 s | 1.8–1.9 s |
 | search tries/s, 16×16 region | 4.3 | 2.3 (WebKit) |
-| search tries/s, 8×8 brush (+2 margin) | 6.5 | ~3 expected, needs a foreground check (NEEDS_NAZAR) |
+| search tries/s, 8×8 brush (+2 margin) | 6.5 | 4.2 (foreground, live site, measured by Nazar) |
 | stroke wall time at "normal" effort | 10.1 s | ~10 s |
 | room set round-trip | 43 ms median | – |

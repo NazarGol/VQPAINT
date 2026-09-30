@@ -1,6 +1,6 @@
 # Needs Nazar
 
-Nothing blocks the live site. These are the account-level things only you can do:
+Nothing blocks the live site. (Safari foreground check done 2026-09-30: 43 tries in 10.1 s = 4.2/s, full decode 1.9 s.) These are the account-level things only you can do:
 
 1. **Hugging Face hosting for the model files** (asked for in the plan; not possible without a token).
    Today the ~210 MB of model files are served from the `gh-pages` branch (same origin, cached in the browser after the first visit).
@@ -9,8 +9,7 @@ Nothing blocks the live site. These are the account-level things only you can do
    `modelBase` in `web/app/config.js` to `https://huggingface.co/NazarGol/vqpaint-web/resolve/main/`, then `web/deploy_pages.sh`.
    Benefit: no GitHub Pages bandwidth cap (soft 100 GB/month ≈ 500 first visits) and a smaller `gh-pages` branch.
 2. **Merge the pull request** `web-spikes → main` when you are happy (I did not merge).
-3. **30-second Safari check** (only you can do it: automation cannot put a Safari tab in the foreground on this Mac). Open https://nazargol.github.io/VQPAINT/ in Safari, create a room, paint one stroke with the default settings and tell me the line under the progress bar ("done: N tries in 10.1s (x/s)"). Chromium gives 66 tries / 6.5 per s for an 8×8 brush; I expect Safari at roughly half.
-4. Optional: a nicer URL. `nazargol.github.io/VQPAINT` works; a custom domain would need DNS on your side.
+3. Optional: a nicer URL. `nazargol.github.io/VQPAINT` works; a custom domain would need DNS on your side.
 
 Things already done on your accounts without needing you: Cloudflare Worker `vqpaint-rooms` deployed with your
 logged-in wrangler (free plan, no card needed); GitHub Pages enabled on the `gh-pages` branch; a GitHub Release

@@ -71,7 +71,6 @@ function scheduleRedraw(cells) {
 async function redrawRegion(region, margin = 2) {
   const crop = expandRegion(grid, region, margin);
   const img = await decoder.decode(readRegion(grid, crop), crop.h, crop.w);
-  stats.decodeMs.push(decoder.lastMs);
   const sub = cropCHW(img.data, img.w, img.h, (region.x - crop.x) * F, (region.y - crop.y) * F, region.w * F, region.h * F);
   blitCHW(ctx, sub, region.w * F, region.h * F, region.x * F, region.y * F);
 }
@@ -196,7 +195,8 @@ $('invite').onclick = async () => {
 function setStatus(s) { $('status').textContent = s; }
 function showStats() {
   const med = (a) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
-  $('stats').textContent = `strokes ${stats.strokes} · median stroke ${med(stats.strokeSeconds).toFixed(1)}s · region decode ${med(stats.decodeMs).toFixed(0)}ms · full decode ${stats.fullDecodeMs || '–'}ms`;
+  const dec = decoder && decoder.times ? decoder.times : [];
+  $('stats').textContent = `strokes ${stats.strokes} · median stroke ${stats.strokeSeconds.length ? med(stats.strokeSeconds).toFixed(1) + 's' : '–'} · decode (last ${dec.length}) ${dec.length ? med(dec).toFixed(0) + 'ms' : '–'} · full decode ${stats.fullDecodeMs ? stats.fullDecodeMs + 'ms' : '–'}`;
 }
 
 // ---------- boot ----------

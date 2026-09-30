@@ -48,8 +48,8 @@ prompt ──MobileCLIP text──► text embedding
 | decode 32×32 tokens (512 px, whole canvas) | 0.98 s | 1.8 s |
 | MobileCLIP image embedding | 22 ms | ~220 ms (background tab) |
 | search tries per second, 16×16 region | 4.3 | 2.3 (Playwright WebKit) |
-| search tries per second, 8×8 brush (+2 token margin) | 6.5 | – |
-| stroke with "normal" effort (8×8 brush, 10 s search) | 10.1 s | ~10 s (WebKit) |
+| search tries per second, 8×8 brush (+2 token margin) | 6.5 | 4.2 (foreground, live site) |
+| stroke with "normal" effort (8×8 brush, 10 s search) | 10.1 s | 10.1 s |
 | second visit, models from cache, to ready | 1.7 s | – |
 | room set round-trip (Cloudflare) | 43 ms median | – |
 
