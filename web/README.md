@@ -1,10 +1,15 @@
-# VQPAINT web — paint together, generated in your browser
+# VQPAINT web — a group's notes become one painting, generated in the browser
 
 Live: **https://nazargol.github.io/VQPAINT/**
 
-Open the link, create a room, send the invite link to someone, type a prompt, press and drag on
-the canvas, release. The region is painted with VQGAN + CLIP entirely in your browser (WebGPU).
-Only token indices go over the wire; every browser decodes its own pixels. No GPU server, no cost.
+A book club, a discussion, a workshop: people write notes, and every note is painted onto a shared
+canvas as an irregular stroke guided by CLIP. Hover (or tap) a stroke to read the note, who wrote it and
+when. Export gives the PNG and a JSON of all notes. Everything is generated in each visitor's browser
+(WebGPU); only token indices and notes go over the wire. No GPU server, no cost.
+
+Phones: touch to paint, tap to read. They download the decoder first (89 MB) and the painting models
+on first use. Devices without WebGPU (or slow ones) watch, and their notes are painted by a stronger
+device in the same room ("Ann is painting … for Bob").
 
 ## How it works
 
@@ -33,9 +38,16 @@ prompt ──MobileCLIP text──► text embedding
 - **Token bank** (`export/make_bank.py`): COCO val2017 (5000) + CelebA-HQ (1500) photos, centre-cropped and
   encoded at 4×4, 6×6, 8×8 and 16×16 tokens, embedded through the decoder so scores match what the browser
   sees. A prompt retrieves the closest grids as seeds and patch sources. 6.5 MB. Only token grids ship, no pixels.
-- **Rooms** (`rooms/`): one Cloudflare Worker + a SQLite-backed Durable Object per room. Messages: `hello`,
-  `state`, `set` (cells, last-writer-wins), `cursor`, `join`, `leave`. State persists when everyone leaves.
-  Free plan. Client: `lib/room.js`.
+- **Strokes** are irregular masks (`lib/mask.js`), seeded by a mosaic of 4 retrieved bank grids in 4×4-token
+  patches with edge cells grown from the surrounding canvas, then hill-climbed. Decoded with a 2-token margin and
+  crossfaded onto the canvas with a per-pixel alpha (1 on changed cells, fading over 16 px).
+- **Long notes** (`lib/text.js`): sentences are chunked under CLIP's 77-token limit and blended into one target.
+- **Rooms** (`rooms/`): one Cloudflare Worker + a SQLite-backed Durable Object per room. Messages: `hello`
+  (with device capabilities), `state` (tokens + notes + open helper requests), `set` (cells, last-writer-wins),
+  `cursor`, `note` / `note_delete`, `paint_request` / `paint_claim` / `paint_done` (helpers),
+  `paint_start` / `paint_end` (who paints what), `join`, `leave`. Free plan. Client: `lib/room.js`.
+- **Painting bank** (not yet built): `export/paintings/` has a Kaggle/Colab notebook that generates thousands of
+  VQGAN+CLIP paintings with the old engine; `make_bank.py --images-dir` turns them into the bank. See NEEDS_NAZAR.md.
 - **Models are served from the gh-pages branch** (same origin, each file < 100 MB) and kept in Cache Storage
   after the first visit. Move to Hugging Face with `export/upload_hf.sh` once a token exists (NEEDS_NAZAR.md).
 
@@ -73,7 +85,8 @@ Model files are gitignored; either run the export scripts (below) or copy them f
 
 Tests:
 ```sh
-node app/test_app.mjs                       # two headless browsers in one room: paint, sync, cursors, undo, cache
+node app/test_app.mjs                       # desktop pair + late joiner + lite joiner + helper flow
+node app/test_phone.mjs --device "iPhone 15" # emulated phone with a desktop helper (also "Pixel 7")
 node app/test_app.mjs --browser webkit      # Safari engine
 node app/test_app.mjs --base https://nazargol.github.io/VQPAINT   # against the live site
 node spike2/run_spike2.mjs --seconds 30     # the 3-prompt search test, snapshots in spike2/results/
@@ -102,10 +115,10 @@ git clone --depth 1 https://github.com/CompVis/taming-transformers.git web/expor
 
 ## Layout
 
-- `app/` — the app: `index.html` (landing), `room.html` + `room.js` (canvas, brush, painting, undo, export, cursors), `config.js`, `test_app.mjs`.
-- `lib/` — `decoder.js`, `clip.js`, `clip_tokenizer.js`, `palette.js`, `bank.js`, `search.js` (the painter), `room.js` (room client), `models.js` (loading + cache + ORT queue), `image.js`.
+- `app/` — the app: `index.html` (landing), `room.html` + `room.js` (orchestrator), `components/` (topbar, panel, loading, note, canvas: plain DOM, no framework), `tokens.css` (all design tokens: colours, fonts, spacing, radii, shadows — the file to replace with the Figma design), `style.css` (layout, tokens only), `config.js`, tests `test_app.mjs` / `test_phone.mjs`, `shots/` (before/after).
+- `lib/` — `decoder.js`, `clip.js`, `clip_tokenizer.js`, `palette.js`, `bank.js`, `search.js` (the painter), `mask.js` (blob masks, alpha maps), `text.js` (chunking + blending), `room.js` (room client), `models.js` (loading + cache + ORT queue), `image.js`.
 - `rooms/` — Cloudflare Worker + Durable Object, protocol test.
-- `export/` — Python scripts that build the ONNX decoder, palette and bank.
+- `export/` — Python scripts that build the ONNX decoder (fp16 + int8), palette and bank; `paintings/` = the painting generator notebook.
 - `spike1/`, `spike2/` — the experiments with their results.
 - `DECISIONS.md`, `PROGRESS.md`, `NEEDS_NAZAR.md`.
 

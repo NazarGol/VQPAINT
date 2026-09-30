@@ -1,26 +1,33 @@
 # Progress
 
-## Done
-- Live site: https://nazargol.github.io/VQPAINT/ (GitHub Pages, `gh-pages` branch built by `web/deploy_pages.sh`).
-- Rooms backend: https://vqpaint-rooms.vqpaint-rooms.workers.dev (Cloudflare Durable Object, free plan). Protocol test 19/19, set round-trip 43 ms median.
-- Spike 1 — decoder in the browser: PASS. 256 px decode 237 ms Chromium / 409 ms Safari (M1 Pro). fp16 model 89 MiB.
-- Spike 2 — CLIP-guided token search: PASS with the token bank (v2). "a face" recognisable at 10 s, sea/forest by 30–60 s. Palette-only (v1) failed.
-- App: landing (create / join by link), room page (canvas, prompt, brush 4/6/8, effort 5/10/20 s, undo own strokes, export PNG, invite, cursors, clear), WebGPU message + CPU fallback.
-- Two-browser e2e test passes in Chromium locally and on the live site; WebKit passes except the Cache Storage check (Playwright profile artefact; real Safari keeps the cache).
-- Model files cached after first visit (Cache Storage): second load 1.7 s in Chromium.
+## Done (phase 2, 2026-09-30) — "notes become a painting"
+1. **Strokes ≠ pasted photos**: irregular masks, mosaic seeds from 4 bank grids in 4×4 patches, edges grown from the canvas, changed-cell crossfade. Before/after: `app/shots/before_after.png`. The painterly look needs the painting bank: notebook ready in `export/paintings/` (NEEDS_NAZAR item 0).
+2. **Long text**: sentence chunks ≤ 75 CLIP tokens, blended target; the status line shows the chunk count and any mid-sentence splits.
+3. **Notes**: every stroke stores text, author, colour, time and mask in the room (Durable Object SQLite). Hover shows it on desktop, tap on touch. Export = PNG + `notes.json`.
+4. **No hard borders**: noisy blob masks, seam crossfade (alpha 1 on changed cells, 0.5→0 over 16 px). A faint ghost of the mask remains on blank canvas.
+5. **Phone**: touch drag paints, tap reads; scrolling layout with the note box first. Lite loading: 89 MB to view (decoder only), +115 MB on first paint. No-WebGPU devices load an int8 decoder (57 MB) and ask the room for a helper; helpers claim, paint with the requester's name, and everyone sees "X is painting … for Y".
+6. **Figma-ready**: `app/tokens.css` holds every colour/font/space/radius/shadow; UI is five DOM components in `app/components/` (topbar, panel, loading, note, canvas).
 
-## Not done / open
-- Hugging Face hosting: needs a token (NEEDS_NAZAR.md). Models served from gh-pages meanwhile.
-- PR web-spikes → main opened, not merged.
+## Phase 1 (2026-09-29) — still true
+- Live site https://nazargol.github.io/VQPAINT/, rooms on Cloudflare, decoder 237 ms / 256 px Chromium, 409 ms Safari.
 
-## Key numbers (M1 Pro)
-| what | Chromium 153 | Safari 26.6 |
-|---|---|---|
-| first visit download (~210 MB) | network-bound: 95 s at ~2.5 MB/s | same |
-| second visit (cached) to ready | 1.7 s | not measured (see README, Safari hidden-tab throttling) |
-| decode 16×16 tokens (256 px) | 237 ms | 409 ms |
-| decode whole 32×32 canvas (512 px) | 0.9–1.0 s | 1.8–1.9 s |
-| search tries/s, 16×16 region | 4.3 | 2.3 (WebKit) |
-| search tries/s, 8×8 brush (+2 margin) | 6.5 | 4.2 (foreground, live site, measured by Nazar) |
-| stroke wall time at "normal" effort | 10.1 s | ~10 s |
-| room set round-trip | 43 ms median | – |
+## Tests (all pass)
+- `app/test_app.mjs`: two desktop browsers + late joiner + lite joiner + a no-WebGPU peer helped by a desktop.
+- `app/test_phone.mjs --device "iPhone 15" | "Pixel 7"`: emulated phones with a desktop helper.
+- `rooms/npm test`: protocol test against the deployed worker.
+
+## Key numbers
+| what | Chromium (M1 Pro) | Safari 26.6 | iPhone 15 (emulated) | Pixel 7 (emulated) |
+|---|---|---|---|---|
+| first download to view | 204 MB (all) | 204 MB | 89 MB | 89 MB |
+| extra download on first paint | – | – | +115 MB | +115 MB |
+| ready to view (local files) | 3.8 s | ~4 s | 2.8 s | 2.1 s |
+| stroke, 6×6 brush, 10 s effort | 10.1 s, 6.5 tries/s | 10.1 s, 4.2 tries/s | 10.7 s, 3.8 tries/s | 10.8 s, 7.4 tries/s |
+| int8 decoder on CPU (no WebGPU), 256 px | 383 ms (Python ORT) vs 1094 ms fp32 | – | – | – |
+| room set round-trip | 43 ms median | | | |
+
+Phone numbers come from Playwright device emulation on the Mac's GPU: they prove the touch flow and the download sizes, not real phone speed. Real devices still to test: WebGPU on iOS 26 Safari, memory for the 512 px full decode, and download over cellular.
+
+## Open
+- Painting bank (Kaggle run) — NEEDS_NAZAR item 0.
+- Hugging Face hosting — NEEDS_NAZAR item 1.
