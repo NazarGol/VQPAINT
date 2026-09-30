@@ -41,7 +41,7 @@ const caps = { paint: false, speed: null, gpu: false, lite };
 let grid = null;                  // {w, h, tokens} from the room (256x256 by default), the search context
 let roomBlank = 0;                // the room's blank token (set by its creator)
 let ready = false, room = null, ort = null, ep = 'webgpu', decoder = null, clip = null, palette = null, bank = null, painter = null, blankToken = 0, layers = null;
-let tool = 'brush', painting = null, pendingShape = null, viewFitted = false;
+let tool = 'brush', painting = null, pendingShape = null, viewFitted = false, userMoved = false;
 const undoStack = [], strokes = [], peers = new Map(), othersPainting = new Map(), openRequests = new Map(), myRequests = new Map();
 const stats = { strokes: 0, strokeSeconds: [], modelBytes: 0 };
 const MARGIN = 2;
@@ -65,6 +65,8 @@ const view = mountCanvas(stage, {
   onLasso: (pts) => { if (!ready || painting || !grid) return; const p = limitLasso(pts); const m = lassoMask(p, grid.w, grid.h); if (!m.count) return; pendingShape = { mask: m, points: p }; updateScene(); notes.edit(view.anchorFor(m)); },
   onTap: (w) => { const st = strokeAt(w[0], w[1]); if (st && notes.openedId !== st.id) notes.open(st, view.anchorFor(st.crop || st._mask)); else notes.close(); },
   onCursor: (w) => room?.sendCursor(w[0], w[1]),
+  onResize: () => { if (ready && grid && !userMoved) fitToPainting(); },   // phones report a tiny stage before their first layout settles
+  onUserMove: () => { userMoved = true; },
   onViewChange: () => { notes.reposition((n) => (n.note ? view.anchorFor(n.note.crop || n.note._mask) : pendingShape ? view.anchorFor(pendingShape.mask) : null)); scheduleVisibleLayers(); },
 });
 view.canvas.id = 'canvas';
