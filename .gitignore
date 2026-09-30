@@ -19,3 +19,4 @@ web/spike2/results/*.log
 web/export/data/
 web/rooms/node_modules/
 web/rooms/.wrangler/
+.gh-pages/
