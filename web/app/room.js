@@ -59,13 +59,14 @@ const menu = mountMenu($('menu-root'), { efforts: CONFIG.efforts, effort, onEffo
 const tools = mountTools($('tools'), { tool, onChange: (t) => { tool = t; if (t === 'cursor') notes.cancel(); pendingShape = null; drawOverlay(); } });
 const loading = mountLoading($('loading'));
 const notes = mountNotes(stage, {
+  maxPills: isPhone ? 0 : 10,   // phones: only the tapped note shows
   anchorFor: (m) => view.anchorFor(m),
-  onSubmit: (mask, text) => { pendingShape = null; drawOverlay(); startStroke(mask, text); },
+  onSubmit: (mask, text) => { const pts = pendingShape && pendingShape.points; pendingShape = null; drawOverlay(); startStroke(mask, text, pts); },
   onCancel: () => { pendingShape = null; drawOverlay(); },
 });
 const view = mountCanvas(stage, {
   gridW: grid.w, gridH: grid.h, getTool: () => tool,
-  onLasso: (pts) => { if (!ready || painting) return; const m = lassoMask(pts, grid.w, grid.h); if (!m.count) return; pendingShape = { mask: m }; drawOverlay(); notes.edit(m); },
+  onLasso: (pts) => { if (!ready || painting) return; const m = lassoMask(pts, grid.w, grid.h); if (!m.count) return; pendingShape = { mask: m, points: pts }; drawOverlay(); notes.edit(m); },
   onCursor: (g) => room?.sendCursor(g[0], g[1]),
   onHover: (g, s) => { if (tool !== 'cursor') return; const st = g ? strokeAt(g[0], g[1]) : null; if ((st && st.id) !== notes.openId) { notes.open(st ? st.id : null); renderNotes(); } },
   onTap: (g) => { const st = strokeAt(g[0], g[1]); notes.open(st && notes.openId !== st.id ? st.id : null); renderNotes(); },
@@ -77,8 +78,8 @@ const setStatus = (s, ms) => toast.status(s, ms);
 const peerName = (id) => (id === room?.id ? myName : peers.get(id)?.name || 'someone');
 function drawOverlay() {
   const shapes = [...othersPainting.values()].map((j) => ({ mask: j._mask ||= maskFromString(j.mask), alpha: 0.2, label: `${peerName(j.by)}${j.for ? ' for ' + peerName(j.for) : ''}` }));
-  if (painting) shapes.push({ mask: painting.mask, alpha: 0.7 * (1 - (painting.progress || 0)) });
-  if (pendingShape) shapes.push({ mask: pendingShape.mask, alpha: 1 });
+  if (painting) shapes.push({ mask: painting.mask, points: painting.points, alpha: 0.7 * (1 - (painting.progress || 0)) });
+  if (pendingShape) shapes.push({ mask: pendingShape.mask, points: pendingShape.points, alpha: 1 });
   view.drawOverlay({ peers: [...peers.values()], shapes });
 }
 function renderPeers() {
@@ -107,10 +108,22 @@ async function redrawAll() {
   const img = await decoder.decode(grid.tokens, grid.h, grid.w);
   stats.fullDecodeMs = Math.round(decoder.lastMs);
   blitCHW(ctx, img.data, img.w, img.h, 0, 0);
+  matchBackground(img);
+}
+/** The page background takes the exact colour of blank canvas so canvas and page read as one surface. */
+function matchBackground(img) {
+  const plane = img.w * img.h; let r = 0, g = 0, b = 0, n = 0;
+  for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) {
+    if (grid.tokens[y * grid.w + x] !== blankToken) continue;
+    const i = (y * F + 8) * img.w + x * F + 8; r += img.data[i]; g += img.data[plane + i]; b += img.data[2 * plane + i]; n++;
+  }
+  if (n < 16) return;
+  const rgb = `rgb(${Math.round(255 * r / n)}, ${Math.round(255 * g / n)}, ${Math.round(255 * b / n)})`;
+  document.documentElement.style.setProperty('--color-bg', rgb);
 }
 
 // ---------- strokes ----------
-async function startStroke(mask, text) {
+async function startStroke(mask, text, points = null) {
   if (!text) { setStatus('Write the note first.'); return; }
   if (!mask.count) return;
   const helper = bestHelper();
@@ -118,9 +131,9 @@ async function startStroke(mask, text) {
     if (helper || !canEverPaint()) return requestHelp(mask, text);
   }
   await ensurePainter();
-  return paintMask(mask, text, {});
+  return paintMask(mask, text, { points });
 }
-async function paintMask(mask, text, { author = myName, color = myColor, forId = null, reqId = null } = {}) {
+async function paintMask(mask, text, { author = myName, color = myColor, forId = null, reqId = null, points = null } = {}) {
   const cells = maskCells(mask);
   const before = cells.map(([x, y]) => grid.tokens[y * grid.w + x]);
   const paintedBefore = new Set(cells.filter(([x, y]) => painted(x, y)).map(([x, y]) => y * grid.w + x));
@@ -128,7 +141,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
   const seconds = CONFIG.efforts[effort];
   const abort = new AbortController();
   const jobId = Math.random().toString(36).slice(2, 10);
-  painting = { abort, mask, jobId, forId, reqId, progress: 0 }; drawOverlay(); renderPeers(); menu.setUndoEnabled(false);
+  painting = { abort, mask, jobId, forId, reqId, progress: 0, points }; drawOverlay(); renderPeers(); menu.setUndoEnabled(false);
   room?.paintStart({ id: jobId, mask: maskToString(mask), text: text.slice(0, 80), for: forId });
   const t0 = performance.now();
   let lastSend = 0, ok = false;

@@ -35,7 +35,7 @@ button.pill:disabled { opacity: 0.5; cursor: default; }
 .note textarea { width: 240px; min-height: 1.4em; max-height: 40vh; resize: none; background: transparent; padding: 0; display: block; overflow: hidden; }
 .note .hint { font-size: var(--font-size-small); opacity: 0.7; margin-top: var(--space-1); }
 .note.done { background: var(--color-pill-done); color: var(--color-text-on-done); max-width: var(--note-pill-max-width); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
-.note.done.open { max-width: var(--note-max-width); white-space: pre-wrap; }
+.note.done.open { max-width: var(--note-max-width); white-space: pre-wrap; z-index: calc(var(--z-note) + 1); }
 .note.done .meta { font-size: var(--font-size-small); opacity: 0.8; }
 .note[hidden] { display: none; }
 /* status pill, loading pill, messages */
