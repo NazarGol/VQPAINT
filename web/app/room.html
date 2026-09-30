@@ -2,55 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>VQPAINT room</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="room">
-  <div class="topbar">
-    <span class="title">VQPAINT</span>
-    <span class="muted">room <code id="room-id"></code></span>
-    <button id="invite">Invite (copy link)</button>
-    <span class="peers" id="peers"></span>
-    <span style="flex:1"></span>
-    <span class="status" id="conn">connecting…</span>
-  </div>
+  <header id="topbar"></header>
   <div class="main">
-    <div class="stage" id="stage">
-      <canvas id="canvas"></canvas>
-      <canvas id="overlay" class="overlay"></canvas>
-      <div class="loading" id="loading">
-        <div id="loading-text">Loading models…</div>
-        <div class="progress" style="width:260px"><div id="loading-bar"></div></div>
-        <div class="muted" id="loading-sub" style="font-size:13px"></div>
-      </div>
-    </div>
-    <div class="side">
-      <div>
-        <label>Prompt</label>
-        <textarea id="prompt" placeholder="red forest">red forest</textarea>
-      </div>
-      <div>
-        <label>Brush size</label>
-        <div class="seg" id="brush"></div>
-      </div>
-      <div>
-        <label>Effort per stroke</label>
-        <div class="seg" id="effort"></div>
-      </div>
-      <div class="row">
-        <button id="undo" disabled>Undo my stroke</button>
-        <button id="cancel" disabled>Stop</button>
-      </div>
-      <div class="row">
-        <button id="export">Export PNG</button>
-        <button id="clear" title="Fill the whole canvas with the blank token">Clear canvas</button>
-      </div>
-      <div class="progress"><div id="paint-bar"></div></div>
-      <div class="status" id="status">Press and drag on the canvas to place the brush, release to paint.</div>
-      <div class="muted" style="font-size:12px" id="stats"></div>
-    </div>
+    <div class="stage" id="stage"><div id="loading"></div></div>
+    <aside id="panel"></aside>
   </div>
 </div>
 <script type="module" src="room.js"></script>

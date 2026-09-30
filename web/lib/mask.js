@@ -69,7 +69,7 @@ export function maskHas(m, gx, gy) { const xx = gx - m.x, yy = gy - m.y; return 
  * Per-pixel alpha for blitting a decoded crop: 1 inside masked cells, fading to 0 over `feather` px away from them.
  * crop = {x,y,w,h} in tokens; mask in grid coords; F = px per token. Computed at quarter resolution then upsampled.
  */
-export function alphaMap(crop, mask, F = 16, feather = 16, ring = 0.7) {
+export function alphaMap(crop, mask, F = 16, feather = 16, ring = 0.5) {
   const W = crop.w * F, H = crop.h * F, S = 4, gw = Math.ceil(W / S) + 1, gh = Math.ceil(H / S) + 1;
   const rects = []; // masked cells as pixel rects relative to the crop
   for (let yy = 0; yy < mask.h; yy++) for (let xx = 0; xx < mask.w; xx++) if (mask.cells[yy * mask.w + xx]) rects.push([(mask.x + xx - crop.x) * F, (mask.y + yy - crop.y) * F]);

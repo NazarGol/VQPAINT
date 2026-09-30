@@ -14,14 +14,16 @@ export class Painter {
    * Paint the cells of `mask` ({x,y,w,h,cells}) in `grid` toward `target` (unit embedding) or `prompt`.
    * blankToken: canvas cells holding it are not used to grow from. Returns {score, steps, accepted, elapsed, image, crop, tokens}.
    */
-  async paint({ grid, mask, prompt, target = null, seconds = 10, margin = 2, seeds = 5, bankTop = 24, patch = 3, growEdge = 0.8,
+  async paint({ grid, mask, prompt, target = null, seconds = 10, margin = 2, seeds = 5, bankTop = 24, sources = 4, patch = 4, growEdge = 0.8,
                 temperature = 0.03, topK = 512, blankToken = -1, onProgress, progressEvery = 400, signal }) {
     const t0 = performance.now();
     const textEmb = target || await this.clip.embedText(prompt);
     const sampler = this.palette.sampler(this.palette.scores(textEmb), { topK, temperature });
     const region = { x: mask.x, y: mask.y, w: mask.w, h: mask.h };
     const side = Math.max(region.w, region.h);
-    const retrieved = this.bank ? this.bank.top(this.bank.scores(textEmb), bankTop).map((i) => fitGrid(this.bank.grid(i, side), region.w, region.h)) : [];
+    const retrievedAll = this.bank ? this.bank.top(this.bank.scores(textEmb), bankTop).map((i) => fitGrid(this.bank.grid(i, side), region.w, region.h)) : [];
+    // each stroke mixes a few of the retrieved grids, so no stroke is one bank image
+    const retrieved = retrievedAll.slice().sort(() => Math.random() - 0.5).slice(0, sources);
 
     const crop = expandRegion(grid, region, margin);
     const base = readRegion(grid, crop);
@@ -76,6 +78,7 @@ export class Painter {
         if (inMask[c]) cand[c] = src[hy * region.w + hx];
       }
     };
+    const changedCells = (cand) => { const out = []; for (const c of cells) if (cand[c] !== base[c]) { const x = c % crop.w; out.push([crop.x + x, crop.y + (c - x) / crop.w]); } return out; };
     const regionOf = (cand) => { const out = new Int32Array(region.w * region.h); for (let y = 0; y < region.h; y++) for (let x = 0; x < region.w; x++) out[y * region.w + x] = cand[(ry + y) * crop.w + rx + x]; return out; };
     const mutate = (cand, frac) => {
       const n = Math.max(1, Math.round(nCells * frac)), cur = regionOf(cand);
@@ -103,11 +106,11 @@ export class Painter {
         if (r.score > bestScore) accepted++;
         best = cand; bestScore = r.score; bestImage = r.image;
       }
-      if (onProgress && performance.now() - lastReport > progressEvery) { lastReport = performance.now(); onProgress({ step: steps, accepted, score: bestScore, elapsed: elapsed(), image: bestImage, crop, tokens: best }); }
+      if (onProgress && performance.now() - lastReport > progressEvery) { lastReport = performance.now(); onProgress({ step: steps, accepted, score: bestScore, elapsed: elapsed(), image: bestImage, crop, tokens: best, changed: changedCells(best) }); }
     }
     if (!best) throw new Error('aborted before any candidate was scored');
     writeRegion(grid, crop, best);
-    const res = { score: bestScore, steps, accepted, elapsed: elapsed(), image: bestImage, crop, tokens: best };
+    const res = { score: bestScore, steps, accepted, elapsed: elapsed(), image: bestImage, crop, tokens: best, changed: changedCells(best) };
     onProgress?.({ ...res, step: steps, final: true });
     return res;
   }

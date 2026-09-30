@@ -61,12 +61,14 @@ for (let y = 4; y < 12; y++) for (let x = 4; x < 12; x++) if (tokA[y * 32 + x] !
 check(changed > 20, `A's paint changed ${changed}/64 region tokens`);
 check(same, `B has the same token grid as A after the stroke (B status: ${await B.evaluate(() => document.getElementById('conn').textContent)})`);
 await B.waitForTimeout(1500); // let B decode the region
-const st = await A.evaluate(() => window.__vqpaint.stats);
-console.log(`stroke: ${paintSecs.toFixed(1)}s for an 8x8 region with effort ${seconds}s; region decode median ${st.decodeMs.length ? st.decodeMs.sort((a, b) => a - b)[st.decodeMs.length >> 1].toFixed(0) : '-'} ms`);
+const dts = await A.evaluate(() => window.__vqpaint.decodeTimes.slice());
+console.log(`stroke: ${paintSecs.toFixed(1)}s for an 8x8 region with effort ${seconds}s; decode median ${dts.length ? dts.sort((a, b) => a - b)[dts.length >> 1].toFixed(0) : '-'} ms over ${dts.length} decodes`);
 // undo on A -> B follows
 await A.click('#undo'); await A.waitForTimeout(1500);
 const tokA2 = await A.evaluate(() => Array.from(window.__vqpaint.grid.tokens)), tokB2 = await B.evaluate(() => Array.from(window.__vqpaint.grid.tokens));
 check(tokA2.every((v, i) => v === tokB2[i]) && tokA2[5 * 32 + 5] === tokA[0], 'undo restored the region on A and B');
+const noteA = await A.evaluate(() => window.__vqpaint.strokes.length);
+check(noteA === 0, `undo also removed the note (${noteA} notes left)`);
 await A.screenshot({ path: path.join(outDir, `${browserName}_A.png`) }); await B.screenshot({ path: path.join(outDir, `${browserName}_B.png`) });
 const tr = Date.now(); await A.reload(); await A.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready, null, { timeout: 180000 });
 const st2 = await A.evaluate(() => window.__vqpaint.stats);
