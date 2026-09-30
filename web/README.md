@@ -46,10 +46,24 @@ prompt ──MobileCLIP text──► text embedding
   (with device capabilities), `state` (tokens + notes + open helper requests), `set` (cells, last-writer-wins),
   `cursor`, `note` / `note_delete`, `paint_request` / `paint_claim` / `paint_done` (helpers),
   `paint_start` / `paint_end` (who paints what), `join`, `leave`. Free plan. Client: `lib/room.js`.
-- **Painting bank** (not yet built): `export/paintings/` has a Kaggle/Colab notebook that generates thousands of
-  VQGAN+CLIP paintings with the old engine; `make_bank.py --images-dir` turns them into the bank. See NEEDS_NAZAR.md.
-- **Models are served from the gh-pages branch** (same origin, each file < 100 MB) and kept in Cache Storage
-  after the first visit. Move to Hugging Face with `export/upload_hf.sh` once a token exists (NEEDS_NAZAR.md).
+- **Painting bank**: `export/paintings/` has a Kaggle notebook that generates thousands of VQGAN+CLIP paintings with
+  the old engine; `make_bank.py --images-dir` turns them into the bank (the Kaggle run is in progress, see PROGRESS.md).
+- **Replies** (`parent` on a note): the reply's lasso must touch the parent's shape (`maskTouches`); the painter seeds
+  blocks from the parent's crop tokens at the same world position (edge tokens for cells outside it). Open notes show
+  the thread; the PDF indents replies under their parent (`lib/export.js` `threadOrder`).
+- **Photos** (`lib/photo.js`, `lib/encoder.js`): resized in the browser to a 256 px square; the VQGAN encoder
+  (`export/export_encoder.py`, packed 32 MB, int8 QDQ for CPU) is loaded when a note has a photo and released after
+  encoding; its tokens seed the shape and the photo's CLIP embedding is mixed into the target. Only tokens and a
+  128 px thumbnail leave the device (a no-paint device sends the 256 px JPEG to its helper).
+- **Ukrainian** (`app/i18n.js`, `lib/translate.js`): UI in English/Ukrainian (switch in the ⋯ menu); Ukrainian notes
+  are translated in-browser (`Xenova/opus-mt-uk-en` via transformers.js, lazily, desktop only) just for CLIP; the
+  original text is what is shown, synced and exported. The PDF embeds NotoSans when text is outside Latin.
+- **Metaphor bank** (`export/make_metaphors.py`, `lib/metaphors.js`): 225 short visual prompts with offline CLIP
+  text embeddings; the 3 nearest are blended into every note's target (strongly for practical notes, weakly for
+  visual ones). `?metaphors=0` disables it.
+- **Models are served from Hugging Face** (`noi3noi3/vqpaint-web`, CORS ok) with the same files on the gh-pages
+  branch as an automatic fallback (`lib/models.js` `setModelMirror`; `?models=pages` forces it), and kept in Cache
+  Storage after the first visit.
 
 ## Numbers (Apple M1 Pro, 32 GB)
 
@@ -110,7 +124,8 @@ git clone --depth 1 https://github.com/CompVis/taming-transformers.git web/expor
 
 ## Deploy
 
-- Site: `web/deploy_pages.sh` builds a temp dir (app, lib, model files) and force-pushes it to `gh-pages`.
+- Site: `web/deploy_pages.sh` syncs app, lib and model files into the persistent `.gh-pages` checkout and pushes (incremental).
+- Models: `python -c` snippet in `export/upload_hf.sh` / `huggingface_hub` `create_commit` to `noi3noi3/vqpaint-web` (token in `~/.config/vqpaint/hf_token`).
 - Rooms: `cd web/rooms && npx wrangler deploy` (wrangler must be logged in). URL goes in `app/config.js`.
 
 ## UI
@@ -125,7 +140,7 @@ Weight-only int8 packs rebuilt to fp16 in the browser (`lib/pack.js`, `export/pa
 
 ## Layout
 
-- `app/` — the app: `index.html` (home), `room.html` + `room.js` (orchestrator), `components/`, `tokens.css`, `style.css`, `config.js`, tests `test_app.mjs` / `test_phone.mjs`, `shots/` (screenshots, before/after).
+- `app/` — the app: `index.html` (home), `room.html` + `room.js` (orchestrator), `components/`, `tokens.css`, `style.css`, `config.js`, tests `test_app.mjs` / `test_phone.mjs` / `test_replies.mjs` / `test_photo.mjs` / `test_lang.mjs`, `i18n.js`, `shots/` (screenshots, before/after).
 - `lib/` — `decoder.js`, `clip.js`, `clip_tokenizer.js`, `palette.js`, `bank.js`, `search.js` (the painter), `mask.js` (blob masks, alpha maps), `text.js` (chunking + blending), `room.js` (room client), `models.js` (loading + cache + ORT queue), `image.js`.
 - `rooms/` — Cloudflare Worker + Durable Object, protocol test.
 - `export/` — Python scripts that build the ONNX decoder (fp16 + int8), palette and bank; `paintings/` = the painting generator notebook.

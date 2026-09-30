@@ -21,7 +21,7 @@ const server = http.createServer((req, res) => {
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const port = server.address().port, roomId = 'phone-' + Math.random().toString(36).slice(2, 8);
-const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/${nogpu ? '&nogpu=1' : ''}`;
+const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&models=pages${nogpu ? '&nogpu=1' : ''}`;
 const outDir = path.join(here, 'test_out'); fs.mkdirSync(outDir, { recursive: true });
 const fails = []; const check = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails.push(m); };
 // desktop helper (Chromium)
@@ -68,6 +68,8 @@ await P.waitForFunction(() => window.__vqpaint.strokes.length >= 1 || window.__v
 const after = await P.evaluate(() => ({ notes: window.__vqpaint.strokes.length, own: window.__vqpaint.stats.strokes, status: document.querySelector('[data-status]').textContent, reqs: window.__vqpaint.myRequests.size }));
 const strokeS = (Date.now() - tStroke) / 1000;
 check(after.notes >= 1, `stroke from a touch drag produced a note (${after.own ? 'painted on the phone' : 'painted by the helper'}) in ${strokeS.toFixed(1)}s: "${after.status}"`);
+const edge = await P.evaluate(() => { const n = window.__vqpaint.strokes[0]; return { path: !!(n && n.path && n.path.length > 3), realism: n && n.realism }; });
+check(edge.path, `the note carries its lasso path (feathered polygon edge on every device, incl. helper-painted strokes; realism ${edge.realism})`);
 await P.waitForTimeout(1500);
 // cursor tool, then tap the stroke to read the note
 const dbg = await P.evaluate(() => { const b = document.querySelector('[data-tool="cursor"]'); const r = b.getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return { rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)], vw: innerWidth, vh: innerHeight, atPoint: e && (e.tagName + '.' + e.className) }; });

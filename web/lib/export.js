@@ -11,6 +11,16 @@ const JSPDF_URL = 'https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.j
 // ---------- shared helpers ----------
 /** the export frame: painted bounds plus a 1-token margin, or null when nothing is painted */
 function frame(strokes) { const b = paintedBounds(strokes); return b ? { x: b.x - 1, y: b.y - 1, w: b.w + 2, h: b.h + 2 } : null; }
+/** thread order for listings: roots in the order written, each followed by its replies (depth first), depth per note */
+export function threadOrder(strokes) {
+  const ids = new Set(strokes.map((s) => s.id)), byParent = new Map();
+  for (const s of strokes) { const p = s.parent && ids.has(s.parent) && s.parent !== s.id ? s.parent : null; if (!byParent.has(p)) byParent.set(p, []); byParent.get(p).push(s); }
+  const out = [], seen = new Set();
+  const walk = (parent, depth) => { for (const s of byParent.get(parent) || []) { if (seen.has(s.id)) continue; seen.add(s.id); out.push({ note: s, depth }); walk(s.id, Math.min(depth + 1, 6)); } };
+  walk(null, 0);
+  for (const s of strokes) if (!seen.has(s.id)) { seen.add(s.id); out.push({ note: s, depth: 0 }); }   // cycles (should not happen)
+  return out;
+}
 /** render every layer in order (sequentially) → [{note, layer}], skipping notes that cannot be rendered */
 async function allLayers(strokes, layers, grid) {
   const out = [];
@@ -69,39 +79,57 @@ function imageData(canvas) { return canvas.width * canvas.height > 1.5e6 ? [canv
  * PDF: page 1 the whole painting fitted to the page; then one entry per note in the order written: the note's shape
  * (its layer over the blank colour), then author · time (small) and the full text. Minimal: #404040 pages, lilac text, no borders.
  */
-export async function exportPdf({ strokes, layers, grid, decoder, filename = 'vqpaint.pdf', blank = BG, room = '' }) {
+const CYRILLIC_FONT = 'https://cdn.jsdelivr.net/gh/notofonts/notofonts.github.io/fonts/NotoSans/hinted/ttf/NotoSans-Regular.ttf';   // jsPDF's built-in fonts have no Cyrillic
+const needsUnicodeFont = (strokes) => strokes.some((n) => /[^\u0000-\u024F\u2000-\u206F]/.test(String(n.text || '') + String(n.author || '')));
+async function fetchFontBase64(url) {
+  const r = await fetch(url); if (!r.ok) throw new Error('font ' + r.status);
+  const b = new Uint8Array(await r.arrayBuffer()); let s = ''; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+const PDF_STRINGS = { en: { notes: (n) => `${n} note${n === 1 ? '' : 's'}`, replyTo: 'reply to', someone: 'someone' }, uk: { notes: (n) => (n === 1 ? '1 нотатка' : `нотаток: ${n}`), replyTo: 'відповідь для', someone: 'хтось' } };
+export async function exportPdf({ strokes, layers, grid, decoder, filename = 'vqpaint.pdf', blank = BG, room = '', lang = 'en' }) {
   void decoder;   // the LayerCache already holds the decoder
   const rect = frame(strokes); if (!rect) throw new Error('Nothing painted yet.');
   const lib = loadJsPdf();                                   // fetch the library while the layers decode
+  const S = PDF_STRINGS[lang] || PDF_STRINGS.en;
+  const fontP = needsUnicodeFont(strokes) || lang !== 'en' ? fetchFontBase64(CYRILLIC_FONT).catch((e) => { console.warn('unicode font', e); return null; }) : Promise.resolve(null);
   const items = await allLayers(strokes, layers, grid);
   const jsPDF = await lib;
   const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  const font = await fontP;
+  if (font) { doc.addFileToVFS('NotoSans-Regular.ttf', font); doc.addFont('NotoSans-Regular.ttf', 'NotoSans', 'normal'); }
+  const fontName = font ? 'NotoSans' : 'helvetica';
   const PW = doc.internal.pageSize.getWidth(), PH = doc.internal.pageSize.getHeight(), M = 14, bottom = PH - M;
   const bg = () => { doc.setFillColor(BG); doc.rect(0, 0, PW, PH, 'F'); };
   const newPage = () => { doc.addPage(); bg(); };
   const addImage = (canvas, x, y, w, h) => { const [data, fmt] = imageData(canvas); doc.addImage(data, fmt, x, y, w, h, undefined, 'FAST'); };
-  doc.setFont('helvetica', 'normal');
+  doc.setFont(fontName, 'normal');
   // page 1: title line + the painting fitted below it
   bg();
   doc.setTextColor(INK2); doc.setFontSize(9);
-  doc.text(`vqpaint${room ? ' · ' + room : ''} · ${items.length} note${items.length === 1 ? '' : 's'}`, M, M);
+  doc.text(`vqpaint${room ? ' · ' + room : ''} · ${S.notes(items.length)}`, M, M);
   const big = paintCanvas(items, rect, Math.min(F, 2048 / Math.max(rect.w, rect.h)), blank);
   { const bx = M, by = M + 6, bw = PW - 2 * M, bh = PH - M - by, k = Math.min(bw / big.width, bh / big.height), w = big.width * k, h = big.height * k;
     addImage(big, bx + (bw - w) / 2, by + (bh - h) / 2, w, h); }
   // notes: image at the left, meta + wrapped text at the right; entries flow down the page and continue on new pages
-  const lineH = 4.6, metaH = 5.5, gap = 8, imgMax = 48;   // mm
+  const lineH = 4.6, metaH = 5.5, gap = 8, imgMax = 48, indent = 10;   // mm; replies are indented under the note they answer
   let y = M; newPage();
-  for (const { note, layer } of items) {
-    const c = layer.crop, k = imgMax / Math.max(c.w, c.h), iw = c.w * k, ih = c.h * k;
-    const tx = M + iw + 6, tw = PW - M - tx;
+  const layerOf = new Map(items.map((it) => [it.note.id, it.layer]));
+  const byId = new Map(strokes.map((s) => [s.id, s]));
+  for (const { note, depth } of threadOrder(strokes)) {
+    const layer = layerOf.get(note.id); if (!layer) continue;
+    const c = layer.crop, k = (depth ? imgMax * 0.75 : imgMax) / Math.max(c.w, c.h), iw = c.w * k, ih = c.h * k;
+    const x0 = M + depth * indent, tx = x0 + iw + 6, tw = PW - M - tx;
     doc.setFontSize(10);
     const lines = doc.splitTextToSize(String(note.text || ''), tw);
     const need = Math.max(ih, metaH + Math.min(lines.length, 3) * lineH);   // keep the image, the meta line and a few lines together
     if (y > M && y + need > bottom) { newPage(); y = M; }
     const top = y;
-    addImage(paintCanvas([{ layer }], c, Math.min(F, 512 / Math.max(c.w, c.h)), blank), M, top, iw, ih);
+    if (depth) { doc.setDrawColor(INK2); doc.setLineWidth(0.4); doc.line(x0 - 4, top, x0 - 4, top + ih); }   // thread line
+    addImage(paintCanvas([{ layer }], c, Math.min(F, 512 / Math.max(c.w, c.h)), blank), x0, top, iw, ih);
     doc.setTextColor(INK2); doc.setFontSize(8);
-    doc.text(`${note.author || 'someone'} · ${fmtTime(note.time)}`, tx, top + 3);
+    const parent = note.parent && byId.get(note.parent);
+    doc.text(`${note.author || S.someone} · ${fmtTime(note.time)}${parent ? ` · ${S.replyTo} ${parent.author || S.someone}` : ''}`, tx, top + 3);
     doc.setTextColor(INK); doc.setFontSize(10);
     let ty = top + metaH + 3, broke = false;
     for (const line of lines) { if (ty > bottom) { newPage(); ty = M + 3; broke = true; } doc.text(line, tx, ty); ty += lineH; }

@@ -63,6 +63,16 @@ export function maskFromString(s) {
   for (let i = 0; i < hex.length; i++) { const v = parseInt(hex[i], 16); for (let b = 0; b < 4; b++) if (v & (1 << b) && i * 4 + b < cells.length) { cells[i * 4 + b] = 1; count++; } }
   return { x, y, w, h, cells, count };
 }
+/** true when a cell of `a` is inside `b` or 8-adjacent to one of its cells (a reply must touch its parent) */
+export function maskTouches(a, b) {
+  if (a.x > b.x + b.w || b.x > a.x + a.w || a.y > b.y + b.h || b.y > a.y + a.h) return false;   // boxes further than one cell apart
+  for (let yy = 0; yy < a.h; yy++) for (let xx = 0; xx < a.w; xx++) {
+    if (!a.cells[yy * a.w + xx]) continue;
+    const gx = a.x + xx, gy = a.y + yy;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (maskHas(b, gx + dx, gy + dy)) return true;
+  }
+  return false;
+}
 export function maskHas(m, gx, gy) { const xx = gx - m.x, yy = gy - m.y; return xx >= 0 && yy >= 0 && xx < m.w && yy < m.h && !!m.cells[yy * m.w + xx]; }
 
 /**

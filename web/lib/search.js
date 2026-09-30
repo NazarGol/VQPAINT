@@ -15,7 +15,10 @@ export class Painter {
    * blankToken: canvas cells holding it are not used to grow from. Returns {score, steps, accepted, elapsed, image, crop, tokens}.
    */
   async paint({ grid, mask, prompt, target = null, seconds = 10, margin = 2, seeds = 5, bankTop = 24, sources = 4, patch = 4, growEdge = 0.8, mutation = 0.08, anneal = 0.003, bankPatch = 0.30,
-                temperature = 0.03, topK = 512, blankToken = -1, onProgress, progressEvery = 400, signal }) {
+                temperature = 0.03, topK = 512, blankToken = -1, parent = null, parentMix = 0.5, photo = null, photoMix = 0.6, onProgress, progressEvery = 400, signal }) {
+    // photo: {w, h, tokens} the encoded photo of the note: fitted to the region, it seeds whole blocks and keeps feeding mutations.
+    // parent: {crop:{x,y,w,h}, tokens: Int32Array} of the stroke this one replies to. Seeds copy the parent's tokens at the same
+    // world position (clamped to its crop, so cells outside it take the parent's edge tokens) and mutations keep pulling from it.
     const t0 = performance.now();
     const textEmb = target || await this.clip.embedText(prompt);
     const sampler = this.palette.sampler(this.palette.scores(textEmb), { topK, temperature });
@@ -24,6 +27,7 @@ export class Painter {
     const retrievedAll = this.bank ? this.bank.top(this.bank.scores(textEmb), bankTop).map((i) => fitGrid(this.bank.grid(i, side), region.w, region.h)) : [];
     // each stroke mixes a few of the retrieved grids, so no stroke is one bank image
     const retrieved = retrievedAll.slice().sort(() => Math.random() - 0.5).slice(0, sources);
+    const photoGrid = photo && photo.tokens ? fitGrid(photo, region.w, region.h) : null;
 
     const crop = expandRegion(grid, region, margin);
     const base = readRegion(grid, crop);
@@ -37,6 +41,9 @@ export class Painter {
     const usable = (c) => !inMask[c];                                     // any canvas token, blank included: strokes fade into what is there
     const edge = cells.filter((c) => neighbors(c).some(usable));          // masked cells on the stroke boundary
     const rnd = (n) => (Math.random() * n) | 0;
+    const parentAt = parent ? (c) => { const x = crop.x + c % crop.w, y = crop.y + (c - c % crop.w) / crop.w;   // world -> parent token, clamped to its crop
+      const px = Math.min(parent.crop.w - 1, Math.max(0, x - parent.crop.x)), py = Math.min(parent.crop.h - 1, Math.max(0, y - parent.crop.y));
+      return parent.tokens[py * parent.crop.w + px]; } : null;
 
     const whileHidden = async () => { while (typeof document !== 'undefined' && document.visibilityState === 'hidden' && !(signal && signal.aborted)) await new Promise((r) => setTimeout(r, 250)); };
     const evaluate = async (tokens) => {
@@ -52,10 +59,12 @@ export class Painter {
       const bw = Math.ceil(region.w / patch), bh = Math.ceil(region.h / patch);
       for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++) {
         const src = retrieved.length ? retrieved[rnd(retrieved.length)] : null;
+        const fromParent = parentAt && Math.random() < parentMix;   // whole blocks continue the parent stroke
+        const fromPhoto = photoGrid && Math.random() < photoMix;     // or come from the note's photo
         for (let y = by * patch; y < Math.min(region.h, (by + 1) * patch); y++) for (let x = bx * patch; x < Math.min(region.w, (bx + 1) * patch); x++) {
           const c = (ry + y) * crop.w + rx + x;
           if (!inMask[c]) continue;
-          cand[c] = src && Math.random() > 0.15 ? src[y * region.w + x] : sampler.sample();
+          cand[c] = fromPhoto ? photoGrid[y * region.w + x] : fromParent ? parentAt(c) : src && Math.random() > 0.15 ? src[y * region.w + x] : sampler.sample();
         }
       }
       for (const c of edge) if (Math.random() < growEdge) { const nb = neighbors(c).filter(usable); if (nb.length) cand[c] = base[nb[rnd(nb.length)]]; }
@@ -85,6 +94,8 @@ export class Painter {
       for (let i = 0; i < n; i++) {
         const r = Math.random(), c = cells[rnd(nCells)], cx = c % crop.w - rx, cy = ((c - c % crop.w) / crop.w) - ry;
         if (retrieved.length && r < bankPatch) copyBlock(cand, retrieved[rnd(retrieved.length)], cx, cy, cx, cy, 1 + rnd(3));   // bank patch, same place
+        else if (parentAt && r < bankPatch + 0.12) cand[c] = parentAt(c);                                                    // reply: pull the parent's tokens
+        else if (photoGrid && r < bankPatch + 0.30) copyBlock(cand, photoGrid, cx, cy, cx, cy, 1 + rnd(3));                    // photo patch, same place
         else if (r < 0.50) cand[c] = sampler.sample();                                                                  // palette
         else if (r < 0.62 && edge.length) { const e = edge[rnd(edge.length)]; const nb = neighbors(e).filter(usable); if (nb.length) cand[e] = base[nb[rnd(nb.length)]]; } // grow from canvas
         else if (r < 0.82) { const nb = neighbors(c); cand[c] = cand[nb[rnd(nb.length)]]; }                             // neighbour copy

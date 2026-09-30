@@ -11,10 +11,10 @@
   <span class="pill title">VQPAINT</span>
   <span class="quiet" style="text-align:center;max-width:320px">A group writes notes. Each note becomes a stroke of one shared painting, generated in your own browser.</span>
   <div id="gpu-notice" class="pill" hidden style="max-width:320px;white-space:normal;text-align:center"></div>
-  <div class="row"><input id="name" type="text" placeholder="your name (optional)"></div>
-  <div class="row"><button id="create" class="pill active">create a room</button></div>
-  <div class="row"><input id="join-id" type="text" placeholder="paste an invite link or room id"><button id="join" class="pill">join</button></div>
-  <span class="quiet" style="text-align:center;max-width:320px">Watching downloads only small previews. Painting loads about 105 MB of models once (kept in the browser cache). Chrome, Edge or Safari 26+. <a href="https://github.com/NazarGol/VQPAINT/tree/web-spikes/web">source</a></span>
+  <div class="row"><input id="name" type="text" data-i18n-placeholder="home.name" placeholder="your name (optional)"></div>
+  <div class="row"><button id="create" class="pill active" data-i18n="home.create">create a room</button></div>
+  <div class="row"><input id="join-id" type="text" data-i18n-placeholder="home.joinPlaceholder" placeholder="paste an invite link or room id"><button id="join" class="pill" data-i18n="home.join">join</button></div>
+  <span class="quiet" style="text-align:center;max-width:320px"><span data-i18n="home.note">Watching downloads only small previews. Painting loads about 105 MB of models once (kept in the browser cache). Chrome, Edge or Safari 26+.</span> <a href="https://github.com/NazarGol/VQPAINT/tree/web-spikes/web" data-i18n="home.source">source</a> · <a href="#" id="lang" class="quiet">українська</a></span>
 </div>
 <script type="module" src="landing.js"></script>
 </body>

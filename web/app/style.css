@@ -60,3 +60,18 @@ button.pill:disabled { opacity: 0.5; cursor: default; }
 .stage canvas.world { position: absolute; inset: 0; touch-action: none; }
 .note .slider { display: flex; align-items: center; gap: var(--space-2); font-size: var(--font-size-small); margin-top: var(--space-1); }
 .note .slider input { flex: 1; accent-color: var(--color-pill-done); }
+
+/* threads (replies), photos in notes, language */
+.note .text { white-space: pre-wrap; }
+.note .quiet { opacity: 0.7; }
+.note .link { background: none; border: 0; padding: 0; font: inherit; font-size: var(--font-size-small); color: inherit; text-decoration: underline; cursor: pointer; opacity: 0.85; }
+.note .link:hover { opacity: 1; }
+.note .thread-parent, .note .reply { cursor: pointer; }
+.note .thread-parent { margin-bottom: var(--space-1); }
+.note .replies { margin-top: var(--space-2); padding-left: var(--space-3); border-left: 2px solid rgba(255, 255, 255, 0.25); }
+.note .reply { margin-top: var(--space-1); font-size: var(--font-size-small); white-space: normal; }
+.note .reply .dot { width: 8px; height: 8px; margin-right: 4px; }
+.note .thumb { display: block; max-width: 120px; max-height: 120px; border-radius: calc(var(--radius) / 2); margin: var(--space-1) 0; }
+.note .photo-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-1); }
+.note .photo-row img { max-width: 72px; max-height: 72px; border-radius: calc(var(--radius) / 2); }
+.note.done.open .replies { white-space: normal; }

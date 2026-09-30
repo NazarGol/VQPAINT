@@ -16,6 +16,20 @@
 6. **Replay** in the ⋯ menu (notes appear one by one) and **export replay video** (WebM in Chrome, MP4 in Safari untested).
 7. **Phones paint themselves**: packed int8 models (decoder 45 MB, CLIP 53 MB), decoder first, CLIP on first stroke; lasso capped at 14 tokens, 1.3× longer search; wake lock while painting; painter pauses in hidden tabs; CPU fallback with the int8 decoder finishes strokes; helpers off by default (⋯ menu). Realism slider (abstract ↔ realistic) in the note box replaces effort.
 
+## Round 5 (2026-09-30 night): replies, photos, Ukrainian, metaphors, HF hosting
+0. **Quick fixes**: Android jagged edge — helper-painted strokes lost their lasso path in the room relay (cell-mask edge); the worker now relays `path`/`realism` (and `parent`/`photo`/`lang`), verified on Pixel 7 emulation (`app/test_phone.mjs` checks the note carries its path). **Hugging Face**: models on `noi3noi3/vqpaint-web` (CORS + ranges verified from `nazargol.github.io`), app loads from HF with GitHub Pages as automatic fallback (`tools/test_mirror.mjs`: HF → ok, HF blocked → Pages, `?models=pages`). **Kaggle**: kernel v3 running with internet (1500 paintings, ~6–8 h); the painting bank switch happens when it finishes.
+1. **Replies**: "reply" in an open note → the next lasso must touch that shape → painting seeded from the parent's edge tokens → tree in room state (`parent`), thread shown in the open note, PDF indents replies (`app/test_replies.mjs`, 10/10).
+2. **Photo in a note**: "add photo" (camera/gallery on phones) → resized in the browser → encoder loaded lazily, freed after encode → tokens seed the shape, CLIP guided by text + photo → only tokens + 128 px thumbnail synced; no-paint devices send the 256 px JPEG to the helper (`app/test_photo.mjs`, 7/7).
+3. **Ukrainian**: UI en/uk with a switch (default from the browser); Ukrainian notes translated in-browser (opus-mt uk→en, lazily, desktop only) just for CLIP; original always shown and exported; Inter renders Cyrillic in the UI, NotoSans is embedded in the PDF (`app/test_lang.mjs`, 10/10).
+4. **Metaphor bank**: 225 prompts with offline CLIP embeddings; nearest 3 blended per note; before/after on the six test notes in `app/shots/metaphors_before_after.png` (`tools/shots_metaphors.mjs`).
+
+### iPhone 13 Mini profile memory (WebKit emulation, process-tree RSS above the empty browser)
+| | viewing | stroke on the phone | + photo | reply | translator |
+|---|---|---|---|---|---|
+| peak | 106–109 MB | 1777 MB | 1894 MB (encoder stage 433 MB, freed before the brush) | 1848 MB | ~1.7 GB (never loaded on phones) |
+
+With a laptop in the room (the default) the phone sends the shape/photo/text and stays at ~110 MB for every feature.
+
 ## Numbers (Playwright emulation on the M1 Pro — proves the flow and sizes, not real phone speed)
 | | Chromium desktop | iPhone 15 (WebKit) | Pixel 7 (Chromium) | iPhone, no WebGPU (CPU) |
 |---|---|---|---|---|

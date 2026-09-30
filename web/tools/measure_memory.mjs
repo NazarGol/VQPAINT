@@ -10,7 +10,7 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/jav
 const server = http.createServer((req, res) => { const p = path.join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname)); if (!p.startsWith(root) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); } res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream' }); fs.createReadStream(p).pipe(res); });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const port = server.address().port, roomId = 'mem-' + Math.random().toString(36).slice(2, 7);
-const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/${args.opt ? '&opt=' + args.opt : ''}${args.lowmem ? '&lowmem=1' : ''}${args.bufcache ? '&bufcache=' + args.bufcache : ''}${args.plain ? '&plain=1' : ''}${args.clipcpu ? '&clipcpu=1' : ''}`;
+const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&models=pages${args.opt ? '&opt=' + args.opt : ''}${args.lowmem ? '&lowmem=1' : ''}${args.bufcache ? '&bufcache=' + args.bufcache : ''}${args.plain ? '&plain=1' : ''}${args.clipcpu ? '&clipcpu=1' : ''}`;
 // a desktop paints the strokes first
 const cb = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
 const D = await cb.newPage(); await D.goto(url); await D.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready && window.__vqpaint.grid, null, { timeout: 180000 });
@@ -43,9 +43,14 @@ console.log(`PEAK RSS viewing: ${(peakView / 1024).toFixed(0)} MB above the empt
 phase = 'paint';
 const t1 = Date.now();
 await P.evaluate((s) => { window.__vqpaint.setEffortSeconds(s); window.__vqpaint.setTool('brush'); }, seconds);
-await P.evaluate(() => { const pts = []; for (let k = 0; k < 20; k++) { const a = k / 20 * Math.PI * 2; pts.push([140 + 4 * Math.cos(a), 128 + 3.5 * Math.sin(a)]); } return window.__vqpaint.lassoPaint(pts, 'a lighthouse at night', 0.6); });
+// --photo: the stroke carries a photo (encoder loaded and freed before the brush); --reply: it replies to the first stroke
+const photo = args.photo ? await P.evaluate(async () => { const r = await fetch('/models/encoder_test_input.png'); const f = new File([await r.blob()], 'p.png', { type: 'image/png' }); return window.__vqpaint.readPhoto(f); }) : null;
+if (photo) console.log(`photo read: ${(photo.data.length / 1024).toFixed(0)} KB data URL, ${(photo.thumb.length / 1024).toFixed(0)} KB thumb`);
+await P.evaluate(({ photo, reply }) => { const pts = []; for (let k = 0; k < 20; k++) { const a = k / 20 * Math.PI * 2; pts.push([(reply ? 124 : 140) + 4 * Math.cos(a), 128 + 3.5 * Math.sin(a)]); } return window.__vqpaint.lassoPaint(pts, 'a lighthouse at night', 0.6, { photo: photo || null, parent: reply ? (window.__vqpaint.strokes[0] || {}).id : null }); }, { photo, reply: !!args.reply });
 await P.waitForTimeout(3000);
-const paintInfo = await P.evaluate(() => ({ strokes: window.__vqpaint.stats.strokes, status: window.__vqpaint.stats.lastStatus || '', released: window.__vqpaint.modelsLoaded === false }));
+const paintInfo = await P.evaluate(() => ({ strokes: window.__vqpaint.stats.strokes, status: window.__vqpaint.stats.lastStatus || '', released: window.__vqpaint.modelsLoaded === false, photoMs: window.__vqpaint.stats.lastPhotoEncodeMs, last: window.__vqpaint.strokes[window.__vqpaint.strokes.length - 1] }));
+if (args.photo) console.log(`photo encoded in ${paintInfo.photoMs} ms; note has thumb: ${!!(paintInfo.last && paintInfo.last.photo)}`);
+if (args.reply) console.log(`reply parent set: ${!!(paintInfo.last && paintInfo.last.parent)}`);
 console.log(`paint: ${((Date.now() - t1) / 1000).toFixed(1)}s incl. model load, ${paintInfo.status}, models released after: ${paintInfo.released}`);
 clearInterval(timer);
 console.log(`PEAK RSS painting: ${(peakPaint / 1024).toFixed(0)} MB above the empty browser`);
