@@ -10,7 +10,7 @@ import { maskCells, maskToString, maskFromString, maskHas, noisyMask } from '../
 import { lassoMask } from '../lib/lasso.js';
 import { embedLongText } from '../lib/text.js';
 import { connectRoom } from '../lib/room.js';
-import { LayerCache, encodeTokens, paintedBounds, polygonAlpha, maskAlpha, composeLayer, intersects } from '../lib/layers.js';
+import { LayerCache, encodeTokens, paintedBounds, polygonAlpha, maskAlpha, composeLayer, intersects, makePreviewBlob } from '../lib/layers.js';
 import { mountRoombar } from './components/roombar.js';
 import { mountTools } from './components/tools.js';
 import { mountMenu } from './components/menu.js';
@@ -36,11 +36,17 @@ const lite = params.get('lite') === '1' || (params.get('lite') !== '0' && isPhon
 const forceNoPaint = params.get('nopaint') === '1';
 let helpersOn = params.get('helpers') === '1';                 // optional speed-up, off by default
 const caps = { paint: false, speed: null, gpu: false, lite };
+// crash loop guard: if the last visit never reached 'ok' (Safari reloaded the tab), start in low-memory safe mode (viewing only)
+const lastBoot = sessionStorage.getItem('vqpaint.boot');
+let safeMode = params.get('safe') === '1' || (lastBoot === 'loading' || lastBoot === 'painting');
+if (safeMode) localStorage.setItem('vqpaint.crashes', String((+localStorage.getItem('vqpaint.crashes') || 0) + 1));
+sessionStorage.setItem('vqpaint.boot', 'loading');
+const lowMem = isPhone || safeMode || params.get('lowmem') === '1';   // release models after every stroke, small caches, 1 wasm thread
 
 // ---------- state ----------
 let grid = null;                  // {w, h, tokens} from the room (256x256 by default), the search context
 let roomBlank = 0;                // the room's blank token (set by its creator)
-let ready = false, room = null, ort = null, ep = 'webgpu', decoder = null, clip = null, palette = null, bank = null, painter = null, blankToken = 0, layers = null;
+let ready = false, room = null, ort = null, ep = 'webgpu', decoder = null, clip = null, palette = null, bank = null, painter = null, blankToken = 0, layers = null, modelsLoaded = false, mode = 'view';
 let tool = 'brush', painting = null, pendingShape = null, viewFitted = false, userMoved = false;
 const undoStack = [], strokes = [], peers = new Map(), othersPainting = new Map(), openRequests = new Map(), myRequests = new Map();
 const stats = { strokes: 0, strokeSeconds: [], modelBytes: 0 };
@@ -52,8 +58,14 @@ const stage = $('stage');
 const toast = mountToast(stage);
 const roombar = mountRoombar($('roombar'), { roomId, onInvite: invite });
 const menu = mountMenu($('menu-root'), { helpers: helpersOn, onUndo: undo, onExportPng: () => exportPng(), onExportPdf: () => exportPdf(), onReplay: () => replay(), onExportVideo: () => exportVideo(), onHelpers: (v) => (helpersOn = v) });
-const tools = mountTools($('tools'), { tool, onChange: (t) => { tool = t; if (t === 'cursor') notes.cancel(); pendingShape = null; updateScene(); } });
+const tools = mountTools($('tools'), { tool, onChange: (t) => { tool = t; if (t === 'cursor') notes.cancel(); pendingShape = null; updateScene(); if (t === 'brush' && ready && !safeMode) ensureBrush().catch((e) => setStatus('could not prepare the brush: ' + e.message, 8000)); } });
 const loading = mountLoading($('loading'));
+const previewUrl = (id) => `${CONFIG.roomsUrl}/room/${roomId}/preview/${id}`;
+async function fetchPreview(note) {
+  if (note._previewTries >= 3) return null;
+  note._previewTries = (note._previewTries || 0) + 1;
+  try { const r = await fetch(previewUrl(note.id)); if (!r.ok) return null; return await r.blob(); } catch { return null; }
+}
 const notes = mountNotes(stage, {
   anchorFor: () => null,
   defaultRealism: 0.6,
@@ -63,7 +75,7 @@ const notes = mountNotes(stage, {
 const view = mountCanvas(stage, {
   getTool: () => tool,
   onLasso: (pts) => { if (!ready || painting || !grid) return; const p = limitLasso(pts); const m = lassoMask(p, grid.w, grid.h); if (!m.count) return; pendingShape = { mask: m, points: p }; updateScene(); notes.edit(view.anchorFor(m)); },
-  onTap: (w) => { const st = strokeAt(w[0], w[1]); if (st && notes.openedId !== st.id) notes.open(st, view.anchorFor(st.crop || st._mask)); else notes.close(); },
+  onTap: (w) => { const st = strokeAt(w[0], w[1]); if (st && notes.openedId !== st.id) { notes.open(st, view.anchorFor(st.crop || st._mask)); noteOpenedAt = performance.now(); } else notes.close(); },
   onCursor: (w) => room?.sendCursor(w[0], w[1]),
   onResize: () => { if (ready && grid && !userMoved) fitToPainting(); },   // phones report a tiny stage before their first layout settles
   onUserMove: () => { userMoved = true; },
@@ -71,7 +83,8 @@ const view = mountCanvas(stage, {
 });
 view.canvas.id = 'canvas';
 window.__vqpaintView = view;
-document.addEventListener('pointerdown', (e) => { if (!e.target.closest('.note') && !e.target.closest('.ui') && !e.target.closest('.menu')) { if (tool === 'cursor' || !e.target.closest('canvas')) notes.close(); } });
+let noteOpenedAt = 0;
+document.addEventListener('pointerdown', (e) => { if (performance.now() - noteOpenedAt < 600) return; if (!e.target.closest('.note') && !e.target.closest('.ui') && !e.target.closest('.menu')) { if (tool === 'cursor' || !e.target.closest('canvas')) notes.close(); } });
 const setStatus = (s, ms) => toast.status(s, ms);
 const peerName = (id) => (id === room?.id ? myName : peers.get(id)?.name || 'someone');
 function limitLasso(pts) {           // phones: keep strokes small enough to decode quickly (max 14 tokens across)
@@ -92,7 +105,7 @@ function updateScene() {
   view.setScene({ layers: layers ? strokes.map((s) => layers.get(s.id)).filter(Boolean) : [], shapes, peers: [...peers.values()], live: painting && painting.live || null });
 }
 let layersTimer = null;
-/** decode + cache the layers of notes that intersect the view (nearest first), then refresh the scene */
+/** show the layers of notes that intersect the view (nearest first): previews when we have no models, decodes otherwise */
 function scheduleVisibleLayers() {
   if (!layers || !grid) return;
   clearTimeout(layersTimer);
@@ -102,7 +115,17 @@ function scheduleVisibleLayers() {
     const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
     todo.sort((a, b) => dist(a) - dist(b));
     function dist(s) { const c = s.crop || s._mask; return Math.hypot(c.x + c.w / 2 - cx, c.y + c.h / 2 - cy); }
-    for (const s of todo) { if (layers.has(s.id)) continue; await layers.render(s, grid); updateScene(); }
+    const total = todo.length; let done = 0;
+    if (total) loading.set(`loading the painting… ${done}/${total}`);
+    for (const s of todo) {
+      if (layers.has(s.id)) { done++; continue; }
+      let ok = false;
+      if (s.crop && s.path) { const blob = await fetchPreview(s); if (blob) { try { await layers.fromPreview(s, blob); ok = true; } catch (e) { console.warn('preview', e); } } }
+      if (!ok && decoder) { await layers.render(s, grid); ok = true; }
+      done++; loading.set(`loading the painting… ${done}/${total}`); updateScene();
+    }
+    if (!ensuring) loading.hide();
+    if (strokes.some((s) => !layers.has(s.id) && s.crop && (s._previewTries || 0) < 3)) setTimeout(scheduleVisibleLayers, 2500);   // just-painted strokes: retry the preview
   }, 60);
 }
 function renderPeers() {
@@ -129,7 +152,7 @@ async function startStroke(mask, text, points = null, realism = 0.6) {
   if (!mask.count || !grid) return;
   if (helpersOn) { const h = bestHelper(); if (h && (forceNoPaint || !caps.paint || (h.caps.speed || 1e9) * 2 < (caps.speed || 1e9))) return requestHelp(mask, text, points, realism); }
   if (forceNoPaint) { setStatus('this device cannot paint and no helper is available.'); return; }
-  await ensurePainter();
+  await ensureBrush();
   return paintMask(mask, text, { points, realism });
 }
 async function paintMask(mask, text, { author = myName, color = myColor, forId = null, reqId = null, points = null, realism = 0.6 } = {}) {
@@ -140,12 +163,15 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
   const jobId = Math.random().toString(36).slice(2, 10);
   const path = points ? points.map(([x, y]) => [Math.round(x * 100) / 100, Math.round(y * 100) / 100]) : null;
   painting = { abort, mask, jobId, forId, reqId, progress: 0, points: path, live: null }; updateScene(); renderPeers(); menu.setUndoEnabled(false);
+  sessionStorage.setItem('vqpaint.boot', 'painting');
   room?.paintStart({ id: jobId, mask: maskToString(mask), text: text.slice(0, 80), for: forId, path });
   let wake = null; try { wake = await navigator.wakeLock?.request('screen'); } catch (_) {}
   const t0 = performance.now();
   let lastSend = 0, ok = false, crop = null, finalImg = null, alphaImg = null;
   try {
+    setStage('embed-text');
     const { target, chunks, hardSplits } = await embedLongText(clip, text);
+    setStage('search');
     if (chunks.length > 1) setStatus(`${chunks.length} text chunks blended${hardSplits ? ` (${hardSplits} split mid-sentence)` : ''}`);
     const res = await painter.paint({
       grid, mask, target, seconds: rp.seconds, margin: MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500,
@@ -166,6 +192,11 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     await layers.fromImage(note, res.crop, res.image, alphaImg || (path ? polygonAlpha(res.crop, path, 6) : maskAlpha(res.crop, mask)));
     undoStack.push({ cells, before, note }); menu.setUndoEnabled(true);
     sendCells(cells);
+    try {   // small JPEG of the stroke so viewers need no model; uploaded before the note so they find it
+      const blob = await makePreviewBlob(res.image, lowMem ? 320 : 384);
+      const up = await fetch(previewUrl(note.id), { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
+      note._preview = up.ok; stats.lastPreviewBytes = blob.size;
+    } catch (e) { console.warn('preview upload', e); }
     room?.sendNote(note);
     ok = true;
   } catch (e) {
@@ -176,6 +207,8 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     room?.paintEnd(jobId);
     if (reqId) room?.paintDone(reqId, ok);
     painting = null; updateScene(); renderPeers();
+    sessionStorage.setItem('vqpaint.boot', 'ok');
+    if (lowMem) await releaseBrush();
     setTimeout(claimNextRequest, 300);
   }
 }
@@ -209,10 +242,10 @@ function requestHelp(mask, text, points, realism) {
   const entry = { req, mask, points, realism, timer: null, assigned: null };
   myRequests.set(req.id, entry);
   setStatus(`${peerName(bestHelper().id)} will paint this for you…`, 6000);
-  entry.timer = setTimeout(async () => { if (!myRequests.has(req.id) || entry.assigned) return; myRequests.delete(req.id); room.paintDone(req.id, false); await ensurePainter(); paintMask(mask, text, { points, realism }); }, 8000);
+  entry.timer = setTimeout(async () => { if (!myRequests.has(req.id) || entry.assigned) return; myRequests.delete(req.id); room.paintDone(req.id, false); await ensureBrush(); paintMask(mask, text, { points, realism }); }, 8000);
 }
 function onPaintRequest(req) { if (!req || req.from === room?.id || !helpersOn) return; openRequests.set(req.id, req); setTimeout(claimNextRequest, 200 + Math.min(2000, (caps.speed || 1000) / 4) + Math.random() * 300); }
-async function claimNextRequest() { if (!helpersOn || !caps.paint || painting || !room) return; const req = [...openRequests.values()].find((r) => !r.by); if (!req) return; await ensurePainter(); room.paintClaim(req.id); }
+async function claimNextRequest() { if (!helpersOn || !caps.paint || painting || !room) return; const req = [...openRequests.values()].find((r) => !r.by); if (!req) return; await ensureBrush(); room.paintClaim(req.id); }
 function onPaintAssigned({ id, by, for: forId }) {
   const req = openRequests.get(id), mine = myRequests.get(id);
   if (mine) { mine.assigned = by; setStatus(`${peerName(by)} is painting this for you…`, 6000); }
@@ -229,60 +262,88 @@ const onProgress = (p) => {
   loading.set(`loading models ${(loaded / 2 ** 20).toFixed(0)} / ${(total / 2 ** 20).toFixed(0)} MB${Object.values(prog).every((x) => x.cached) ? ' · cached' : ''}`);
   stats.modelBytes = total;
 };
-let painterLoading = null;
-function ensurePainter() {
+let ensuring = null;
+const sessionOpts = () => (lowMem ? { enableCpuMemArena: false, enableMemPattern: false, graphOptimizationLevel: params.get('opt') || 'basic' } : {});
+const epFor = (name) => (name === 'webgpu' && params.get('bufcache') ? { name: 'webgpu', storageBufferCacheMode: params.get('bufcache'), defaultBufferCacheMode: params.get('bufcache'), uniformBufferCacheMode: params.get('bufcache') } : name);
+const plain = params.get('plain') === '1', clipCpu = params.get('clipcpu') === '1';
+const setStage = (s) => { stats.stage = s; beacon('stage', { s }); };
+/** Load the models for painting, one at a time, with "preparing the brush… N%". Nothing is loaded for viewing. */
+function ensureBrush() {
   if (painter) return Promise.resolve();
-  painterLoading ||= (async () => {
-    const tokJson = await fetchJsonCached(M + 'mobileclip_s0/tokenizer.json');
-    const vis = await loadPacked(M + 'pack/', 'clip_vision', { onProgress });
-    const txt = await loadPacked(M + 'pack/', 'clip_text', { onProgress });
-    loading.set('starting the painting models…');
-    clip = await Clip.create(ort, { visionBuf: vis.model, textBuf: txt.model, tokenizerJson: tokJson, visionEp: ep, visionExternal: vis.externalData, textExternal: txt.externalData });
-    beacon('clip-ready');
-    try { bank = await Bank.load(M + 'bank/'); } catch (e) { console.warn('bank not available', e); bank = null; }
-    beacon('palette-bank-ready', { bank: !!bank });
+  if (safeMode) {
+    toast.message('Safari reloaded this page last time, so it is in low-memory mode: viewing only.<br><span class="quiet">Painting loads about 105 MB of models.</span><br><br><button class="pill" data-try>try painting anyway</button> <button class="pill" data-no>keep viewing</button>');
+    const m = document.querySelector('[data-message]'); m.querySelector('[data-try]').onclick = () => { safeMode = false; m.hidden = true; ensureBrush(); }; m.querySelector('[data-no]').onclick = () => { m.hidden = true; };
+    return Promise.reject(new Error('low-memory mode'));
+  }
+  ensuring ||= (async () => {
+    mode = 'brush'; sessionStorage.setItem('vqpaint.boot', 'painting');
+    const total = 105 * 2 ** 20, seen = {};
+    const cachedSeen = {};
+    const onP = (p) => { seen[p.url] = p.loaded; cachedSeen[p.url] = !!p.cached; const loaded = Object.values(seen).reduce((a, b) => a + b, 0); loading.set(`preparing the brush… ${Math.min(99, Math.round(loaded / total * 100))}%`); stats.cached = Object.values(cachedSeen).every(Boolean); stats.modelBytes = loaded; };
+    loading.set('preparing the brush… 0%');
+    setStage('ort'); if (!ort) { ort = await loadOrt(params.get('ort') || CONFIG.ortBase); ort.env.wasm.numThreads = 1; ort.env.wasm.proxy = false; }
+    if (!decoder) {
+      setStage('decoder-fetch');
+      if (caps.gpu && plain) { let buf = await fetchCached(M + 'decoder_fp16.onnx', { onProgress: onP }); setStage('decoder-session'); decoder = await Decoder.create(ort, buf, { ep: epFor(ep), ...sessionOpts() }); buf = null; setStage('decoder-ready'); }
+      else if (caps.gpu) { let pk = await loadPacked(M + 'pack/', 'decoder', { onProgress: onP }); stats.dequantMs = pk.stats && pk.stats.dequantMs; setStage('decoder-session'); decoder = await Decoder.create(ort, pk.model, { ep: epFor(ep), externalData: pk.externalData, ...sessionOpts() }); pk = null; setStage('decoder-ready'); }
+      else { let buf = await fetchCached(M + 'decoder_int8.onnx', { onProgress: onP }); decoder = await Decoder.create(ort, buf, { ep, ...sessionOpts() }); buf = null; }
+      layers.setDecoder(decoder);
+      beacon('decoder-ready');
+      if (!caps.speed) { await decoder.decode(new Int32Array(256).fill(blankToken), 16, 16); caps.speed = stats.fullDecodeMs = Math.round(decoder.lastMs); }
+    }
+    if (!clip) {
+      const tokJson = await fetchJsonCached(M + 'mobileclip_s0/tokenizer.json');
+      setStage('clip-fetch');
+      const cep = clipCpu ? 'wasm' : epFor(ep);
+      if (plain) { let vb = await fetchCached(M + 'mobileclip_s0/onnx/vision_model_fp16.onnx', { onProgress: onP }); let tb = await fetchCached(M + 'mobileclip_s0/onnx/text_model_fp16.onnx', { onProgress: onP }); setStage('clip-session'); clip = await Clip.create(ort, { visionBuf: vb, textBuf: tb, tokenizerJson: tokJson, visionEp: cep, textEp: cep, ...sessionOpts() }); vb = tb = null; }
+      else { let vis = await loadPacked(M + 'pack/', 'clip_vision', { onProgress: onP });
+      let txt = await loadPacked(M + 'pack/', 'clip_text', { onProgress: onP });
+      setStage('clip-session');
+      clip = await Clip.create(ort, { visionBuf: vis.model, textBuf: txt.model, tokenizerJson: tokJson, visionEp: cep, textEp: cep, visionExternal: vis.externalData, textExternal: txt.externalData, ...sessionOpts() });
+      vis = txt = null; }
+      setStage('clip-ready'); beacon('clip-ready');
+    }
+    if (!bank) { try { bank = await Bank.load(M + 'bank/'); } catch (e) { console.warn('bank not available', e); bank = null; } }
     painter = new Painter({ decoder, clip, palette, bank });
-    caps.paint = true; room?.setCaps(caps);
-    loading.hide();
-  })();
-  return painterLoading;
+    setStage('brush-ready');
+    modelsLoaded = true; caps.paint = true; room?.setCaps(caps);
+    loading.hide(); sessionStorage.setItem('vqpaint.boot', 'ok');
+  })().finally(() => { ensuring = null; });
+  return ensuring;
+}
+/** Free the sessions and GPU buffers (phones do this after every stroke; Cache Storage keeps the downloads). */
+async function releaseBrush() {
+  painter = null; modelsLoaded = false; mode = 'view'; setStage('releasing');
+  if (clip) { await clip.release(); clip = null; }
+  if (decoder) { await decoder.release(); decoder = null; layers.setDecoder(null); }
+  caps.paint = false; room?.setCaps(caps); setStage('released');
 }
 const beacon = (phase, extra = {}) => { if (!params.get('auto')) return; try { fetch('/__progress', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phase, t: Math.round(performance.now()), ...extra }) }).catch(() => {}); } catch (_) {} };
 window.addEventListener('error', (e) => beacon('error', { message: String(e.message), src: String(e.filename) + ':' + e.lineno }));
 window.addEventListener('unhandledrejection', (e) => beacon('unhandledrejection', { message: String(e.reason && (e.reason.stack || e.reason.message || e.reason)) }));
 async function boot() {
-  const gpu = params.get('nogpu') === '1' ? null : await webgpuInfo();   // ?nogpu=1 forces the CPU path (test hook)
+  const gpu = params.get('nogpu') === '1' ? null : await webgpuInfo();
   beacon('gpu', { gpu }); caps.gpu = !!gpu;
   if (!gpu) toast.message('This browser has no WebGPU: painting runs on the CPU and takes a few minutes per stroke.<br><span class="quiet">Chrome or Edge 113+, or Safari 26+, paint in seconds.</span><br><br><button class="pill" onclick="this.closest(\'.message\').hidden=true">ok</button>');
   ep = gpu ? 'webgpu' : 'wasm';
   const t0 = performance.now();
-  palette = await Palette.load(M + 'palette/');                       // 4 MB first: it gives the blank token, needed to create the room
-  let best = Infinity; for (let i = 0; i < palette.n; i++) { const r = palette.rgb[i * 3], g = palette.rgb[i * 3 + 1], b = palette.rgb[i * 3 + 2]; const d = (r - 64) ** 2 + (g - 64) ** 2 + (b - 64) ** 2 + 6 * ((Math.max(r, g, b) - Math.min(r, g, b)) ** 2); if (d < best) { best = d; blankToken = i; } }
+  loading.set('loading the painting…');
+  document.documentElement.style.setProperty('--color-bg', CONFIG.blankRgb);   // the exact decoded colour of blank canvas
+  palette = await Palette.load(M + 'palette/');                       // 4 MB (colour proposals); no model is loaded for viewing
+  blankToken = CONFIG.blankToken;
   connect();
-  ort = await loadOrt(params.get('ort') || CONFIG.ortBase);
-  beacon('ort-loaded');
-  if (gpu) { const pk = await loadPacked(M + 'pack/', 'decoder', { onProgress }); stats.dequantMs = pk.stats && pk.stats.dequantMs; loading.set('starting the decoder…'); decoder = await Decoder.create(ort, pk.model, { ep, externalData: pk.externalData }); }
-  else { const decBuf = await fetchCached(M + 'decoder_int8.onnx', { onProgress }); loading.set('starting the decoder…'); decoder = await Decoder.create(ort, decBuf, { ep }); }   // int8 QDQ runs 3x faster on the CPU
-  layers = new LayerCache(decoder);
-  beacon('decoder-ready');
-  const blankImg = await decoder.decode(new Int32Array(16).fill(blankToken), 4, 4);   // the exact blank colour becomes the page background
-  stats.blankDecodeMs = Math.round(decoder.lastMs);
-  matchBackground(blankImg);
-  const t16 = await decoder.decode(new Int32Array(256).fill(blankToken), 16, 16);   // speed probe
-  void t16; stats.fullDecodeMs = Math.round(decoder.lastMs);
-  caps.speed = stats.fullDecodeMs; caps.paint = false;
-  stats.fetchMs = Math.round(performance.now() - t0); stats.cached = Object.values(prog).length > 0 && Object.values(prog).every((x) => x.cached);
+  layers = new LayerCache(null, { max: lowMem ? 24 : 80 });
   stats.loadMs = Math.round(performance.now() - t0);
-  loading.hide();
   ready = true;
+  sessionStorage.setItem('vqpaint.boot', 'ok');
   if (!viewFitted && grid) fitToPainting();
   scheduleVisibleLayers();
-  if (!lite && !forceNoPaint) await ensurePainter();
-  stats.paintReadyMs = Math.round(performance.now() - t0);
-  beacon('first-decode-done', { ms: stats.fullDecodeMs });
+  if (grid && !strokes.length) loading.hide();
+  beacon('view-ready', { ms: stats.loadMs });
+  if (!lowMem && !forceNoPaint && params.get('preload') === '1') await ensureBrush();
   claimNextRequest();
 }
-function matchBackground(img) {
+function matchBackgroundUnused(img) {
   const plane = img.w * img.h; let r = 0, g = 0, b = 0, n = 0;
   for (let y = 8; y < img.h - 8; y++) for (let x = 8; x < img.w - 8; x++) { const i = y * img.w + x; r += img.data[i]; g += img.data[plane + i]; b += img.data[2 * plane + i]; n++; }
   document.documentElement.style.setProperty('--color-bg', `rgb(${Math.round(255 * r / n)}, ${Math.round(255 * g / n)}, ${Math.round(255 * b / n)})`);
@@ -303,6 +364,7 @@ function connect() {
       renderPeers();
       if (ready && !viewFitted) fitToPainting();
       updateScene(); scheduleVisibleLayers();
+      if (ready && !strokes.length) loading.hide();
       if (ready) { room.setCaps(caps); claimNextRequest(); }
     },
     onSet: (m) => { if (m.from === room.id || !grid) return; for (const [x, y, tok] of m.cells) grid.tokens[y * grid.w + x] = tok; },
@@ -334,5 +396,5 @@ function lassoPaint(points, prompt, realism = 0.6) { return startStroke(lassoMas
   stats.autoStrokeMs = Math.round(performance.now() - t); stats.ua = navigator.userAgent; stats.caps = caps;
   try { await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(stats) }); } catch (_) {}
 })();
-window.__vqpaint = { get grid() { return grid; }, stats, strokes, caps, get ready() { return ready; }, get decodeTimes() { return decoder && decoder.times ? decoder.times : []; }, paintRegion, paintAt, lassoPaint, peers, get room() { return room; },
-  get painting() { return painting; }, othersPainting, myRequests, ensurePainter, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, setTool(t) { tool = t; tools.set(t); }, strokeAt, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; } };
+window.__vqpaint = { get grid() { return grid; }, stats, strokes, caps, get ready() { return ready; }, get mode() { return mode; }, get modelsLoaded() { return modelsLoaded; }, ensureBrush, releaseBrush, get safeMode() { return safeMode; }, get decodeTimes() { return decoder && decoder.times ? decoder.times : []; }, paintRegion, paintAt, lassoPaint, peers, get room() { return room; },
+  get painting() { return painting; }, othersPainting, myRequests, ensurePainter: ensureBrush, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, setTool(t) { tool = t; tools.set(t); }, strokeAt, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; } };
