@@ -1,5 +1,12 @@
 # Progress
 
+## Phase 3 (2026-09-30) — new UI to Nazar's design
+- Design text: `web/design/DESIGN.md`. Tokens: `app/tokens.css`. Components: roombar, tools, menu, notes, canvas, loading, toast.
+- Brush = lasso (any free shape), white while drawing; note box appears next to the closed shape; Enter paints; the box turns muted and stays attached. Cursor tool: hover (desktop) / tap (phone) opens the full note.
+- Progress shows as the white shape fading out. Export PNG + notes, undo, clear and effort in the ⋯ menu. Home page and no-WebGPU message in the same style.
+- Engine: free-form masks; blending only where shapes touch painted cells.
+- Screenshots: `app/shots/ui_desktop.png`, `ui_desktop_drawing.png`, `ui_desktop_notebox.png`, `ui_phone.png`, `ui_phone_note.png`, `ui_home.png`, `ui_home_phone.png`.
+
 ## Done (phase 2, 2026-09-30) — "notes become a painting"
 1. **Strokes ≠ pasted photos**: irregular masks, mosaic seeds from 4 bank grids in 4×4 patches, edges grown from the canvas, changed-cell crossfade. Before/after: `app/shots/before_after.png`. The painterly look needs the painting bank: notebook ready in `export/paintings/` (NEEDS_NAZAR item 0).
 2. **Long text**: sentence chunks ≤ 75 CLIP tokens, blended target; the status line shows the chunk count and any mid-sentence splits.

@@ -113,9 +113,13 @@ git clone --depth 1 https://github.com/CompVis/taming-transformers.git web/expor
 - Site: `web/deploy_pages.sh` builds a temp dir (app, lib, model files) and force-pushes it to `gh-pages`.
 - Rooms: `cd web/rooms && npx wrangler deploy` (wrangler must be logged in). URL goes in `app/config.js`.
 
+## UI
+
+The design is the text in `design/DESIGN.md`. Whole screen is the canvas; the brush is a lasso; a note box appears next to the closed shape; Enter paints it; the cursor tool reads notes on hover or tap. Tokens in `app/tokens.css`, components in `app/components/` (roombar, tools, menu, notes, canvas, loading, toast).
+
 ## Layout
 
-- `app/` — the app: `index.html` (landing), `room.html` + `room.js` (orchestrator), `components/` (topbar, panel, loading, note, canvas: plain DOM, no framework), `tokens.css` (all design tokens: colours, fonts, spacing, radii, shadows — the file to replace with the Figma design), `style.css` (layout, tokens only), `config.js`, tests `test_app.mjs` / `test_phone.mjs`, `shots/` (before/after).
+- `app/` — the app: `index.html` (home), `room.html` + `room.js` (orchestrator), `components/`, `tokens.css`, `style.css`, `config.js`, tests `test_app.mjs` / `test_phone.mjs`, `shots/` (screenshots, before/after).
 - `lib/` — `decoder.js`, `clip.js`, `clip_tokenizer.js`, `palette.js`, `bank.js`, `search.js` (the painter), `mask.js` (blob masks, alpha maps), `text.js` (chunking + blending), `room.js` (room client), `models.js` (loading + cache + ORT queue), `image.js`.
 - `rooms/` — Cloudflare Worker + Durable Object, protocol test.
 - `export/` — Python scripts that build the ONNX decoder (fp16 + int8), palette and bank; `paintings/` = the painting generator notebook.
