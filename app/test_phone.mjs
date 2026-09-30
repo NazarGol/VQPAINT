@@ -10,7 +10,7 @@ import { chromium, webkit, devices } from 'playwright';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, s, i, arr) => { if (s.startsWith('--')) a.push([s.slice(2), arr[i + 1] && !arr[i + 1].startsWith('--') ? arr[i + 1] : 'true']); return a; }, []));
-const deviceName = args.device || 'iPhone 15', seconds = +(args.seconds || 6);
+const deviceName = args.device || 'iPhone 15', seconds = +(args.seconds || 6), nogpu = args.nogpu === 'true' || args.nogpu === '1';
 const dev = devices[deviceName]; if (!dev) { console.error('unknown device', deviceName); process.exit(2); }
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json', '.wasm': 'application/wasm', '.css': 'text/css' };
 const server = http.createServer((req, res) => {
@@ -21,7 +21,7 @@ const server = http.createServer((req, res) => {
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const port = server.address().port, roomId = 'phone-' + Math.random().toString(36).slice(2, 8);
-const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/`;
+const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/${nogpu ? '&nogpu=1' : ''}`;
 const outDir = path.join(here, 'test_out'); fs.mkdirSync(outDir, { recursive: true });
 const fails = []; const check = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails.push(m); };
 // desktop helper (Chromium)
@@ -42,6 +42,7 @@ const readyS = (Date.now() - t0) / 1000;
 const st = await P.evaluate(() => ({ bytes: Math.round(window.__vqpaint.stats.modelBytes / 2 ** 20), caps: window.__vqpaint.caps, full: window.__vqpaint.stats.fullDecodeMs, ua: navigator.userAgent, coarse: matchMedia('(pointer: coarse)').matches, vw: innerWidth, vh: innerHeight }));
 console.log(`${deviceName}: ready to view in ${readyS.toFixed(1)}s, ${st.bytes} MB loaded, lite=${st.caps.lite}, webgpu=${st.caps.gpu}, canPaint=${st.caps.paint}, full decode ${st.full} ms, viewport ${st.vw}x${st.vh}, pointer coarse=${st.coarse}`);
 check(st.caps.lite === true, 'phone detected: lite mode on');
+if (nogpu) check(st.caps.gpu === false, 'CPU path forced (no WebGPU)');
 check(st.bytes < 120, `first download for viewing is ${st.bytes} MB (< 120)`);
 await P.waitForFunction(() => window.__vqpaint.room && window.__vqpaint.room.id && window.__vqpaint.peers.size >= 1, null, { timeout: 20000 }).catch(() => {});
 await P.screenshot({ path: path.join(outDir, `phone_${deviceName.replace(/\s+/g, '_')}_layout.png`) });
@@ -63,7 +64,7 @@ await P.screenshot({ path: path.join(outDir, `phone_${deviceName.replace(/\s+/g,
 await P.fill('[data-note-input]', 'we argued about the ending, then laughed');
 await P.press('[data-note-input]', 'Enter');
 const tStroke = Date.now();
-await P.waitForFunction(() => window.__vqpaint.strokes.length >= 1 || window.__vqpaint.stats.strokes >= 1, null, { timeout: (seconds + 40) * 1000 }).catch(() => {});
+await P.waitForFunction(() => window.__vqpaint.strokes.length >= 1 || window.__vqpaint.stats.strokes >= 1, null, { timeout: (seconds + (nogpu ? 900 : 40)) * 1000 }).catch(() => {});
 const after = await P.evaluate(() => ({ notes: window.__vqpaint.strokes.length, own: window.__vqpaint.stats.strokes, status: document.querySelector('[data-status]').textContent, reqs: window.__vqpaint.myRequests.size }));
 const strokeS = (Date.now() - tStroke) / 1000;
 check(after.notes >= 1, `stroke from a touch drag produced a note (${after.own ? 'painted on the phone' : 'painted by the helper'}) in ${strokeS.toFixed(1)}s: "${after.status}"`);

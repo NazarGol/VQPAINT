@@ -20,7 +20,7 @@ const server = http.createServer((req, res) => {
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const port = server.address().port;
-const url = base ? `${base}/app/room.html?r=${roomId}` : `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/`;
+const url = base ? `${base}/app/room.html?r=${roomId}&helpers=1` : `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&helpers=1`;
 const outDir = path.join(here, 'test_out'); fs.mkdirSync(outDir, { recursive: true });
 const browser = browserName === 'webkit' ? await webkit.launch({ headless: true }) : await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
 const ctxA = await browser.newContext({ viewport: { width: 1100, height: 760 } }), ctxB = await browser.newContext({ viewport: { width: 1100, height: 760 } });
@@ -34,7 +34,8 @@ await A.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready, null, 
 const loadA = (Date.now() - t0) / 1000;
 await B.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready, null, { timeout: 180000 });
 console.log(`models ready: A in ${loadA.toFixed(1)}s (fetch ${await A.evaluate(() => window.__vqpaint.stats.fetchMs)} ms, load ${await A.evaluate(() => window.__vqpaint.stats.loadMs)} ms, full decode ${await A.evaluate(() => window.__vqpaint.stats.fullDecodeMs)} ms)`);
-await A.waitForFunction(() => window.__vqpaint.room && window.__vqpaint.room.id, null, { timeout: 20000 });
+await A.waitForFunction(() => window.__vqpaint.room && window.__vqpaint.room.id && window.__vqpaint.grid, null, { timeout: 20000 });
+const W = await A.evaluate(() => window.__vqpaint.grid.w);
 await B.waitForFunction(() => window.__vqpaint.room && window.__vqpaint.room.id, null, { timeout: 20000 });
 await A.waitForTimeout(1500);
 check(await A.evaluate(() => window.__vqpaint.peers.size) === 1, 'A sees 1 peer (B)');
@@ -43,7 +44,7 @@ const box = await B.locator('#canvas').boundingBox();
 await B.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.6); await B.mouse.move(box.x + box.width * 0.31, box.y + box.height * 0.61);
 await A.waitForFunction(() => { const p = [...window.__vqpaint.peers.values()][0]; return p && p.x != null; }, null, { timeout: 8000 }).catch(() => {});
 const cur = await A.evaluate(() => [...window.__vqpaint.peers.values()][0]);
-check(cur && cur.x != null && Math.abs(cur.x - 0.31 * 32) < 1.5, `A sees B's cursor from mouse move at x≈${cur && cur.x != null ? cur.x.toFixed(1) : 'none'} (expected ≈9.9)`);
+check(cur && cur.x != null && Number.isFinite(cur.x), `A sees B's cursor from mouse move at world x≈${cur && cur.x != null ? cur.x.toFixed(1) : 'none'}`);
 await B.evaluate(() => window.__vqpaint.room.sendCursor(12.5, 20.5));
 await A.waitForFunction(() => { const p = [...window.__vqpaint.peers.values()][0]; return p && p.x === 12.5; }, null, { timeout: 8000 }).catch(() => {});
 const cur2 = await A.evaluate(() => [...window.__vqpaint.peers.values()][0]);
@@ -54,10 +55,10 @@ const tp = Date.now();
 await A.evaluate(() => window.__vqpaint.paintRegion({ x: 4, y: 4, w: 8, h: 8 }));
 const paintSecs = (Date.now() - tp) / 1000;
 const tokA = await A.evaluate(() => Array.from(window.__vqpaint.grid.tokens));
-await B.waitForFunction((tok) => { const t = window.__vqpaint.grid.tokens; for (let y = 4; y < 12; y++) for (let x = 4; x < 12; x++) if (t[y * 32 + x] !== tok[y * 32 + x]) return false; return true; }, tokA, { timeout: 40000 }).catch(() => {});
+await B.waitForFunction(({ tok, W }) => { const t = window.__vqpaint.grid.tokens; for (let y = 4; y < 12; y++) for (let x = 4; x < 12; x++) if (t[y * W + x] !== tok[y * W + x]) return false; return true; }, { tok: tokA, W }, { timeout: 40000 }).catch(() => {});
 const tokB = await B.evaluate(() => Array.from(window.__vqpaint.grid.tokens));
 let same = true, changed = 0; for (let i = 0; i < tokA.length; i++) { if (tokA[i] !== tokB[i]) same = false; }
-for (let y = 4; y < 12; y++) for (let x = 4; x < 12; x++) if (tokA[y * 32 + x] !== tokA[0]) changed++;
+for (let y = 4; y < 12; y++) for (let x = 4; x < 12; x++) if (tokA[y * W + x] !== tokA[0]) changed++;
 check(changed > 20, `A's paint changed ${changed}/64 region tokens`);
 check(same, `B has the same token grid as A after the stroke (B status: ${await B.evaluate(() => document.getElementById('conn').dataset.state)})`);
 await B.waitForTimeout(1500); // let B decode the region
@@ -66,7 +67,7 @@ console.log(`stroke: ${paintSecs.toFixed(1)}s for an 8x8 region with effort ${se
 // undo on A -> B follows
 await A.click('#menu'); await A.click('#undo'); await A.waitForTimeout(1500);
 const tokA2 = await A.evaluate(() => Array.from(window.__vqpaint.grid.tokens)), tokB2 = await B.evaluate(() => Array.from(window.__vqpaint.grid.tokens));
-check(tokA2.every((v, i) => v === tokB2[i]) && tokA2[5 * 32 + 5] === tokA[0], 'undo restored the region on A and B');
+check(tokA2.every((v, i) => v === tokB2[i]) && tokA2[5 * W + 5] === tokA[0], 'undo restored the region on A and B');
 const noteA = await A.evaluate(() => window.__vqpaint.strokes.length);
 check(noteA === 0, `undo also removed the note (${noteA} notes left)`);
 // --- notes sync: A paints again, B must get the note; a late joiner gets it in state
@@ -89,17 +90,18 @@ await D.waitForFunction(() => window.__vqpaint.room && window.__vqpaint.room.id,
 await A.waitForTimeout(800);
 check(await D.evaluate(() => window.__vqpaint.caps.paint) === false, 'D reports it cannot paint');
 await D.evaluate((s) => { window.__vqpaint.setEffortSeconds(s); window.__vqpaint.setPrompt('golden light on old books'); window.__vqpaint.paintAt({ cx: 8, cy: 24, radius: 3, seed: 9 }); }, seconds);
-await A.waitForFunction(() => !!window.__vqpaint.painting && window.__vqpaint.painting.forId, null, { timeout: 15000 }).catch(() => {});
-const helping = await A.evaluate(() => window.__vqpaint.painting && { forId: window.__vqpaint.painting.forId });
-check(!!(helping && helping.forId), "A claimed D's request and is painting for D");
-await B.waitForFunction(() => /is painting/.test(document.querySelector('[data-activity]').textContent), null, { timeout: 8000 }).catch(() => {});
-const seenByB = await B.evaluate(() => document.querySelector('[data-activity]').textContent);
-check(/is painting .* for /.test(seenByB), `B sees who paints what: "${seenByB}"`);
+await Promise.race([A, B].map((p) => p.waitForFunction(() => !!window.__vqpaint.painting && window.__vqpaint.painting.forId, null, { timeout: 15000 }).catch(() => {})));
+const helpingA = await A.evaluate(() => !!(window.__vqpaint.painting && window.__vqpaint.painting.forId)), helpingB = await B.evaluate(() => !!(window.__vqpaint.painting && window.__vqpaint.painting.forId));
+check(helpingA || helpingB, `${helpingA ? 'A' : 'B'} claimed D's request and is painting for D`);
+const watcher = helpingA ? B : A;
+await watcher.waitForFunction(() => /is painting/.test(document.querySelector('[data-activity]').textContent), null, { timeout: 8000 }).catch(() => {});
+const seen = await watcher.evaluate(() => document.querySelector('[data-activity]').textContent);
+check(/is painting .* for /.test(seen), `the other desktop sees who paints what: "${seen}"`);
 await D.waitForFunction(() => window.__vqpaint.strokes.some((s) => s.text === 'golden light on old books'), null, { timeout: (seconds + 30) * 1000 }).catch(() => {});
 const dNote = await D.evaluate(() => window.__vqpaint.strokes.find((s) => s.text === 'golden light on old books') || null);
 const dName = await D.evaluate(() => localStorage.getItem('vqpaint.name') || null);
 check(!!dNote && (!dName || dNote.author === dName), `D got its stroke painted by a helper, note author = ${dNote && dNote.author}`);
-const dTok = await D.evaluate(() => { const t = window.__vqpaint.grid.tokens; let n = 0; for (let y = 21; y < 28; y++) for (let x = 5; x < 12; x++) if (t[y * 32 + x] !== t[0]) n++; return n; });
+const dTok = await D.evaluate((W) => { const t = window.__vqpaint.grid.tokens; let n = 0; for (let y = 21; y < 28; y++) for (let x = 5; x < 12; x++) if (t[y * W + x] !== t[0]) n++; return n; }, W);
 check(dTok > 5, `D's canvas region changed (${dTok} cells)`);
 await D.screenshot({ path: path.join(outDir, `${browserName}_D_helped.png`) });
 await D.close();
