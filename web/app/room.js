@@ -57,7 +57,7 @@ const view = mountCanvas($('stage'), {
   onBrushEnd: (g) => { if (!brushMask) return; const m = g ? makeBrush(g) : null; brushMask = null; drawOverlay(); if (m) startStroke(m); },
   onCursor: (g) => room?.sendCursor(g.x, g.y),
   onHover: (g, s) => { if (!g) return note.hide(); const st = strokeAt(g.x, g.y); st ? note.show(st, s.x, s.y) : note.hide(); },
-  onTap: (g, s) => { const st = strokeAt(g.x, g.y); if (st && !(note.visible && note.current === st)) { note.show(st, s.x, s.y); note.current = st; } else { note.hide(); note.current = null; } },
+  onTap: (g, s) => { const st = strokeAt(g.x, g.y); if (st && !(note.visible && note.current === st)) { note.show(st, s.x, s.y); note.current = st; return true; } note.hide(); note.current = null; return !!st; },
 });
 view.canvas.id = 'canvas';
 const ctx = view.ctx;

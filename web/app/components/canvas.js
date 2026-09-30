@@ -19,9 +19,9 @@ export function mountCanvas(stageEl, { gridW, gridH, onBrushStart, onBrushMove, 
   const toStage = (ev) => { const r = stageEl.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
   let down = null; // {x, y, t, moved}
   canvas.addEventListener('pointerdown', (ev) => {
-    down = { x: ev.clientX, y: ev.clientY, t: performance.now(), moved: false, id: ev.pointerId, touch: ev.pointerType === 'touch' };
+    down = { x: ev.clientX, y: ev.clientY, t: performance.now(), moved: false, id: ev.pointerId, touch: ev.pointerType === 'touch', g: toGrid(ev) };
     canvas.setPointerCapture(ev.pointerId);
-    if (!down.touch) onBrushStart?.(toGrid(ev));
+    if (!down.touch) onBrushStart?.(down.g);
   });
   canvas.addEventListener('pointermove', (ev) => {
     const g = toGrid(ev);
@@ -35,12 +35,14 @@ export function mountCanvas(stageEl, { gridW, gridH, onBrushStart, onBrushMove, 
     if (!down) return;
     const d = down; down = null;
     const g = toGrid(ev);
-    if (d.touch && !d.moved) { onTap?.(g, toStage(ev)); return; }   // a tap on touch reads the note under the finger
+    const quick = !d.moved && performance.now() - d.t < 350;
+    if (d.touch && !d.moved) { onTap?.(g, toStage(ev)); return; }           // touch tap reads the note under the finger
+    if (quick && onTap?.(g, toStage(ev)) === true) { onBrushEnd?.(null); return; }   // a click on a note reads it instead of painting
     onBrushEnd?.(g);
   };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', () => { down = null; onBrushEnd?.(null); });
-  canvas.addEventListener('pointerleave', () => onHover?.(null));
+  canvas.addEventListener('pointerleave', (ev) => { if (ev.pointerType !== 'touch') onHover?.(null); });   // touch pointers 'leave' right after a tap
   /** overlay: peers cursors, own brush, strokes in progress */
   function drawOverlay({ peers = [], brushMask = null, brushColor = '#000', painting = [] }) {
     octx.clearRect(0, 0, overlay.width, overlay.height);
