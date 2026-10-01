@@ -9,5 +9,6 @@ export const CONFIG = {
   efforts: { quick: 5, normal: 10, long: 20 },                     // seconds of search per stroke
   blankToken: 6328,           // codebook tile nearest #404040 (export/…: palette_rgb); rooms are filled with it
   blankRgb: 'rgb(68, 61, 60)', // its decoded colour: the page background, so blank canvas has no edge
+  ink: { size: 110, speed: 0.5, viscosity: 0.45, lobes: 3, lobeLength: 0.6, tendrils: 0.6, satellites: 0.5, holes: 0.3, twin: 0.25, stretch: 0.4, roughness: 0.5, weird: 0.5 },   // the ink's base settings (app/effects.html "copy settings" gives this line); size is overridden per stroke
   version: 'v1',
 };

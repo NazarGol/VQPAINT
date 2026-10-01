@@ -1,9 +1,9 @@
-// Notes: an editing box (strong lilac, with the abstract↔realistic slider, reply header, photo button) next to a closed shape,
+// Notes: an editing box (strong lilac, reply header, photo button) next to a closed shape,
 // and one open note at a time. Nothing shows on the canvas by default; a note opens on click/tap of its shape and closes on
 // a click elsewhere. An open note shows its thread: the note it replies to (click to open) and its replies, indented.
 import { escapeHtml } from './roombar.js';
 import { t } from '../i18n.js';
-export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = null, onOpen = null, onPhoto = null, threadOf = null, defaultRealism = 0.6, phone = false }) {
+export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = null, onOpen = null, onPhoto = null, threadOf = null, phone = false }) {
   const layer = document.createElement('div'); layer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:6'; stageEl.appendChild(layer);
   let editing = null, opened = null; // {el, note}
   function place(el, anchor) {
@@ -26,7 +26,6 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = n
       el.innerHTML = `${replyTo ? `<div class="meta" data-reply-head><span class="dot" style="background:${escapeHtml(replyTo.color || '#888')}"></span>${t('note.replyingTo', { name: who(replyTo) })} · <span class="quiet">${escapeHtml(brief(replyTo.text, 48))}</span></div>` : ''}
         <div class="photo-row" data-photo-row hidden><img data-photo-thumb alt=""><button type="button" class="link" data-photo-remove>${t('note.photo.remove')}</button></div>
         <textarea data-note-input rows="1" placeholder="${escapeHtml(t(replyTo ? 'note.reply.placeholder' : 'note.placeholder'))}"></textarea>
-        <label class="slider"><span>${t('note.abstract')}</span><input type="range" min="0" max="1" step="0.05" value="${defaultRealism}" data-realism><span>${t('note.realistic')}</span></label>
         <div class="actions">${onPhoto ? `<button type="button" class="pill ghost" data-photo>${t('note.photo')}</button><input type="file" accept="image/*" data-photo-file hidden>` : ''}<span class="hint">${t(phone ? 'note.hint.phone' : 'note.hint')}</span><button type="button" class="pill go" data-paint>${t('note.paint')}</button></div>`;
       const ta = el.querySelector('textarea'); ta.value = initial;
       ta.addEventListener('input', () => grow(ta));
@@ -44,7 +43,7 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = n
         el.querySelector('[data-photo-remove]').onclick = () => { if (!editing) return; editing.photo = null; row.hidden = true; place(el, editing.anchor); };
       }
     },
-    submit() { if (!editing) return; const text = editing.el.querySelector('textarea').value.trim(); if (!text) return; const realism = +editing.el.querySelector('[data-realism]').value; const { replyTo, photo } = editing; editing.el.remove(); editing = null; onSubmit(text, realism, { replyTo, photo }); },
+    submit() { if (!editing) return; const text = editing.el.querySelector('textarea').value.trim(); if (!text) return; const { replyTo, photo } = editing; editing.el.remove(); editing = null; onSubmit(text, 0.6, { replyTo, photo }); },
     cancel(byUser = false) { if (!editing) return; editing.el.remove(); editing = null; if (byUser) onCancel?.(); },
     get isEditing() { return !!editing; },
     get editingText() { return editing ? editing.el.querySelector('textarea').value : ''; },

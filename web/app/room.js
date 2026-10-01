@@ -58,7 +58,7 @@ let roomBlank = 0;                // the room's blank token (set by its creator)
 let ready = false, room = null, ort = null, ep = 'webgpu', decoder = null, clip = null, palette = null, bank = null, painter = null, blankToken = 0, layers = null, modelsLoaded = false, mode = 'view';
 let painting = null, pendingDrop = null, viewFitted = false, userMoved = false, replyTo = null;   // pendingDrop: where the next note lands; replyTo: the note it answers
 const queue = [];                                        // notes written while another stroke paints
-const reveal = new RevealManager({ F, effect: params.get('effect') || 'ink' });   // the organic reveal (ink by default until Nazar picks)
+const reveal = new RevealManager({ F, params: CONFIG.ink || {} });   // the procedural ink reveal (settings from config, tuned on app/effects.html)
 const hiddenLayers = new Set();                          // notes whose reveal is still spreading: their cached layer waits underneath
 let stirring = null;                                     // reveal id the finger is stirring
 const undoStack = [], strokes = [], peers = new Map(), othersPainting = new Map(), openRequests = new Map(), myRequests = new Map();
@@ -85,7 +85,7 @@ const threadOf = (note) => ({ parent: note.parent ? strokes.find((s) => s.id ===
 const briefText = (s, n = 40) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s; };
 const notes = mountNotes(stage, {
   anchorFor: () => null,
-  defaultRealism: 0.6, phone: isPhone, threadOf,
+  phone: isPhone, threadOf,
   onSubmit: (text, realism, extra = {}) => { const d = pendingDrop, parent = extra.replyTo; pendingDrop = null; replyTo = null; updateScene(); if (d) enqueueStroke({ drop: d, text, realism, parent: parent ? parent.id : null, photo: extra.photo || null }); },
   onCancel: () => { pendingDrop = null; replyTo = null; updateScene(); },
   onReply: (note) => startReply(note),
@@ -137,9 +137,27 @@ function enqueueStroke(job) {
   if (painting || myRequests.size) { queue.push(job); setStatus(t('note.queued'), 3000); return; }
   runJob(job);
 }
-function runJob(job) { const m = discMask(job.drop.x, job.drop.y, job.drop.size, grid.w, grid.h); if (!m.count) return; startStroke(m, job.text, null, job.realism, { parent: job.parent, photo: job.photo, drop: job.drop }); }
+/** the search region of a drop: the ink's own future shape (pre-simulated from its seed), one token wider, clipped to the grid */
+function inkMask(drop) {
+  let m = null;
+  try { m = reveal.presim({ cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: 6 }); } catch (e) { console.warn('presim', e); }
+  if (!m || !m.count) return discMask(drop.x, drop.y, drop.size, grid.w, grid.h);
+  const x0 = Math.max(0, m.x - 1), y0 = Math.max(0, m.y - 1), x1 = Math.min(grid.w, m.x + m.w + 1), y1 = Math.min(grid.h, m.y + m.h + 1), w = x1 - x0, h = y1 - y0;
+  if (w <= 0 || h <= 0) return discMask(drop.x, drop.y, drop.size, grid.w, grid.h);
+  const cells = new Uint8Array(w * h); let count = 0;
+  for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) if (m.cells[y * m.w + x]) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const gx = m.x + x + dx, gy = m.y + y + dy; if (gx >= x0 && gy >= y0 && gx < x1 && gy < y1 && !cells[(gy - y0) * w + gx - x0]) { cells[(gy - y0) * w + gx - x0] = 1; count++; } }
+  return { x: x0, y: y0, w, h, cells, count };
+}
+const INK_K = 0.8;   // ink size (radius in tokens) = drop radius × INK_K; the ink's lobes reach ~2× that
+function runJob(job) { const m = inkMask(job.drop); if (!m.count) return; startStroke(m, job.text, null, job.realism, { parent: job.parent, photo: job.photo, drop: job.drop }); }
 function processQueue() { if (painting || myRequests.size || !queue.length) return; runJob(queue.shift()); }
-function strokeAt(gx, gy) { const x = Math.floor(gx), y = Math.floor(gy); for (let i = strokes.length - 1; i >= 0; i--) { const s = strokes[i]; s._mask ||= maskFromString(s.mask); if (maskHas(s._mask, x, y)) return s; } return null; }
+function strokeAt(gx, gy) {
+  const x = Math.floor(gx), y = Math.floor(gy);
+  for (let i = strokes.length - 1; i >= 0; i--) { const s = strokes[i]; s._mask ||= maskFromString(s.mask); if (maskHas(s._mask, x, y)) return s; }
+  for (let i = strokes.length - 1; i >= 0; i--) { const s = strokes[i], m = s._mask; if (x < m.x - 1 || y < m.y - 1 || x > m.x + m.w || y > m.y + m.h) continue;   // a hole or a gap inside the ink still counts
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (maskHas(m, x + dx, y + dy)) return s; }
+  return null;
+}
 
 // ---------- scene ----------
 function updateScene() {
@@ -231,10 +249,10 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
   drop ||= { x: mask.x + mask.w / 2, y: mask.y + mask.h / 2, size: Math.max(mask.w, mask.h) / 2, seed: (Math.random() * 2 ** 31) | 0 };
   const cropRect = expandRegion(grid, { x: mask.x, y: mask.y, w: mask.w, h: mask.h }, MARGIN);   // same crop the painter decodes
   // the reveal starts at the moment of touch: lilac fog that turns into the painting as the search sharpens it
-  const rv = reveal.start({ id: jobId, crop: cropRect, cx: drop.x, cy: drop.y, size: drop.size * 0.92, seed: drop.seed, duration: rp.seconds, holdOpen: true, blot: drop.blot || null });
+  const rv = reveal.start({ id: jobId, crop: cropRect, cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: rp.seconds, holdOpen: true, blot: drop.blot || null });
   painting = { abort, mask, jobId, forId, reqId, progress: 0, points: path, drop }; updateScene(); renderPeers(); menu.setUndoEnabled(false);
   sessionStorage.setItem('vqpaint.boot', 'painting');
-  room?.paintStart({ id: jobId, mask: maskToString(mask), text: text.slice(0, 80), for: forId, path, blot: { ...rv.drop.toJSON(), x: drop.x, y: drop.y, size: drop.size * 0.92 } });
+  room?.paintStart({ id: jobId, mask: maskToString(mask), text: text.slice(0, 80), for: forId, path, blot: { x: drop.x, y: drop.y, size: drop.size * INK_K, seed: rv.drop.seed, duration: rp.seconds } });
   let wake = null; try { wake = await navigator.wakeLock?.request('screen'); } catch (_) {}
   const t0 = performance.now();
   let lastSend = 0, ok = false, crop = null, finalImg = null, alphaImg = null;
@@ -274,6 +292,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     if (blotRes && blotRes.path) path = blotRes.path;
     if (finalMask !== mask) { cells.forEach(([x, y], i) => { if (!maskHas(finalMask, x, y)) grid.tokens[y * grid.w + x] = before[i]; }); }   // outside the blot nothing changed
     alphaImg = blotRes ? blotRes.alpha : (path ? polygonAlpha(res.crop, path, 6) : maskAlpha(res.crop, mask));
+    if (blotRes) { const clip = maskAlpha(res.crop, mask, 1); for (let i = 3; i < alphaImg.data.length; i += 4) { const a = alphaImg.data[i] * clip.data[i] / 255; alphaImg.data[i] = a; alphaImg.data[i - 3] = a; } }   // ink outside the painted cells shows nothing
     const secs = (performance.now() - t0) / 1000;
     stats.strokes++; stats.strokeSeconds.push(secs); stats.lastTries = res.steps; stats.lastStatus = `${res.steps} tries in ${secs.toFixed(1)}s`;
     const note = { id: Math.random().toString(36).slice(2, 10), text, author, color, time: Date.now(), mask: maskToString(finalMask), crop: res.crop, tokens: encodeTokens(res.tokens), path: path || undefined, realism, parent: parent || undefined, photo: photo ? (photo.thumb || thumbOf(await dataUrlToImage(photo.data))) : undefined,
@@ -370,8 +389,8 @@ const cssBg = () => getComputedStyle(document.documentElement).getPropertyValue(
 function bestHelper() { let best = null; for (const p of peers.values()) { const c = p.caps; if (c && (c.paint || c.helper) && !p.busy && (!best || (c.speed || 1e9) < (best.caps.speed || 1e9))) best = p; } return best; }
 function requestHelp(mask, text, points, realism, { parent = null, photo = null, lang: noteLang = null, drop = null } = {}) {
   const cropRect = expandRegion(grid, { x: mask.x, y: mask.y, w: mask.w, h: mask.h }, 2);
-  const rv = drop ? reveal.start({ id: 'req-' + Date.now(), crop: cropRect, cx: drop.x, cy: drop.y, size: drop.size * 0.92, seed: drop.seed, duration: 6, holdOpen: true }) : null;   // instant start: fog while the helper paints
-  const blot = rv ? { ...rv.drop.toJSON(), x: drop.x, y: drop.y, size: drop.size * 0.92 } : undefined;
+  const rv = drop ? reveal.start({ id: 'req-' + Date.now(), crop: cropRect, cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: 6, holdOpen: true }) : null;   // instant start: live ink while the helper paints
+  const blot = rv ? { x: drop.x, y: drop.y, size: drop.size * INK_K, seed: rv.drop.seed, duration: 6 } : undefined;
   const req = { id: Math.random().toString(36).slice(2, 10), text, mask: maskToString(mask), path: points, realism, parent: parent || undefined, photo: photo ? photo.data : undefined, lang: noteLang || undefined, blot };
   if (!room) { setStatus(t('status.notConnected')); if (rv) reveal.cancel(rv.id); return; }
   room.paintRequest(req);
@@ -395,7 +414,7 @@ function onPaintAssigned({ id, by, for: forId }) {
   if (mine) { mine.assigned = by; setStatus(t('status.helperIs', { name: peerName(by) }), 6000); }
   if (req) req.by = by;
   if (req && by === room?.id && !painting) { openRequests.delete(id); (async () => { try { await ensureBrush(); } catch (e) { console.warn('helper brush', e); room.paintDone(id, false); return; }
-    paintMask(maskFromString(req.mask), req.text, { author: req.author, color: req.color, forId, reqId: id, points: req.path || null, realism: req.realism ?? 0.6, parent: req.parent || null, photo: req.photo ? { data: req.photo } : null, lang: req.lang || null, drop: req.blot ? { x: req.blot.x, y: req.blot.y, size: req.blot.size / 0.92, seed: req.blot.seed, blot: req.blot } : null }); })(); }
+    paintMask(maskFromString(req.mask), req.text, { author: req.author, color: req.color, forId, reqId: id, points: req.path || null, realism: req.realism ?? 0.6, parent: req.parent || null, photo: req.photo ? { data: req.photo } : null, lang: req.lang || null, drop: req.blot ? { x: req.blot.x, y: req.blot.y, size: req.blot.size / INK_K, seed: req.blot.seed, blot: req.blot } : null }); })(); }
 }
 function onPaintDone({ id, ok }) { openRequests.delete(id); const mine = myRequests.get(id); if (mine) { clearTimeout(mine.timer); myRequests.delete(id); if (!ok) { setStatus(t('status.helperFailed'), 5000); paintHere(mine); } else { setTimeout(() => dropFog(mine), 4000); processQueue(); } } setTimeout(claimNextRequest, 300); }
 
@@ -551,7 +570,7 @@ function paintAt({ cx, cy, radius = 3, prompt = null, seed = (Math.random() * 1e
 function paintRegion(r, prompt = null) { const cells = new Uint8Array(r.w * r.h).fill(1); return startStroke({ x: r.x, y: r.y, w: r.w, h: r.h, cells, count: r.w * r.h }, prompt ?? pendingText, null, 0.6); }
 function lassoPaint(points, prompt, realism = 0.6, extra = {}) { return startStroke(lassoMask(points, grid.w, grid.h), prompt ?? pendingText, points, realism, extra); }
 /** the real flow: tap at (x, y) in tokens (held `hold` s), write `text`, paint; resolves when the stroke is queued/started */
-function tapPaint(x, y, text, realism = 0.6, hold = 0, extra = {}) { beginWrite([x, y], hold); if (extra.photo) notes.current.editing.photo = extra.photo; notes.editingText = text; const slider = document.querySelector('[data-realism]'); if (slider) slider.value = String(realism); notes.submit(); }
+function tapPaint(x, y, text, realism = 0.6, hold = 0, extra = {}) { beginWrite([x, y], hold); if (extra.photo) notes.current.editing.photo = extra.photo; notes.editingText = text; void realism; notes.submit(); }
 (async () => {
   if (!params.get('auto')) return;
   while (!ready || !grid) await new Promise((r) => setTimeout(r, 200));
