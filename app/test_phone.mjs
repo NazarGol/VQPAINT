@@ -27,8 +27,7 @@ const fails = []; const check = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') 
 // desktop helper (Chromium)
 const helperBrowser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
 const H = await helperBrowser.newPage({ viewport: { width: 1100, height: 760 } });
-await H.goto(url); await H.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready, null, { timeout: 180000 });
-await H.evaluate((s) => window.__vqpaint.setEffortSeconds(s), seconds);
+if (!args.nohelper) { await H.goto(url); await H.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready, null, { timeout: 180000 }); await H.evaluate((s) => window.__vqpaint.setEffortSeconds(s), seconds); }   // --nohelper: the phone is alone in the room
 // the phone
 const isWebKit = dev.defaultBrowserType === 'webkit';
 const phoneBrowser = isWebKit ? await webkit.launch({ headless: true }) : await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
@@ -38,6 +37,7 @@ P.on('pageerror', (e) => console.error('[phone pageerror]', e.message));
 const t0 = Date.now();
 await P.goto(url);
 await P.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready, null, { timeout: 240000 });
+await P.evaluate((s) => window.__vqpaint.setEffortSeconds(s), seconds);
 const readyS = (Date.now() - t0) / 1000;
 const st = await P.evaluate(() => ({ bytes: Math.round(window.__vqpaint.stats.modelBytes / 2 ** 20), caps: window.__vqpaint.caps, full: window.__vqpaint.stats.fullDecodeMs, ua: navigator.userAgent, coarse: matchMedia('(pointer: coarse)').matches, vw: innerWidth, vh: innerHeight }));
 console.log(`${deviceName}: ready to view in ${readyS.toFixed(1)}s, ${st.bytes} MB loaded, lite=${st.caps.lite}, webgpu=${st.caps.gpu}, canPaint=${st.caps.paint}, full decode ${st.full} ms, viewport ${st.vw}x${st.vh}, pointer coarse=${st.coarse}`);
