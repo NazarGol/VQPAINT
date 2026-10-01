@@ -47,7 +47,8 @@ prompt ──MobileCLIP text──► text embedding
   `cursor`, `note` / `note_delete`, `paint_request` / `paint_claim` / `paint_done` (helpers),
   `paint_start` / `paint_end` (who paints what), `join`, `leave`. Free plan. Client: `lib/room.js`.
 - **Painting bank**: `export/paintings/` has a Kaggle notebook that generates thousands of VQGAN+CLIP paintings with
-  the old engine; `make_bank.py --images-dir` turns them into the bank (the Kaggle run is in progress, see PROGRESS.md).
+  the old engine (1500 made on Kaggle, 2026-10-01); `make_bank.py --images-dir … --no-coco --max-faces 500` turned them into
+  the current bank (1500 paintings + 500 faces, 2.2 MB). The old COCO+CelebA bank is kept as `bank_photos` (`?bank=bank_photos`).
 - **Replies** (`parent` on a note): the reply's lasso must touch the parent's shape (`maskTouches`); the painter seeds
   blocks from the parent's crop tokens at the same world position (edge tokens for cells outside it). Open notes show
   the thread; the PDF indents replies under their parent (`lib/export.js` `threadOrder`).
