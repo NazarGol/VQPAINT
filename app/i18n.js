@@ -3,11 +3,11 @@
 const STRINGS = {
   en: {
     'note.placeholder': 'Write the note for this shape…', 'note.reply.placeholder': 'Write your reply…',
-    'note.hint': 'Enter to paint · Shift+Enter for a new line · Esc to discard', 'note.hint.phone': 'Enter to paint · Esc to discard',
+    'note.hint': 'Enter to paint · Shift+Enter for a new line', 'note.hint.phone': '',
     'note.abstract': 'abstract', 'note.realistic': 'realistic', 'note.reply': 'reply', 'note.replyingTo': 'replying to {name}',
     'note.inReplyTo': 'in reply to {name}', 'note.replies': '{n} replies', 'note.reply1': '1 reply', 'note.photo': 'add photo', 'note.photo.remove': 'remove photo',
     'note.photo.reading': 'reading the photo…', 'note.reply.draw': 'Draw a shape touching “{text}”', 'note.reply.mustTouch': 'A reply must touch the shape it replies to. Draw it again.',
-    'note.writeFirst': 'Write the note first.', 'note.translated': 'translated for the painting: “{text}”',
+    'note.writeFirst': 'Write the note first.', 'note.paint': 'paint', 'note.queued': 'painting after the current one…', 'hint.empty': 'tap anywhere and write a thought', 'name.ask': 'What should we call you?', 'name.placeholder': 'your name', 'name.go': 'continue', 'bar.share': 'invite', 'note.translated': 'translated for the painting: “{text}”',
     'menu.undo': 'undo my last stroke', 'menu.png': 'export PNG', 'menu.pdf': 'export PDF (painting + notes)', 'menu.replay': 'replay', 'menu.video': 'export replay video',
     'menu.helpers.phone': 'let other devices paint for me: {state}', 'menu.helpers.desktop': 'help other devices paint: {state}', 'on': 'on', 'off': 'off',
     'menu.lang': 'мова: українська', 'menu.title': 'Menu',
@@ -29,11 +29,11 @@ const STRINGS = {
   },
   uk: {
     'note.placeholder': 'Напишіть нотатку для цієї фігури…', 'note.reply.placeholder': 'Напишіть відповідь…',
-    'note.hint': 'Enter — малювати · Shift+Enter — новий рядок · Esc — скасувати', 'note.hint.phone': 'Enter — малювати · Esc — скасувати',
+    'note.hint': 'Enter — малювати · Shift+Enter — новий рядок', 'note.hint.phone': '',
     'note.abstract': 'абстрактно', 'note.realistic': 'реалістично', 'note.reply': 'відповісти', 'note.replyingTo': 'відповідь для {name}',
     'note.inReplyTo': 'у відповідь {name}', 'note.replies': 'відповідей: {n}', 'note.reply1': '1 відповідь', 'note.photo': 'додати фото', 'note.photo.remove': 'прибрати фото',
     'note.photo.reading': 'читаю фото…', 'note.reply.draw': 'Намалюйте фігуру, що торкається «{text}»', 'note.reply.mustTouch': 'Відповідь має торкатися фігури, на яку відповідає. Намалюйте ще раз.',
-    'note.writeFirst': 'Спочатку напишіть нотатку.', 'note.translated': 'для картини перекладено: «{text}»',
+    'note.writeFirst': 'Спочатку напишіть нотатку.', 'note.paint': 'малювати', 'note.queued': 'намалюю після поточного…', 'hint.empty': 'торкніться будь-де і напишіть думку', 'name.ask': 'Як вас називати?', 'name.placeholder': 'ваше ім’я', 'name.go': 'далі', 'bar.share': 'запросити', 'note.translated': 'для картини перекладено: «{text}»',
     'menu.undo': 'скасувати мій останній мазок', 'menu.png': 'експорт PNG', 'menu.pdf': 'експорт PDF (картина + нотатки)', 'menu.replay': 'відтворити', 'menu.video': 'експорт відео відтворення',
     'menu.helpers.phone': 'нехай інші пристрої малюють за мене: {state}', 'menu.helpers.desktop': 'допомагати іншим пристроям малювати: {state}', 'on': 'увімк.', 'off': 'вимк.',
     'menu.lang': 'language: English', 'menu.title': 'Меню',

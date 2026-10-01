@@ -1,12 +1,13 @@
-// Screen-sized canvas over an effectively infinite world (token units). Draws cached stroke layers through the view
-// transform, the lasso being drawn, shapes in progress and peer cursors. Cursor tool: drag pans, wheel/pinch zooms,
-// tap opens a note. Brush tool: drag draws a lasso in world coordinates.
+// Screen-sized canvas over an effectively infinite world (token units). No modes: drag pans (momentum), pinch/wheel
+// zooms, a tap lands on a stroke (read) or on empty space (write), a hold grows the drop before writing. Draws the cached
+// stroke layers, the live reveals (through `reveal.draw`), the hold ring and peer cursors; animates while anything moves.
 import { F } from '../../lib/decoder.js';
 import { View, attachGestures } from '../../lib/view.js';
 import { intersects } from '../../lib/layers.js';
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const rrect = (g, x, y, w, h, r) => { g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };   // iOS 15 has no roundRect
 
-export function mountCanvas(stageEl, { getTool, onLasso, onTap, onCursor, onViewChange, onResize, onUserMove }) {
+export function mountCanvas(stageEl, { onTap, onHoldStart, onHold, onHoldEnd, onPointer, onCursor, onViewChange, onResize, onUserMove, reveal = null }) {
   const canvas = document.createElement('canvas'); canvas.className = 'world';
   stageEl.prepend(canvas);
   const ctx = canvas.getContext('2d');
@@ -19,50 +20,54 @@ export function mountCanvas(stageEl, { getTool, onLasso, onTap, onCursor, onView
     onResize?.(W, H);
   }
   window.addEventListener('resize', resize); resize();
-  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => { if (stageEl.clientWidth !== W || stageEl.clientHeight !== H) resize(); }).observe(stageEl);   // stylesheet/font load or URL-bar changes resize the stage without a window resize
-  canvas.addEventListener('wheel', () => onUserMove?.(), { passive: true });
-  canvas.addEventListener('pointerdown', () => { if (getTool() !== 'brush') onUserMove?.(); });
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => { if (stageEl.clientWidth !== W || stageEl.clientHeight !== H) resize(); }).observe(stageEl);
+  const toWorldXY = (sx, sy) => view.toWorld(sx, sy);
   const toWorld = (ev) => { const r = canvas.getBoundingClientRect(); return view.toWorld(ev.clientX - r.left, ev.clientY - r.top); };
   const toStage = (ev) => { const r = stageEl.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
-  let drawing = null;
-  attachGestures(canvas, view, {
-    shouldPan: () => getTool() !== 'brush',
-    onDragStart: (ev) => { drawing = [toWorld(ev)]; requestRender(); },
-    onDrag: (ev) => { if (drawing) { drawing.push(toWorld(ev)); requestRender(); } },
-    onDragEnd: (ev, moved) => { const pts = drawing; drawing = null; requestRender(); if (pts && pts.length >= 3 && moved) onLasso?.(pts); },
-    onTap: (ev) => onTap?.(toWorld(ev), toStage(ev)),
+  let press = null;   // {x, y (stage px), t0, r}
+  const gestures = attachGestures(canvas, view, {
+    onTap: (ev, hold) => { press = null; requestRender(); onTap?.(toWorld(ev), toStage(ev), hold); },
+    onHoldStart: (ev, [sx, sy]) => { press = { x: sx, y: sy, t: 0, r: 0 }; onHoldStart?.(toWorld(ev), { x: sx, y: sy }); requestRender(); },
+    onHold: (ev, t) => { if (press) { press.t = t; press.r = 18 + 110 * (1 - Math.exp(-t / 1.1)); } onHold?.(t); requestRender(); },
+    onHoldEnd: () => { press = null; onHoldEnd?.(); requestRender(); },
+    onPointer: onPointer ? (ev, phase, [sx, sy], delta) => onPointer(phase, toWorldXY(sx, sy), { x: sx, y: sy }, delta) : null,
+    onPanStart: () => onUserMove?.(),
   });
+  canvas.addEventListener('wheel', () => onUserMove?.(), { passive: true });
   canvas.addEventListener('pointermove', (ev) => onCursor?.(toWorld(ev)));
   view.onChange(() => { requestRender(); onViewChange?.(view); });
   // ---- rendering
-  let state = { layers: [], live: null, shapes: [], peers: [] }, raf = 0;
-  function requestRender() { if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(); }); }
-  /** layers: [{crop, bitmap}] in order; live: {crop, bitmap|imageData, alpha} own stroke in progress; shapes: [{points|mask, alpha, color, label}] */
+  let state = { layers: [], peers: [], labels: [], pending: null }, raf = 0, lastFrame = 0;
+  function requestRender() { if (!raf) raf = requestAnimationFrame((now) => { raf = 0; render(now); }); }
+  /** layers: [{crop, bitmap}] in order; peers: [{x, y, t, color}]; labels: [{x, y (world), text}] */
   function setScene(s) { state = { ...state, ...s }; requestRender(); }
-  function render() {
+  function render(now) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     const z = view.zoom, r = view.rect();
     ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
     const draw = (bitmap, crop) => { const [sx, sy] = view.toScreen(crop.x, crop.y); ctx.drawImage(bitmap, sx, sy, crop.w * z, crop.h * z); };
     for (const l of state.layers) if (intersects(r, l.crop)) draw(l.bitmap, l.crop);
-    if (state.live && state.live.bitmap) { ctx.globalAlpha = 1; draw(state.live.bitmap, state.live.crop); }
-    const zf = z / F;
-    ctx.save(); ctx.translate(-view.x * z, -view.y * z); ctx.scale(z, z); ctx.lineJoin = 'round';
-    for (const sh of state.shapes) {
-      ctx.globalAlpha = sh.alpha; ctx.fillStyle = sh.color || css('--color-shape') || '#fff'; ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 2 / z;
-      if (sh.points && sh.points.length > 2) { ctx.beginPath(); ctx.moveTo(sh.points[0][0], sh.points[0][1]); for (const [x, y] of sh.points) ctx.lineTo(x, y); ctx.closePath(); ctx.fill(); ctx.stroke(); }
-      else if (sh.mask) { for (let y = 0; y < sh.mask.h; y++) for (let x = 0; x < sh.mask.w; x++) if (sh.mask.cells[y * sh.mask.w + x]) ctx.fillRect(sh.mask.x + x, sh.mask.y + y, 1.02, 1.02); }
-      ctx.globalAlpha = 1;
+    let animating = false;
+    if (reveal && reveal.active) { reveal.draw(ctx, view, now); animating = true; }
+    if (state.pending) {   // where the note being written will land
+      const [px, py] = view.toScreen(state.pending.x, state.pending.y), pr = state.pending.r * z;
+      const g = ctx.createRadialGradient(px, py, 0, px, py, pr); g.addColorStop(0, 'rgba(214,165,220,0.45)'); g.addColorStop(0.7, 'rgba(214,165,220,0.22)'); g.addColorStop(1, 'rgba(214,165,220,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
     }
-    if (drawing && drawing.length > 1) { ctx.globalAlpha = parseFloat(css('--shape-drawing-alpha')) || 1; ctx.fillStyle = css('--color-shape') || '#fff'; ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 3 / z; ctx.beginPath(); ctx.moveTo(drawing[0][0], drawing[0][1]); for (const [x, y] of drawing) ctx.lineTo(x, y); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.globalAlpha = 1; }
-    ctx.restore();
-    for (const sh of state.shapes) if (sh.label) { const [sx, sy] = view.toScreen(sh.anchor ? sh.anchor[0] : sh.points?.[0]?.[0] ?? sh.mask.x, sh.anchor ? sh.anchor[1] : sh.points?.[0]?.[1] ?? sh.mask.y); ctx.font = `${css('--font-size-small') || '12px'} ${css('--font-family') || 'sans-serif'}`; const w = ctx.measureText(sh.label).width + 10; ctx.fillStyle = css('--color-pill') || '#E3D0E6'; ctx.beginPath(); ctx.roundRect(sx, sy - 22, w, 18, 6); ctx.fill(); ctx.fillStyle = css('--color-text') || '#1A1A1A'; ctx.fillText(sh.label, sx + 5, sy - 9); }
-    const rr = parseFloat(css('--cursor-dot')) || 5, now = Date.now();
-    for (const p of state.peers) { if (p.x == null || now - p.t > 15000) continue; const [sx, sy] = view.toScreen(p.x, p.y); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(sx, sy, rr, 0, Math.PI * 2); ctx.fill(); }
-    void zf;
+    if (press) {   // the growing drop under a held finger
+      const g = ctx.createRadialGradient(press.x, press.y, 0, press.x, press.y, press.r);
+      g.addColorStop(0, 'rgba(214,165,220,0.55)'); g.addColorStop(0.75, 'rgba(214,165,220,0.25)'); g.addColorStop(1, 'rgba(214,165,220,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(press.x, press.y, press.r, 0, Math.PI * 2); ctx.fill(); animating = true;
+    }
+    for (const lb of state.labels) { const [sx, sy] = view.toScreen(lb.x, lb.y); ctx.font = `${css('--font-size-small') || '12px'} ${css('--font-family') || 'sans-serif'}`; const w = ctx.measureText(lb.text).width + 12; ctx.fillStyle = 'rgba(227,208,230,0.85)'; ctx.beginPath(); rrect(ctx, sx - w / 2, sy - 24, w, 20, 8); ctx.fill(); ctx.fillStyle = css('--color-text') || '#1A1A1A'; ctx.fillText(lb.text, sx - w / 2 + 6, sy - 10); }
+    const rr = parseFloat(css('--cursor-dot')) || 5, t = Date.now();
+    for (const p of state.peers) { if (p.x == null || t - p.t > 15000) continue; const [sx, sy] = view.toScreen(p.x, p.y); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(sx, sy, rr, 0, Math.PI * 2); ctx.fill(); }
+    if (reveal && lastFrame) reveal.frameTime(now - lastFrame);
+    lastFrame = animating ? now : 0;
+    if (animating) requestRender();
   }
   /** screen-space bbox of a world rect {x,y,w,h} */
   const anchorFor = (c) => { const [l, t] = view.toScreen(c.x, c.y); return { left: l, top: t, right: l + c.w * view.zoom, bottom: t + c.h * view.zoom }; };
-  return { canvas, ctx, view, setScene, requestRender, anchorFor, toWorld, get size() { return { w: W, h: H }; } };
+  return { canvas, ctx, view, setScene, requestRender, anchorFor, toWorld, stopMomentum: gestures.stopMomentum, get size() { return { w: W, h: H }; } };
 }

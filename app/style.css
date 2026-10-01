@@ -75,3 +75,43 @@ button.pill:disabled { opacity: 0.5; cursor: default; }
 .note .photo-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-1); }
 .note .photo-row img { max-width: 72px; max-height: 72px; border-radius: calc(var(--radius) / 2); }
 .note.done.open .replies { white-space: normal; }
+
+/* ---------- calm, instant, soft (round 6) ---------- */
+:root { --ease: cubic-bezier(0.2, 0.8, 0.2, 1); --motion: 180ms; --blur: blur(14px); }
+@media (prefers-reduced-motion: reduce) { :root { --motion: 0ms; } }
+.pill, button.pill, .note, .menu .items, .message { -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+.pill { background: rgba(227, 208, 230, 0.86); transition: transform var(--motion) var(--ease), background var(--motion) var(--ease), opacity var(--motion) var(--ease); }
+button.pill:active, .menu .items button:active, .note .link:active { transform: scale(0.95); background: var(--color-pill-active); }
+.pill.done, .note.done { background: rgba(133, 123, 132, 0.9); }
+.note.editing { background: rgba(214, 165, 220, 0.94); }
+.note { opacity: 0; transform: translateY(6px); transition: opacity var(--motion) var(--ease), transform var(--motion) var(--ease); }
+.note.in { opacity: 1; transform: none; }
+.note .actions { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+.note .actions .hint { flex: 1; margin: 0; }
+.note .actions .pill.go { background: var(--color-text); color: var(--color-pill); margin-left: auto; }
+.note .actions .pill.ghost { background: rgba(255, 255, 255, 0.45); }
+.menu .items { background: rgba(227, 208, 230, 0.92); }
+.menu .items button { transition: background var(--motion) var(--ease), transform var(--motion) var(--ease); }
+/* the only hint: empty canvas */
+.canvas-hint { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--color-text-on-bg); opacity: 0.75; text-align: center; pointer-events: none; z-index: var(--z-ui); transition: opacity 300ms var(--ease); font-size: 16px; }
+.canvas-hint[hidden] { display: block !important; opacity: 0; }
+/* loading = soft shimmer in our colours, never a spinner */
+[data-load], [data-status] { background: linear-gradient(100deg, rgba(227, 208, 230, 0.75) 0%, rgba(244, 238, 245, 0.95) 45%, rgba(227, 208, 230, 0.75) 90%); background-size: 240% 100%; animation: shimmer 1.6s linear infinite; }
+@keyframes shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) { [data-load], [data-status] { animation: none; } }
+/* first-visit name */
+.message .ask { margin-bottom: var(--space-3); font-weight: var(--font-weight-medium); }
+.message input { width: 100%; font-size: 16px; padding: 10px 12px; border-radius: var(--radius); background: rgba(255, 255, 255, 0.6); margin-bottom: var(--space-3); min-height: 44px; }
+.message .pill.go { background: var(--color-text); color: var(--color-pill); min-height: 44px; padding: 0 18px; }
+/* phones: 16 px text (no iOS zoom), 44 px targets, the writer is a bottom sheet above the keyboard */
+@media (pointer: coarse) {
+  :root { --font-size: 16px; --font-size-small: 14px; --pill-padding: 0 14px; --radius: 14px; }
+  .pill, button.pill, .menu .items button { min-height: 44px; font-size: 16px; }
+  .note textarea, .note input { font-size: 16px; }
+  .note .actions .pill { min-height: 44px; }
+  .note.editing.sheet { position: fixed; left: 0; right: 0; bottom: 0; top: auto; max-width: none; border-radius: 18px 18px 0 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform 220ms var(--ease), opacity 220ms var(--ease); opacity: 1; max-height: 70vh; overflow: auto; }
+  .note.editing.sheet.in { transform: translateY(0); }
+  .note.editing.sheet textarea { width: 100%; }
+  .note.done.open { max-width: min(var(--note-max-width), calc(100vw - 24px)); }
+  .ui.top-left .pill[data-room] { max-width: 42vw; overflow: hidden; text-overflow: ellipsis; }
+}

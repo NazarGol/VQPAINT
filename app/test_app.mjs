@@ -20,7 +20,7 @@ const server = http.createServer((req, res) => {
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const port = server.address().port;
-const url = base ? `${base}/app/room.html?r=${roomId}&helpers=1` : `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&models=pages&helpers=1`;
+const url = base ? `${base}/app/room.html?r=${roomId}&helpers=1` : `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&models=pages&name=tester&helpers=1`;
 const outDir = path.join(here, 'test_out'); fs.mkdirSync(outDir, { recursive: true });
 const browser = browserName === 'webkit' ? await webkit.launch({ headless: true }) : await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
 const ctxA = await browser.newContext({ viewport: { width: 1100, height: 760 } }), ctxB = await browser.newContext({ viewport: { width: 1100, height: 760 } });

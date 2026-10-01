@@ -21,7 +21,7 @@ const server = http.createServer((req, res) => {
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const port = server.address().port, roomId = 'phone-' + Math.random().toString(36).slice(2, 8);
-const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&models=pages${nogpu ? '&nogpu=1' : ''}`;
+const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&models=pages&name=tester${nogpu ? '&nogpu=1' : ''}`;
 const outDir = path.join(here, 'test_out'); fs.mkdirSync(outDir, { recursive: true });
 const fails = []; const check = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails.push(m); };
 // desktop helper (Chromium)
@@ -32,7 +32,7 @@ await H.evaluate((s) => window.__vqpaint.setEffortSeconds(s), seconds);
 // the phone
 const isWebKit = dev.defaultBrowserType === 'webkit';
 const phoneBrowser = isWebKit ? await webkit.launch({ headless: true }) : await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
-const pctx = await phoneBrowser.newContext({ ...dev });
+const pctx = await phoneBrowser.newContext({ ...dev, ...(args.video ? { recordVideo: { dir: path.join(outDir, 'video'), size: { width: dev.viewport.width, height: dev.viewport.height } } } : {}) });
 const P = await pctx.newPage();
 P.on('pageerror', (e) => console.error('[phone pageerror]', e.message));
 const t0 = Date.now();
@@ -46,46 +46,48 @@ if (nogpu) check(st.caps.gpu === false, 'CPU path forced (no WebGPU)');
 check(st.bytes < 120, `first download for viewing is ${st.bytes} MB (< 120)`);
 await P.waitForFunction(() => window.__vqpaint.room && window.__vqpaint.room.id && window.__vqpaint.peers.size >= 1, null, { timeout: 20000 }).catch(() => {});
 await P.screenshot({ path: path.join(outDir, `phone_${deviceName.replace(/\s+/g, '_')}_layout.png`) });
-// draw a lasso with a touch (brush tool is the default), then write the note in the box that appears
+// no modes: a tap on empty space opens the writer (a bottom sheet on phones), "paint" starts the organic reveal
 const box = await P.locator('#canvas').boundingBox();
-const cx = box.x + box.width * 0.5, cy = box.y + box.height * 0.5;
+const cx = box.x + box.width * 0.5, cy = box.y + box.height * 0.45;
 const cdp = !isWebKit ? await pctx.newCDPSession(P) : null;
-const R = box.width * 0.12, pts = []; for (let a = 0; a <= 12; a++) pts.push([cx + R * Math.cos(a / 12 * Math.PI * 2) * (1 + 0.2 * Math.sin(3 * a)), cy + R * Math.sin(a / 12 * Math.PI * 2)]);
-if (cdp) {
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: pts[0][0], y: pts[0][1] }] });
-  for (const [x, y] of pts.slice(1)) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] });
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-} else {
-  await P.mouse.move(pts[0][0], pts[0][1]); await P.mouse.down(); for (const [x, y] of pts.slice(1)) await P.mouse.move(x, y); await P.mouse.up();
-}
-await P.waitForSelector('[data-note-input]', { timeout: 5000 });
-check(true, 'lasso closed: note box appeared');
-await P.screenshot({ path: path.join(outDir, `phone_${deviceName.replace(/\s+/g, '_')}_notebox.png`) });
+const tap = async (x, y, holdMs = 0) => { if (cdp) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] }); if (holdMs) await P.waitForTimeout(holdMs); await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); } else { await P.mouse.move(x, y); await P.mouse.down(); if (holdMs) await P.waitForTimeout(holdMs); await P.mouse.up(); } };
+await tap(cx, cy);
+await P.waitForSelector('.note.editing [data-note-input]', { timeout: 5000 });
+check(true, 'tap on empty space: writer opened');
+await P.waitForTimeout(400);   // the sheet slides in (220 ms)
+const sheet = await P.locator('.note.editing').boundingBox();
+check(sheet && Math.abs(sheet.y + sheet.height - dev.viewport.height) < 4 && sheet.width >= dev.viewport.width - 2, `the writer is a bottom sheet (${Math.round(sheet.width)}×${Math.round(sheet.height)} at the bottom)`);
+await P.screenshot({ path: path.join(outDir, `phone_${deviceName.replace(/\s+/g, '_')}_sheet.png`) });
 await P.fill('[data-note-input]', 'we argued about the ending, then laughed');
-await P.press('[data-note-input]', 'Enter');
+await P.click('.note.editing [data-paint]');
 const tStroke = Date.now();
-await P.waitForFunction(() => window.__vqpaint.strokes.length >= 1 || window.__vqpaint.stats.strokes >= 1, null, { timeout: (seconds + (nogpu ? 900 : 40)) * 1000 }).catch(() => {});
+const sawReveal = await P.waitForFunction(() => window.__vqpaint.reveal.active, null, { timeout: 8000 }).then(() => true).catch(() => false);
+check(sawReveal, 'the reveal started at once (fog spreading while the helper/engine paints)');
+await P.waitForTimeout(700); await P.screenshot({ path: path.join(outDir, `phone_${deviceName.replace(/\s+/g, '_')}_reveal.png`) });
+await P.waitForFunction(() => window.__vqpaint.strokes.length >= 1 || window.__vqpaint.stats.strokes >= 1, null, { timeout: (seconds + (nogpu ? 900 : 60)) * 1000 }).catch(() => {});
 const after = await P.evaluate(() => ({ notes: window.__vqpaint.strokes.length, own: window.__vqpaint.stats.strokes, status: document.querySelector('[data-status]').textContent, reqs: window.__vqpaint.myRequests.size }));
 const strokeS = (Date.now() - tStroke) / 1000;
-check(after.notes >= 1, `stroke from a touch drag produced a note (${after.own ? 'painted on the phone' : 'painted by the helper'}) in ${strokeS.toFixed(1)}s: "${after.status}"`);
-const edge = await P.evaluate(() => { const n = window.__vqpaint.strokes[0]; return { path: !!(n && n.path && n.path.length > 3), realism: n && n.realism }; });
-check(edge.path, `the note carries its lasso path (feathered polygon edge on every device, incl. helper-painted strokes; realism ${edge.realism})`);
-await P.waitForTimeout(1500);
-// cursor tool, then tap the stroke to read the note
-const dbg = await P.evaluate(() => { const b = document.querySelector('[data-tool="cursor"]'); const r = b.getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return { rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)], vw: innerWidth, vh: innerHeight, atPoint: e && (e.tagName + '.' + e.className) }; });
-console.log('cursor tool:', JSON.stringify(dbg));
-await P.click('[data-tool="cursor"]', { force: true, timeout: 5000 }).catch(async () => { await P.evaluate(() => window.__vqpaint.setTool('cursor')); console.log('used setTool fallback'); });
-const gx = await P.evaluate(() => { const s = window.__vqpaint.strokes[0]; if (!s) return null; const m = s.mask.split(':')[0].split(',').map(Number); return [m[0] + m[2] / 2, m[1] + m[3] / 2]; });
-if (gx) {
-  const [tx, ty] = await P.evaluate((g) => { const r = document.getElementById('canvas').getBoundingClientRect(); const [x, y] = window.__vqpaint.view.toScreen(g[0], g[1]); return [r.left + x, r.top + y]; }, gx);
-  if (cdp) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tx, y: ty }] }); await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); }
-  else await P.touchscreen.tap(tx, ty);
-  await P.waitForTimeout(400);
-  const vis = await P.evaluate(() => { const n = document.querySelector('.note.done.open'); return n && !n.hidden ? n.textContent : null; });
-  if (!vis) console.log('tap debug:', JSON.stringify(await P.evaluate((g) => ({ tool: document.querySelector('[data-tool].active')?.dataset.tool, hit: !!window.__vqpaint.strokeAt(g[0], g[1]), notes: document.querySelectorAll('.note').length, msg: !!document.querySelector('[data-message]:not([hidden])'), stage: window.__vqpaint.stats.stage }), gx)));
-  check(!!vis && /argued/.test(vis), `tap shows the note: ${vis ? JSON.stringify(vis.slice(0, 60)) : 'not shown'}`);
-}
+check(after.notes >= 1, `the note became a stroke (${after.own ? 'painted on the phone' : 'painted by the helper'}) in ${strokeS.toFixed(1)}s: "${after.status}"`);
+await P.waitForFunction(() => !window.__vqpaint.reveal.active, null, { timeout: 15000 }).catch(() => {});
+const edge = await P.evaluate(() => { const n = window.__vqpaint.strokes[0]; return { path: !!(n && n.path && n.path.length > 3), blot: !!(n && n.blot), realism: n && n.realism }; });
+check(edge.path && edge.blot, `the stroke's shape is the settled blot (outline + blot seed stored; realism ${edge.realism})`);
+await P.waitForTimeout(600);
+// tap the stroke -> note opens; tap elsewhere -> closes
+const [sx, sy] = await P.evaluate(() => { const v = window.__vqpaint, n = v.strokes[0], V = v.view; const b = n.blot || { x: n.crop.x + n.crop.w / 2, y: n.crop.y + n.crop.h / 2 }; return [(b.x - V.x) * V.zoom, (b.y - V.y) * V.zoom]; });
+await tap(box.x + sx, box.y + sy); await P.waitForTimeout(400);
+check(await P.evaluate(() => !!document.querySelector('.note.done.open')), 'tap on the stroke opens its note');
 await P.screenshot({ path: path.join(outDir, `phone_${deviceName.replace(/\s+/g, '_')}_note.png`) });
+await tap(box.x + 30, box.y + box.height - 120); await P.waitForTimeout(400);
+check(await P.evaluate(() => !document.querySelector('.note.done.open')), 'tap elsewhere closes it');
+// one-finger pan with momentum
+const x0 = await P.evaluate(() => window.__vqpaint.view.x);
+if (cdp) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: cx + 100, y: cy + 150 }] }); for (let i = 1; i <= 8; i++) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: cx + 100 - i * 18, y: cy + 150 }] }); await P.waitForTimeout(14); } await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); }
+else { await P.mouse.move(cx + 100, cy + 150); await P.mouse.down(); for (let i = 1; i <= 8; i++) { await P.mouse.move(cx + 100 - i * 18, cy + 150); await P.waitForTimeout(14); } await P.mouse.up(); }
+const x1 = await P.evaluate(() => window.__vqpaint.view.x); await P.waitForTimeout(500); const x2 = await P.evaluate(() => window.__vqpaint.view.x);
+check(x1 > x0 && x2 > x1 + 0.2, `one-finger pan moved the view (${(x1 - x0).toFixed(1)} tokens) and kept gliding after release (+${(x2 - x1).toFixed(1)})`);
+await P.waitForTimeout(800);
+const vid = args.video ? await P.video() : null;
 await phoneBrowser.close(); await helperBrowser.close(); server.close();
-console.log(fails.length ? `FAILED: ${fails.join('; ')}` : 'ALL PASS');
+if (vid) { const vp = await vid.path(); const dst = path.join(root, 'app', 'shots', `phone_flow_${deviceName.replace(/\s+/g, '_')}.webm`); fs.copyFileSync(vp, dst); console.log('video:', path.relative(root, dst)); }
+console.log(fails.length ? `\nFAILED: ${fails.join('; ')}` : '\nALL PASS');
 process.exit(fails.length ? 1 : 0);
