@@ -94,6 +94,13 @@ function cleanNote(n, att) {
   if (typeof n.text_en === 'string' && n.text_en.length <= MAX_NOTE_TEXT) out.text_en = n.text_en;
   if (typeof n.lang === 'string' && n.lang.length <= 8) out.lang = n.lang;
   const blot = cleanBlot(n.blot); if (blot) out.blot = blot;
+  if (Number.isInteger(n.v) && n.v >= 0) out.v = Math.min(n.v, 1e6);                                   // edit version (reactions, merges)
+  if (Array.isArray(n.merges)) { const m = n.merges.filter((x) => x && typeof x.with === 'string' && x.with.length <= 16 && typeof x.cells === 'string' && x.cells.length <= MAX_MASK_STR).slice(0, 6).map((x) => ({ with: x.with, cells: x.cells })); if (m.length) { out.merges = m; extra += JSON.stringify(m).length; } }
+  if (n.reactions && typeof n.reactions === 'object') { const r = {}; for (const k of ['fire', 'ice', 'grow']) if (Array.isArray(n.reactions[k])) r[k] = n.reactions[k].filter((x) => typeof x === 'string').slice(0, 40).map((x) => x.slice(0, 24)); out.reactions = r; }
+  if (typeof n.chapter === 'string' && n.chapter.length <= 80) out.chapter = n.chapter;
+  if (typeof n.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(n.day)) out.day = n.day;
+  if (typeof n.source === 'string' && n.source.length <= 16) out.source = n.source;
+  if (n.anon === true) out.anon = true;
   if (extra > MAX_NOTE_EXTRA) return null;
   return out;
 }
@@ -108,16 +115,25 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     const url = new URL(req.url);
     if (url.pathname === '/health') return json({ ok: true });
-    const m = url.pathname.match(/^\/room\/([^/]+)\/(ws|state|preview\/[a-z0-9]{4,16})$/);
+    if (url.pathname.startsWith('/tg/')) return telegram(req, env, url);
+    const m = url.pathname.match(/^\/room\/([^/]+)\/(ws|state|settings|snapshot|enqueue|preview\/[a-z0-9]{4,16})$/);
     if (m) {
       if (!ROOM_ID_RE.test(m[1])) return json({ error: 'bad room id, expected [a-z0-9-]{4,32}' }, 400);
-      if (req.method !== 'GET' && !(req.method === 'POST' && m[2].startsWith('preview/'))) return json({ error: 'method not allowed' }, 405);
+      const postOk = m[2].startsWith('preview/') || ['settings', 'snapshot', 'enqueue'].includes(m[2]);
+      if (req.method !== 'GET' && !(req.method === 'POST' && postOk)) return json({ error: 'method not allowed' }, 405);
       const stub = env.ROOMS.get(env.ROOMS.idFromName(m[1]));
       return stub.fetch(req);
     }
     return json({ error: 'not found' }, 404);
   },
+  /** cron: weekly painting posts to Telegram groups (Monday 09:00 UTC) and hourly diary reminders */
+  async scheduled(event, env, ctx) { ctx.waitUntil(telegramCron(env, event.cron)); },
 };
+const MAX_SNAPSHOT_BYTES = 1500 * 1024;
+const SETTINGS_KEYS = { kind: (v) => ['book', 'meeting', 'diary', 'group', 'default'].includes(v) ? v : null, title: (v) => (typeof v === 'string' ? v.slice(0, 120) : null), author: (v) => (typeof v === 'string' ? v.slice(0, 80) : null),
+  chapters: (v) => (Array.isArray(v) ? v.filter((c) => typeof c === 'string').slice(0, 200).map((c) => c.slice(0, 80)) : null), anon: (v) => (typeof v === 'boolean' ? v : null), private: (v) => (typeof v === 'boolean' ? v : null),
+  tz: (v) => (typeof v === 'string' && v.length <= 48 ? v : null), finished: (v) => (Number.isFinite(+v) ? +v : null) };
+function cleanSettings(obj, base = {}) { const out = { ...base }; if (!obj || typeof obj !== 'object') return out; for (const k of Object.keys(SETTINGS_KEYS)) if (k in obj) { const v = SETTINGS_KEYS[k](obj[k]); if (v !== null) out[k] = v; } return out; }
 
 export class Room {
   constructor(ctx, env) {
@@ -163,6 +179,7 @@ export class Room {
     this.loadNotes();
     const reqs = await this.ctx.storage.get('requests');
     if (Array.isArray(reqs)) for (const r of reqs) this.requests.set(r.id, r);
+    this.cfg = (await this.ctx.storage.get('settings')) || {};
   }
 
   // ---- notes (SQLite) -------------------------------------------------------
@@ -201,6 +218,47 @@ export class Room {
     return new Response(rows[0].data, { headers: { 'Content-Type': rows[0].type, 'Cache-Control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*' } });
   }
   saveRequests() { this.ctx.storage.put('requests', [...this.requests.values()]).catch((e) => console.error('requests save', e)); }
+  /** room settings: kind (book / meeting / diary / group), title, author, chapters, anon, private, tz */
+  async settings(req) {
+    if (req.method === 'POST') {
+      let body; try { body = await req.json(); } catch { return json({ error: 'bad json' }, 400); }
+      this.cfg = cleanSettings(body, this.cfg || {}); await this.ctx.storage.put('settings', this.cfg);
+      this.broadcast(JSON.stringify({ t: 'settings', settings: this.cfg }));
+      return json({ ok: true, settings: this.cfg });
+    }
+    return json({ settings: this.cfg || {} });
+  }
+  /** the whole painting as one PNG/JPEG, uploaded by browsers after a stroke; what the Telegram bot posts */
+  async snapshot(req) {
+    try { this.sql().exec('CREATE TABLE IF NOT EXISTS previews (id TEXT PRIMARY KEY, type TEXT, data BLOB)'); } catch (e) { return json({ error: 'no sql' }, 500); }
+    if (req.method === 'POST') {
+      const type = (req.headers.get('Content-Type') || '').split(';')[0];
+      if (!/^image\/(jpeg|png|webp)$/.test(type)) return json({ error: 'jpeg, png or webp only' }, 415);
+      const buf = await req.arrayBuffer();
+      if (!buf.byteLength || buf.byteLength > MAX_SNAPSHOT_BYTES) return json({ error: 'snapshot too big' }, 413);
+      this.sql().exec('INSERT OR REPLACE INTO previews (id, type, data) VALUES (?, ?, ?)', '__snapshot', type, buf);
+      await this.ctx.storage.put('snapshotAt', Date.now());
+      return json({ ok: true, bytes: buf.byteLength });
+    }
+    const rows = this.sql().exec('SELECT type, data FROM previews WHERE id = ?', '__snapshot').toArray();
+    if (!rows.length) return json({ error: 'no snapshot' }, 404);
+    return new Response(rows[0].data, { headers: { 'Content-Type': rows[0].type, 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } });
+  }
+  /** a note from outside (Telegram, imports): queued like a helper request; the next device with a brush paints it, auto-placed */
+  async enqueue(req) {
+    let body; try { body = await req.json(); } catch { return json({ error: 'bad json' }, 400); }
+    const text = typeof body.text === 'string' ? body.text.trim().slice(0, MAX_NOTE_TEXT) : '';
+    if (!text) return json({ error: 'text required' }, 400);
+    if (this.requests.size >= MAX_REQUESTS) return json({ error: 'queue full', waiting: this.requests.size }, 429);
+    if (!this.tokens) await this.init(new URLSearchParams({ w: String(DEFAULT_DIM), h: String(DEFAULT_DIM), blank: String(body.blank | 0 || 6328) }));
+    const id = Math.random().toString(36).slice(2, 10);
+    const req2 = { id, text, mask: '', author: typeof body.author === 'string' ? body.author.slice(0, 24) : 'telegram', color: typeof body.color === 'string' && COLOR_RE.test(body.color) ? body.color : defaultColor(id), from: 'bot', by: null, time: Number.isFinite(+body.time) ? +body.time : Date.now(), auto: true };
+    for (const k of ['chapter', 'day', 'source']) if (typeof body[k] === 'string' && body[k].length <= 80) req2[k] = body[k];
+    if (body.anon === true) req2.anon = true;
+    this.requests.set(id, req2); this.saveRequests();
+    this.broadcast(JSON.stringify({ t: 'paint_request', req: req2 }));
+    return json({ ok: true, id, waiting: this.requests.size, online: this.peers().length });
+  }
 
   init(params) {
     this.w = clampDim(params.get('w'));
@@ -239,13 +297,17 @@ export class Room {
 
   async fetch(req) {
     const url = new URL(req.url);
-    const m = url.pathname.match(/^\/room\/([^/]+)\/(ws|state|preview\/[a-z0-9]{4,16})$/);
+    const m = url.pathname.match(/^\/room\/([^/]+)\/(ws|state|settings|snapshot|enqueue|preview\/[a-z0-9]{4,16})$/);
     const kind = m ? m[2] : null;
     if (kind && kind.startsWith('preview/')) return this.preview(req, kind.slice(8));
+    if (kind === 'settings') return this.settings(req);
+    if (kind === 'snapshot') return this.snapshot(req);
+    if (kind === 'enqueue') return this.enqueue(req);
 
     if (kind === 'state') {
       if (!this.tokens) return json({ error: 'room does not exist yet' }, 404);
-      return json({ w: this.w, h: this.h, v: this.v, blank: this.blank, tokens: Array.from(this.tokens), notes: this.notes });
+      if (url.searchParams.get('light') === '1') return json({ w: this.w, h: this.h, v: this.v, notes: this.notes.length, waiting: this.requests.size, online: this.peers().length, settings: this.cfg || {}, snapshotAt: await this.ctx.storage.get('snapshotAt') || null });
+      return json({ w: this.w, h: this.h, v: this.v, blank: this.blank, tokens: Array.from(this.tokens), notes: this.notes, settings: this.cfg || {} });
     }
 
     if (kind === 'ws') {
@@ -288,7 +350,7 @@ export class Room {
         att = { id: att.id, ready: true, name, color, caps };
         ws.serializeAttachment(att);
         ws.send(JSON.stringify({
-          t: 'state', id: att.id, w: this.w, h: this.h, v: this.v, blank: this.blank,
+          t: 'state', id: att.id, w: this.w, h: this.h, v: this.v, blank: this.blank, settings: this.cfg || {},
           rle: rle(this.tokens),
           peers: this.peers().filter((p) => p.id !== att.id),
           notes: this.notes,
@@ -361,6 +423,9 @@ export class Room {
         if (typeof r.photo === 'string' && r.photo.length <= 60000) req.photo = r.photo;       // small JPEG data URL, seeds the shape
         if (typeof r.lang === 'string' && r.lang.length <= 8) req.lang = r.lang;
         const blot = cleanBlot(r.blot); if (blot) req.blot = blot;
+        if (r.react && typeof r.react === 'object' && typeof r.react.noteId === 'string' && ['fire', 'ice', 'grow'].includes(r.react.kind)) req.react = { noteId: r.react.noteId.slice(0, 16), kind: r.react.kind };   // a reaction edit of an existing stroke
+        for (const k of ['chapter', 'day', 'source']) if (typeof r[k] === 'string' && r[k].length <= 80) req[k] = r[k];
+        if (r.anon === true) req.anon = true;
         this.requests.set(req.id, req); this.saveRequests();
         this.broadcast(JSON.stringify({ t: 'paint_request', req }), ws);
         return;
@@ -374,7 +439,7 @@ export class Room {
       }
       case 'paint_done': {
         const req = this.requests.get(data.id);
-        if (!req || (req.by !== att.id && req.from !== att.id)) return;
+        if (!req || (req.by !== att.id && req.from !== att.id && req.from !== 'bot')) return;
         this.requests.delete(req.id); this.saveRequests();
         this.broadcast(JSON.stringify({ t: 'paint_done', id: req.id, ok: data.ok !== false }));
         return;
@@ -436,5 +501,132 @@ export class Room {
       if (s === except) continue;
       try { s.send(str); } catch { /* closing socket */ }
     }
+  }
+}
+
+
+// ============================================================================
+// Telegram bot (same worker, free plan). The bot only ever receives commands (Telegram privacy mode stays ON), so a
+// group's ordinary messages never reach it. "/paint" as a reply sends that one message to the painting. A 🎨 reaction
+// cannot work: reaction updates carry no message text and the Bot API cannot fetch it afterwards.
+// Directory (chat -> room, user -> diary room + reminder) lives in one Durable Object, `TgDirectory`.
+const TG_API = (token, method) => `https://api.telegram.org/bot${token}/${method}`;
+const SITE = 'https://nazargol.github.io/VQPAINT/app/room.html';
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+async function tgCall(env, method, body) {
+  if (!env.TG_BOT_TOKEN) return null;
+  const r = await fetch(TG_API(env.TG_BOT_TOKEN, method), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  return r.json().catch(() => null);
+}
+async function tgSendPhoto(env, chat_id, bytes, type, caption, reply_markup) {
+  if (!env.TG_BOT_TOKEN) return null;
+  const fd = new FormData(); fd.set('chat_id', String(chat_id)); if (caption) fd.set('caption', caption); fd.set('parse_mode', 'HTML'); if (reply_markup) fd.set('reply_markup', JSON.stringify(reply_markup));
+  fd.set('photo', new Blob([bytes], { type }), type === 'image/png' ? 'painting.png' : 'painting.jpg');
+  const r = await fetch(TG_API(env.TG_BOT_TOKEN, 'sendPhoto'), { method: 'POST', body: fd });
+  return r.json().catch(() => null);
+}
+const roomLink = (roomId, extra = '') => `${SITE}?r=${roomId}${extra}`;
+const roomKeyboard = (roomId) => ({ inline_keyboard: [[{ text: 'open the painting', web_app: { url: roomLink(roomId, '&tg=1') } }, { text: 'in the browser', url: roomLink(roomId) }]] });
+const newRoomId = (prefix) => prefix + '-' + Math.random().toString(36).slice(2, 8);
+async function roomCall(env, roomId, path, init) { const stub = env.ROOMS.get(env.ROOMS.idFromName(roomId)); return stub.fetch(new Request(`https://rooms/room/${roomId}/${path}`, init)); }
+
+const START_TEXT = `<b>vqpaint</b> turns what a group writes into one shared painting.
+
+<b>Privacy:</b> this bot only receives commands. It never reads, stores or paints your ordinary messages. To send a message to the painting, reply to it with /paint. Nothing else leaves the chat.
+
+Commands:
+/paint — as a reply: that message joins the painting
+/show — post the current painting here
+/room — link to this chat's painting
+/postcard — make a postcard of this month
+/diary — (private chat) start a diary painting; /remind 21:00 for a daily question, /remind off to stop`;
+
+async function telegram(req, env, url) {
+  if (url.pathname === '/tg/health') return json({ ok: true, configured: !!env.TG_BOT_TOKEN });
+  if (url.pathname === '/tg/debug_dir' && env.TG_DEBUG === '1') { const dir = env.TG_DIR.get(env.TG_DIR.idFromName('directory')); return json(await dirCall(dir, 'list', {})); }   // local tests only
+  if (url.pathname !== '/tg/webhook' || req.method !== 'POST') return json({ error: 'not found' }, 404);
+  if (env.TG_WEBHOOK_SECRET && req.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.TG_WEBHOOK_SECRET) return json({ error: 'forbidden' }, 403);
+  let update; try { update = await req.json(); } catch { return json({ error: 'bad json' }, 400); }
+  try { await handleUpdate(env, update); } catch (e) { console.error('telegram update', e); }
+  return json({ ok: true });   // always 200, so Telegram does not retry
+}
+async function handleUpdate(env, u) {
+  const msg = u.message || u.edited_message; if (!msg || !msg.chat) return;
+  const chat = msg.chat, text = (msg.text || msg.caption || '').trim(), isPrivate = chat.type === 'private';
+  const dir = env.TG_DIR.get(env.TG_DIR.idFromName('directory'));
+  const cmd = (text.match(/^\/([a-z_]+)(?:@\w+)?(?:\s|$)/i) || [])[1]?.toLowerCase();
+  const arg = cmd ? text.replace(/^\/[a-z_]+(?:@\w+)?\s*/i, '').trim() : '';
+  const reply = (html, extra = {}) => tgCall(env, 'sendMessage', { chat_id: chat.id, text: html, parse_mode: 'HTML', disable_web_page_preview: true, ...extra });
+  const entry = await dirCall(dir, 'get', { chat: chat.id });
+  if (cmd === 'start' || cmd === 'help') { await reply(START_TEXT); if (!isPrivate && !entry) await ensureRoom(env, dir, chat); return; }
+  if (cmd === 'room') { const e = entry || await ensureRoom(env, dir, chat); await reply(`this chat's painting: ${roomLink(e.room)}`, { reply_markup: roomKeyboard(e.room) }); return; }
+  if (cmd === 'paint') {
+    const src = msg.reply_to_message;
+    if (!src || !(src.text || src.caption)) { await reply('Reply to a message with /paint to send it to the painting.'); return; }
+    const e = entry || await ensureRoom(env, dir, chat);
+    const author = src.from ? (src.from.first_name || src.from.username || 'someone') : 'someone';
+    const r = await roomCall(env, e.room, 'enqueue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: (src.text || src.caption).slice(0, 4000), author, time: (src.date || 0) * 1000 || Date.now(), source: 'telegram', day: new Date((src.date || 0) * 1000 || Date.now()).toISOString().slice(0, 10) }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { await reply(j.error === 'queue full' ? 'The painting has 64 notes waiting; open it so they get painted first.' : 'Could not add it: ' + esc(j.error || r.status)); return; }
+    const online = j.online > 0;
+    await reply(`added to the painting${online ? '' : ` — ${j.waiting} waiting; it paints when someone opens the room`}`, { reply_markup: roomKeyboard(e.room), reply_to_message_id: msg.message_id });
+    return;
+  }
+  if (cmd === 'show') { const e = entry || await ensureRoom(env, dir, chat); await postPainting(env, chat.id, e.room, ''); return; }
+  if (cmd === 'postcard') { const e = entry || await ensureRoom(env, dir, chat); await reply(`make this month's postcard here: ${roomLink(e.room, '&postcard=1')}`, { reply_markup: { inline_keyboard: [[{ text: 'make a postcard', url: roomLink(e.room, '&postcard=1') }]] } }); return; }
+  if (isPrivate) {
+    if (cmd === 'diary') { const e = await ensureRoom(env, dir, chat, 'diary'); await reply(`your diary painting is private: ${roomLink(e.room)}\nWrite me one line a day and it becomes a stroke. /remind 21:00 for a daily question.`, { reply_markup: roomKeyboard(e.room) }); return; }
+    if (cmd === 'remind') {
+      if (!entry) { await reply('Start with /diary first.'); return; }
+      if (/^off$/i.test(arg)) { await dirCall(dir, 'set', { chat: chat.id, remind: null }); await reply('reminders off'); return; }
+      const m = arg.match(/^(\d{1,2})(?::(\d{2}))?$/); if (!m) { await reply('Say /remind 21:00 (your local time, I assume Europe/Kyiv) or /remind off'); return; }
+      const hour = Math.min(23, +m[1]); await dirCall(dir, 'set', { chat: chat.id, remind: hour, tz: 'Europe/Kyiv' }); await reply(`I will ask "what happened today?" at ${String(hour).padStart(2, '0')}:00 Europe/Kyiv. /remind off to stop.`); return;
+    }
+    if (!cmd && text && entry && entry.kind === 'diary') {   // a plain line in a diary chat = today's entry
+      const author = msg.from ? (msg.from.first_name || 'me') : 'me';
+      const r = await roomCall(env, entry.room, 'enqueue', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text.slice(0, 4000), author, time: Date.now(), source: 'telegram', day: new Date().toISOString().slice(0, 10) }) });
+      const j = await r.json().catch(() => ({}));
+      await reply(r.ok ? `kept for today${j.online ? '' : ' — it paints when you open the diary'}` : 'could not keep it: ' + esc(j.error || r.status), { reply_markup: roomKeyboard(entry.room) });
+      return;
+    }
+    if (!cmd) { await reply(START_TEXT); return; }
+  }
+  if (cmd && !isPrivate) return;   // unknown command in a group: stay silent
+}
+async function ensureRoom(env, dir, chat, kind = null) {
+  const existing = await dirCall(dir, 'get', { chat: chat.id }); if (existing) return existing;
+  const k = kind || (chat.type === 'private' ? 'diary' : 'group');
+  const room = newRoomId(k === 'diary' ? 'diary' : 'tg');
+  await roomCall(env, room, 'settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: k, title: chat.title || (chat.first_name ? `${chat.first_name}'s diary` : ''), private: k === 'diary', tz: 'Europe/Kyiv' }) });
+  const e = { chat: chat.id, room, kind: k, title: chat.title || '', created: Date.now(), weekly: k === 'group' };
+  await dirCall(dir, 'set', e); return e;
+}
+async function postPainting(env, chat_id, room, caption) {
+  const r = await roomCall(env, room, 'snapshot');
+  if (!r.ok) { await tgCall(env, 'sendMessage', { chat_id, text: `Nothing painted yet — open the painting: ${roomLink(room)}`, reply_markup: roomKeyboard(room) }); return false; }
+  const bytes = await r.arrayBuffer(); await tgSendPhoto(env, chat_id, bytes, r.headers.get('Content-Type') || 'image/jpeg', caption, roomKeyboard(room)); return true;
+}
+async function dirCall(dir, op, body) { const r = await dir.fetch(new Request('https://dir/' + op, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })); return r.json(); }
+/** cron: Monday 09:00 UTC = weekly posts to groups; every hour = diary reminders for users whose hour it is */
+async function telegramCron(env, cron) {
+  if (!env.TG_BOT_TOKEN) return;
+  const dir = env.TG_DIR.get(env.TG_DIR.idFromName('directory'));
+  const all = await dirCall(dir, 'list', {});
+  const now = new Date();
+  if (/^0 9 \* \* 1$/.test(cron) || cron === 'weekly') { for (const e of all) if (e.weekly) { try { await postPainting(env, e.chat, e.room, 'this week\'s painting'); } catch (err) { console.error('weekly', err); } } }
+  else { for (const e of all) if (e.kind === 'diary' && Number.isInteger(e.remind)) { const hour = +new Intl.DateTimeFormat('en-GB', { hour: 'numeric', hour12: false, timeZone: e.tz || 'Europe/Kyiv' }).format(now); if (hour === e.remind) { try { await tgCall(env, 'sendMessage', { chat_id: e.chat, text: 'what happened today?' }); } catch (err) { console.error('remind', err); } } } }
+}
+/** one small Durable Object: chat id -> room, kind, reminder */
+export class TgDirectory {
+  constructor(ctx) { this.ctx = ctx; }
+  sql() { return this.ctx.storage.sql; }
+  ensure() { this.sql().exec('CREATE TABLE IF NOT EXISTS chats (chat TEXT PRIMARY KEY, json TEXT)'); }
+  async fetch(req) {
+    this.ensure();
+    const op = new URL(req.url).pathname.slice(1); let body = {}; try { body = await req.json(); } catch {}
+    if (op === 'get') { const rows = this.sql().exec('SELECT json FROM chats WHERE chat = ?', String(body.chat)).toArray(); return json(rows.length ? JSON.parse(rows[0].json) : null); }
+    if (op === 'set') { const rows = this.sql().exec('SELECT json FROM chats WHERE chat = ?', String(body.chat)).toArray(); const cur = rows.length ? JSON.parse(rows[0].json) : {}; const next = { ...cur, ...body }; this.sql().exec('INSERT OR REPLACE INTO chats (chat, json) VALUES (?, ?)', String(body.chat), JSON.stringify(next)); return json(next); }
+    if (op === 'list') return json(this.sql().exec('SELECT json FROM chats').toArray().map((r) => JSON.parse(r.json)));
+    return json({ error: 'not found' }, 404);
   }
 }

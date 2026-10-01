@@ -115,3 +115,9 @@ button.pill:active, .menu .items button:active, .note .link:active { transform: 
   .note.done.open { max-width: min(var(--note-max-width), calc(100vw - 24px)); }
   .ui.top-left .pill[data-room] { max-width: 42vw; overflow: hidden; text-overflow: ellipsis; }
 }
+/* merges and reactions */
+.note .merge .text + .meta { margin: 2px 0; }
+.note .reacts { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+.note .reacts .pill.react { min-height: 36px; padding: 0 12px; font-size: 18px; background: rgba(255, 255, 255, 0.25); }
+.note .reacts .pill.react:disabled { opacity: 0.4; }
+@media (pointer: coarse) { .note .reacts .pill.react { min-height: 44px; min-width: 44px; } }

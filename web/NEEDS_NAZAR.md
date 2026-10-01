@@ -1,7 +1,20 @@
 # Needs Nazar
 
+## Telegram bot (one-time, ~3 minutes)
+1. In Telegram open @BotFather → `/newbot` → name it (e.g. "vqpaint") → copy the token.
+2. In a terminal (never paste the token into chat or git):
+   ```
+   cd ~/VQPAINT/web/rooms && read -rs TOKEN; echo; ./tg_setup.sh "$TOKEN"
+   ```
+   This stores the token and a webhook secret in Cloudflare, registers the webhook and the command list.
+3. BotFather → `/setprivacy` → keep **Enable** (the default): the bot then only ever receives commands, which is the privacy promise in `/start`.
+4. Add the bot to a group, send `/start`, reply `/paint` to any message, then `/show`. Open the painting with the button (Mini App) and in the browser.
+5. For the Mini App button to work BotFather must know the web app: `/setmenubutton` is optional; inline `web_app` buttons work without it.
+Check: `curl https://vqpaint-rooms.vqpaint-rooms.workers.dev/tg/health` → `configured: true`.
+🎨 reactions cannot be used: Telegram sends reaction updates without the message text and the Bot API cannot fetch it, so `/paint` as a reply is the only way (and the only thing the bot ever sees).
+
 ## Pick the reveal effect
-https://nazargol.github.io/VQPAINT/app/effects.html — ink / watercolour / growth, "tune" for the sliders, "copy settings" and paste me the line you like. Until then the app uses ink with the defaults.
+Ink is in (procedural fluid ink, 30-blob grid and circularity numbers in the report). Tune it on https://nazargol.github.io/VQPAINT/app/effects.html → "copy settings" → paste me the line; it goes into `app/config.js` (`CONFIG.ink`).
 
 ## Test on the phones (round 6), laptop open in the same room
 Live: https://nazargol.github.io/VQPAINT/ . Minimum phones now: iPhone XR / 11 / SE 2 (iOS 15+) and a 3 GB 2020 Android.

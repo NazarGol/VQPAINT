@@ -3,7 +3,7 @@
 // a click elsewhere. An open note shows its thread: the note it replies to (click to open) and its replies, indented.
 import { escapeHtml } from './roombar.js';
 import { t } from '../i18n.js';
-export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = null, onOpen = null, onPhoto = null, threadOf = null, phone = false }) {
+export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = null, onOpen = null, onPhoto = null, onReact = null, threadOf = null, phone = false, me = () => '' }) {
   const layer = document.createElement('div'); layer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:6'; stageEl.appendChild(layer);
   let editing = null, opened = null; // {el, note}
   function place(el, anchor) {
@@ -49,7 +49,8 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = n
     get editingText() { return editing ? editing.el.querySelector('textarea').value : ''; },
     set editingText(v) { if (editing) { const ta = editing.el.querySelector('textarea'); ta.value = v; grow(ta); } },
     /** open one note: {text, author, color, time, parent?, photo?, text_en?}; anchor in stage px */
-    open(note, anchor) {
+    /** open one note; opts.mergeWith: the other note where the tap landed on an overlap ("A × B") */
+    open(note, anchor, { mergeWith = null } = {}) {
       api.close();
       const el = document.createElement('div'); el.className = 'note done open'; el.style.pointerEvents = 'auto';
       const when = note.time ? new Date(note.time).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) : '';
@@ -58,8 +59,12 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = n
       const replies = th.replies && th.replies.length ? `<div class="replies"><div class="meta">${th.replies.length === 1 ? t('note.reply1') : t('note.replies', { n: th.replies.length })}</div>${th.replies.map((r) => `<div class="reply" data-open="${escapeHtml(r.id)}"><span class="dot" style="background:${escapeHtml(r.color || '#888')}"></span><span class="meta">${who(r)}</span> ${escapeHtml(brief(r.text, 80))}</div>`).join('')}</div>` : '';
       const photo = note.photo ? `<img class="thumb" src="${escapeHtml(note.photo)}" alt="">` : '';
       const translated = note.text_en && note.lang && note.lang !== 'en' ? `<div class="meta quiet">${t('note.translated', { text: escapeHtml(brief(note.text_en, 80)) })}</div>` : '';
-      el.innerHTML = `${parentLine}<div class="meta"><span class="dot" style="background:${escapeHtml(note.color || '#888')}"></span>${who(note)} · ${when}${onReply ? ` · <button type="button" class="link" data-reply>${t('note.reply')}</button>` : ''}</div>${photo}<div class="text">${escapeHtml(note.text)}</div>${translated}${replies}`;
-      if (onReply) el.querySelector('[data-reply]').onclick = (e) => { e.stopPropagation(); onReply(note); };
+      const merged = mergeWith ? `<div class="merge"><div class="meta">${t('note.merge', { a: who(note), b: who(mergeWith) })}</div><div class="text">${escapeHtml(note.text)}</div><div class="meta quiet">×</div><div class="text">${escapeHtml(mergeWith.text)}</div></div>` : '';
+      const mine = me(), used = (k) => !!(note.reactions && note.reactions[k] && note.reactions[k].includes(mine));
+      const reacts = onReact && !mergeWith ? `<div class="reacts">${[['fire', '🔥'], ['ice', '🧊'], ['grow', '🌱']].map(([k, e]) => `<button type="button" class="pill react" data-react="${k}" title="${t('react.' + k)}" ${used(k) ? 'disabled' : ''}>${e}</button>`).join('')}</div>` : '';
+      el.innerHTML = `${parentLine}<div class="meta"><span class="dot" style="background:${escapeHtml(note.color || '#888')}"></span>${who(note)} · ${when}${onReply && !mergeWith ? ` · <button type="button" class="link" data-reply>${t('note.reply')}</button>` : ''}</div>${photo}${mergeWith ? merged : `<div class="text">${escapeHtml(note.text)}</div>`}${translated}${replies}${reacts}`;
+      if (onReply && !mergeWith) el.querySelector('[data-reply]').onclick = (e) => { e.stopPropagation(); onReply(note); };
+      for (const b of el.querySelectorAll('[data-react]')) b.onclick = (e) => { e.stopPropagation(); if (b.disabled) return; b.disabled = true; onReact(note, b.dataset.react); };
       for (const r of el.querySelectorAll('[data-open]')) r.onclick = (e) => { e.stopPropagation(); onOpen?.(r.dataset.open); };
       layer.appendChild(el); opened = { el, note, anchor }; place(el, anchor);
       requestAnimationFrame(() => el.classList.add('in'));
