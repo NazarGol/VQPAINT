@@ -51,7 +51,8 @@ const lastBoot = sessionStorage.getItem('vqpaint.boot');
 let safeMode = params.get('safe') === '1' || (lastBoot === 'loading' || lastBoot === 'painting');
 if (safeMode) localStorage.setItem('vqpaint.crashes', String((+localStorage.getItem('vqpaint.crashes') || 0) + 1));
 sessionStorage.setItem('vqpaint.boot', 'loading');
-const lowMem = isPhone || safeMode || params.get('lowmem') === '1';   // release models after every stroke, small caches, 1 wasm thread
+const lowMem = isPhone || safeMode || params.get('lowmem') === '1';
+let useTiny = params.get('engine') === 'tiny';   // the light engine (tiny decoder + token scorer, WebGL2): default on phones and without WebGPU, ?engine=ort forces the ONNX path   // release models after every stroke, small caches, 1 wasm thread
 
 // ---------- state ----------
 let grid = null;                  // {w, h, tokens} from the room (256x256 by default), the search context
@@ -446,7 +447,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
       if (!metaphors) { try { metaphors = await Metaphors.load(M + 'metaphors/'); } catch (e) { console.warn('metaphors', e); } }
       if (metaphors) { const b = metaphors.blend(target); target = b.target; stats.lastMetaphors = b.used; stats.lastMetaphorWeight = b.weight; }
     } else stats.lastMetaphors = null;
-    if (photo && photo.chw) {   // the photo guides CLIP too: target = text + photo embedding (more with realism)
+    if (photo && photo.chw && !useTiny) {   // the photo guides CLIP too (the light engine has no image tower: photo tokens still seed the shape): target = text + photo embedding (more with realism)
       const [pe] = await clip.embedImages(photo.chw.length === 3 * clip.size * clip.size ? photo.chw : imageToCHW(await dataUrlToImage(photo.data), clip.size, clip.size), 1);
       const w = 0.3 + 0.25 * realism, mixed = new Float32Array(target.length); let n = 0;
       for (let k = 0; k < mixed.length; k++) { mixed[k] = (1 - w) * target[k] + w * pe[k]; n += mixed[k] * mixed[k]; }
@@ -455,7 +456,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     setStage('search');
     if (chunks > 1) setStatus(t('status.chunks', { n: chunks }) + (hardSplits ? t('status.chunksSplit', { n: hardSplits }) : ''));
     const res = await painter.paint({
-      grid, mask, target, seconds: rp.seconds, margin: MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, parent: parentSeed(parent),
+      grid, mask, target, seconds: rp.seconds, margin: useTiny ? 2 : MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, parent: parentSeed(parent),
       photo: photo && photo.tokens ? { w: photo.side, h: photo.side, tokens: photo.tokens } : null, photoMix: 0.45 + 0.4 * realism,
       seeds: rp.seeds, sources: rp.sources, patch: rp.patch, growEdge: rp.growEdge, temperature: rp.temperature, mutation: rp.mutation, anneal: rp.anneal, bankPatch: rp.bankPatch,
       onProgress: (p) => {   // the engine's preview: shown through the spreading blot, fog -> clear
@@ -517,7 +518,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     if (reqId) room?.paintDone(reqId, ok);
     painting = null; updateScene(); renderPeers();
     sessionStorage.setItem('vqpaint.boot', 'ok');
-    if (lowMem) await releaseBrush();
+    if (lowMem && !useTiny) await releaseBrush();
     setTimeout(claimNextRequest, 300);
     processQueue();
   }
