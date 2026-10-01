@@ -22,6 +22,7 @@ export async function loadEngineBridge({ base, onProgress = null, bank = 'bank',
   const clip = {
     size: 256, tok, embedText: (text) => engine.encodeText(text), release: async () => {}, tiny: true,
     embedImages: async () => { throw new Error('photo embedding needs the full CLIP image model (a helper device)'); },
+    embedTokens: (tokens, side) => engine.scorer.embedOne(tokens, side),   // a photo's VQGAN tokens -> CLIP-space embedding (the scorer's estimate)
   };
   const painter = {
     paint: (opts) => engine.paintStroke({ batch, ...opts, onPreview: opts.onProgress ? (p) => opts.onProgress({ ...p, image: toCHW(p.image) }) : null }).then((r) => ({ ...r, image: toCHW(r.image) })),

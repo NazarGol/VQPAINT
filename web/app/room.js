@@ -447,8 +447,8 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
       if (!metaphors) { try { metaphors = await Metaphors.load(M + 'metaphors/'); } catch (e) { console.warn('metaphors', e); } }
       if (metaphors) { const b = metaphors.blend(target); target = b.target; stats.lastMetaphors = b.used; stats.lastMetaphorWeight = b.weight; }
     } else stats.lastMetaphors = null;
-    if (photo && photo.chw && !useTiny) {   // the photo guides CLIP too (the light engine has no image tower: photo tokens still seed the shape): target = text + photo embedding (more with realism)
-      const [pe] = await clip.embedImages(photo.chw.length === 3 * clip.size * clip.size ? photo.chw : imageToCHW(await dataUrlToImage(photo.data), clip.size, clip.size), 1);
+    if (photo && (useTiny ? photo.tokens : photo.chw)) {   // the photo guides CLIP too (light engine: the scorer's embedding of the photo's tokens): target = text + photo embedding (more with realism)
+      const [pe] = useTiny ? [clip.embedTokens(photo.tokens, photo.side)] : await clip.embedImages(photo.chw.length === 3 * clip.size * clip.size ? photo.chw : imageToCHW(await dataUrlToImage(photo.data), clip.size, clip.size), 1);
       const w = 0.3 + 0.25 * realism, mixed = new Float32Array(target.length); let n = 0;
       for (let k = 0; k < mixed.length; k++) { mixed[k] = (1 - w) * target[k] + w * pe[k]; n += mixed[k] * mixed[k]; }
       n = Math.sqrt(n) + 1e-8; for (let k = 0; k < mixed.length; k++) mixed[k] /= n; target = mixed;
