@@ -165,3 +165,16 @@ Weight-only int8 packs rebuilt to fp16 in the browser (`lib/pack.js`, `export/pa
 - CLIP rewards artefacts; strokes are rough by design.
 - The bank reproduces (lossy) versions of COCO/CelebA photos as seeds. Research use.
 - GitHub Pages bandwidth is a soft 100 GB/month: roughly 500 first visits.
+
+## Light engine (phones, no ONNX Runtime)
+
+Phones and devices without WebGPU paint with `engine/` instead of ONNX Runtime (`?engine=tiny` opts a desktop in, `?engine=ort` opts out).
+Three small models distilled on Kaggle run as WebGL2 shader passes or plain JS (`web/research/` has the training code, notebooks and tests):
+
+- `lib/tinydec.js` — tiny VQGAN decoder (`models/tiny/tiny_decoder_A.bin`, 3.1 MB; variant B 3.0 MB for slow GPUs): tokens → RGB, 256 px in ~10 ms on an M1.
+- `lib/tinyscorer.js` — token scorer (5.2 MB): a batch of token grids → MobileCLIP-space embeddings → cosine with the note, no decode. The search tries ~2 000 candidates/s and decodes only the preview.
+- `engine/text.js` — distilled MobileCLIP text tower (6.6 MB) in a Worker, once per note.
+
+`engine/engine.js` is the interface (`load`, `encodeText(s)`, `paintStroke`, `decode`, `release`); `app/engine_bridge.js` adapts it to the decoder / clip / painter shapes
+room.js uses. Everything needed to paint is ~17.5 MB; emulated painting peak on an iPhone 11 profile is ~280 MB above an empty tab (was 1.8 GB).
+Minimum devices and the real-phone checklist: `DEVICES.md`. Tests: `node research/test_app_tiny.mjs [--browser webkit --device "iPhone 11" | --nogpu]`, `node research/test_tinydec.mjs --browser all`, `research/test_matrix.sh`.
