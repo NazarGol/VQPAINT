@@ -10,7 +10,7 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/jav
 const server = http.createServer((req, res) => { const p = path.join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname)); if (!p.startsWith(root) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); } res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream' }); fs.createReadStream(p).pipe(res); });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const port = server.address().port, roomId = 'mem-' + Math.random().toString(36).slice(2, 7);
-const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&models=pages${args.opt ? '&opt=' + args.opt : ''}${args.lowmem ? '&lowmem=1' : ''}${args.bufcache ? '&bufcache=' + args.bufcache : ''}${args.plain ? '&plain=1' : ''}${args.clipcpu ? '&clipcpu=1' : ''}`;
+const url = `http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&models=pages&name=tester${args.opt ? '&opt=' + args.opt : ''}${args.lowmem ? '&lowmem=1' : ''}${args.bufcache ? '&bufcache=' + args.bufcache : ''}${args.plain ? '&plain=1' : ''}${args.clipcpu ? '&clipcpu=1' : ''}`;
 // a desktop paints the strokes first
 const cb = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
 const D = await cb.newPage(); await D.goto(url); await D.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready && window.__vqpaint.grid, null, { timeout: 180000 });
@@ -42,7 +42,7 @@ console.log(`view: ready in ${((Date.now() - t0) / 1000).toFixed(1)}s, ${viewInf
 console.log(`PEAK RSS viewing: ${(peakView / 1024).toFixed(0)} MB above the empty browser (${(base / 1024).toFixed(0)} MB)`);
 phase = 'paint';
 const t1 = Date.now();
-await P.evaluate((s) => { window.__vqpaint.setEffortSeconds(s); window.__vqpaint.setTool('brush'); }, seconds);
+await P.evaluate((s) => { window.__vqpaint.setEffortSeconds(s); }, seconds);
 // --photo: the stroke carries a photo (encoder loaded and freed before the brush); --reply: it replies to the first stroke
 const photo = args.photo ? await P.evaluate(async () => { const r = await fetch('/models/encoder_test_input.png'); const f = new File([await r.blob()], 'p.png', { type: 'image/png' }); return window.__vqpaint.readPhoto(f); }) : null;
 if (photo) console.log(`photo read: ${(photo.data.length / 1024).toFixed(0)} KB data URL, ${(photo.thumb.length / 1024).toFixed(0)} KB thumb`);

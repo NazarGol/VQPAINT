@@ -97,3 +97,12 @@ export function alphaMap(crop, mask, F = 16, feather = 16, ring = 0.5, ringAt = 
       out[y * W + x] = (coarse[y0 * gw + x0] * (1 - wx) + coarse[y0 * gw + x1] * wx) * (1 - wy) + (coarse[y1 * gw + x0] * (1 - wx) + coarse[y1 * gw + x1] * wx) * wy; } }
   return out;
 }
+
+/** a disc of radius r (tokens, may be fractional) around (cx, cy), clipped to the grid: the search region of a tapped note */
+export function discMask(cx, cy, r, gridW, gridH) {
+  const x0 = Math.max(0, Math.floor(cx - r)), y0 = Math.max(0, Math.floor(cy - r)), x1 = Math.min(gridW, Math.ceil(cx + r)), y1 = Math.min(gridH, Math.ceil(cy + r));
+  const w = Math.max(0, x1 - x0), h = Math.max(0, y1 - y0), cells = new Uint8Array(w * h); let count = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const dx = x0 + x + 0.5 - cx, dy = y0 + y + 0.5 - cy; if (dx * dx + dy * dy <= (r + 0.15) * (r + 0.15)) { cells[y * w + x] = 1; count++; } }
+  if (!count && w && h) { cells[Math.floor(h / 2) * w + Math.floor(w / 2)] = 1; count = 1; }
+  return { x: x0, y: y0, w, h, cells, count };
+}

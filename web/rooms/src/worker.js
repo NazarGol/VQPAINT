@@ -66,6 +66,17 @@ function cleanCaps(c) {
   if (!c || typeof c !== 'object') return null;
   return { paint: !!c.paint, speed: Number.isFinite(+c.speed) ? Math.round(+c.speed) : null, gpu: !!c.gpu, helper: !!c.helper };
 }
+/** the organic blot of a stroke: where it was born, its size (tokens), seed and feel; small, numeric, validated */
+function cleanBlot(b) {
+  if (!b || typeof b !== 'object') return null;
+  const num = (v, lo, hi) => (Number.isFinite(+v) ? Math.max(lo, Math.min(hi, +v)) : null);
+  const out = { x: num(b.x, -1024, 4096), y: num(b.y, -1024, 4096), size: num(b.size, 0.25, 64), seed: Number.isFinite(+b.seed) ? (+b.seed >>> 0) : null,
+    speed: num(b.speed, 0, 1), viscosity: num(b.viscosity, 0, 1), detail: num(b.detail, 0, 1), tendrils: num(b.tendrils, 0, 1), duration: num(b.duration, 0.1, 60) };
+  if ([out.x, out.y, out.size, out.seed].some((v) => v == null)) return null;
+  if (typeof b.effect === 'string' && /^[a-z]{2,16}$/.test(b.effect)) out.effect = b.effect;
+  for (const k of Object.keys(out)) if (out[k] == null) delete out[k];
+  return out;
+}
 function cleanNote(n, att) {
   if (!n || typeof n !== 'object' || typeof n.id !== 'string' || !n.id || n.id.length > 16) return null;
   if (typeof n.text !== 'string' || !n.text.trim() || n.text.length > MAX_NOTE_TEXT) return null;
@@ -82,6 +93,7 @@ function cleanNote(n, att) {
   if (typeof n.photo === 'string' && n.photo.length <= 24000) { extra += n.photo.length; out.photo = n.photo; }
   if (typeof n.text_en === 'string' && n.text_en.length <= MAX_NOTE_TEXT) out.text_en = n.text_en;
   if (typeof n.lang === 'string' && n.lang.length <= 8) out.lang = n.lang;
+  const blot = cleanBlot(n.blot); if (blot) out.blot = blot;
   if (extra > MAX_NOTE_EXTRA) return null;
   return out;
 }
@@ -348,6 +360,7 @@ export class Room {
         if (typeof r.parent === 'string' && r.parent.length <= 16) req.parent = r.parent;
         if (typeof r.photo === 'string' && r.photo.length <= 60000) req.photo = r.photo;       // small JPEG data URL, seeds the shape
         if (typeof r.lang === 'string' && r.lang.length <= 8) req.lang = r.lang;
+        const blot = cleanBlot(r.blot); if (blot) req.blot = blot;
         this.requests.set(req.id, req); this.saveRequests();
         this.broadcast(JSON.stringify({ t: 'paint_request', req }), ws);
         return;
@@ -368,7 +381,7 @@ export class Room {
       }
       case 'paint_start': {
         if (typeof data.mask !== 'string' || data.mask.length > MAX_MASK_STR) return;
-        this.broadcast(JSON.stringify({ t: 'paint_start', id: String(data.id || '').slice(0, 16), by: att.id, for: typeof data.for === 'string' ? data.for.slice(0, 16) : null, mask: data.mask, text: String(data.text || '').slice(0, 80) }), ws);
+        this.broadcast(JSON.stringify({ t: 'paint_start', id: String(data.id || '').slice(0, 16), by: att.id, for: typeof data.for === 'string' ? data.for.slice(0, 16) : null, mask: data.mask, text: String(data.text || '').slice(0, 80), blot: cleanBlot(data.blot) || undefined, path: Array.isArray(data.path) ? data.path.slice(0, 400) : undefined }), ws);
         return;
       }
       case 'paint_end': {

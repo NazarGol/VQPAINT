@@ -1,14 +1,17 @@
 # Needs Nazar
 
-## Test on the phones (round 5 features), laptop open in the same room
-Android Chrome and iPhone Safari, live link https://nazargol.github.io/VQPAINT/ (models now come from Hugging Face; if that fails the site silently falls back to GitHub Pages).
-1. **Edge**: draw a shape on the phone, Enter. Expected: the laptop paints it and the edge is soft (feathered along your lasso), not jagged cells. Before this round Android got a cell edge because the relay dropped the lasso path.
-2. **Reply**: tap a shape → note opens → "reply". Draw a shape that touches the first one (a shape far away should say "A reply must touch the shape it replies to"). Expected: the reply grows out of the first shape's colours; the open note shows "in reply to …" and, on the parent, "1 reply".
-3. **Photo**: brush → draw → "add photo" (camera or gallery) → write a note → Enter. Expected: the stroke resembles the photo but painted, the note shows a small thumbnail. On the phone alone (laptop closed) this loads the 32 MB encoder, then the brush — the step most likely to reload on a 13 mini (peak ~1.9 GB in emulation); with the laptop open the phone loads nothing.
-4. **Ukrainian**: set the phone to Ukrainian (or open `…/room.html?r=<room>&lang=uk`). Expected: the whole UI in Ukrainian; ⋯ menu → "language: English" switches back. Write a Ukrainian note: the laptop translates it for the painting (first time ~40 s to download the translator), the note keeps your text and shows "translated for the painting: …" under it. ⋯ → export PDF: Cyrillic must render.
-5. **Practical notes**: write "deadline on Friday" or "дедлайн у п’ятницю". Expected: something clock/calendar-like rather than noise. Compare with `&metaphors=0` in the URL if curious.
-6. **Painting look**: write "a red brick wall in the sun" and "a portrait of a woman with red hair" at realism 0.6. Expected: brush texture and saturated colour rather than a photo crop. Add `&bank=bank_photos` to the room URL to see the old photo-bank look on the same notes.
-7. Tell me for each step: worked / what you saw, and whether Safari reloaded at any point.
+## Pick the reveal effect
+https://nazargol.github.io/VQPAINT/app/effects.html — ink / watercolour / growth, "tune" for the sliders, "copy settings" and paste me the line you like. Until then the app uses ink with the defaults.
+
+## Test on the phones (round 6), laptop open in the same room
+Live: https://nazargol.github.io/VQPAINT/ . Minimum phones now: iPhone XR / 11 / SE 2 (iOS 15+) and a 3 GB 2020 Android.
+1. **No modes**: one finger drags the canvas (it should glide a little after you let go), pinch zooms, a tap on a stroke opens its note, a tap on empty space opens the writer as a sheet above the keyboard. Nothing should feel ignored; every pill should press in.
+2. **Write and paint**: write a note, tap "paint". Expected at once: a tiny ripple and a small buzz (Android, or iPhone on iOS 17.4+), then a lilac fog spreading from the tap that turns into the painting while the laptop paints (≈10 s); the edge settles with a second, softer buzz. Hold your finger down before lifting it to make a bigger drop. Touch the spreading drop and drag to stir it.
+3. **Queue**: write a second note while the first is still painting. Expected: "painting after the current one…", then it paints by itself.
+4. **First visit**: open the link in a private tab: it should ask your name once. "invite" should open the share sheet.
+5. **Reduce motion** (iOS: Settings → Accessibility → Motion; Android: Remove animations): strokes should appear with a quick soft fade, no spreading.
+6. **Frame rate**: does the spreading ever stutter? (It should drop detail, not frames.) Tell me the phone model and iOS/Android version.
+7. The previous round's checks (reply, photo, Ukrainian, practical notes) still apply; see the end of PROGRESS.md.
 
 ## Kaggle painting bank
 Done: 1500 paintings generated (8.2 h on 2× T4), bank rebuilt and live. Rotate the Kaggle token now if you want (it was pasted into the chat once).

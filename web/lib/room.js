@@ -108,7 +108,7 @@ export function connectRoom(opts = {}) {
       case 'paint_request': emit(onPaintRequest, m.req); break;          // {id, text, mask, author, color, from}
       case 'paint_assigned': emit(onPaintAssigned, { id: m.id, by: m.by, for: m.for }); break;
       case 'paint_done': emit(onPaintDone, { id: m.id, ok: m.ok !== false }); break;
-      case 'paint_start': emit(onPaintStart, { id: m.id, by: m.by, for: m.for || null, mask: m.mask, text: m.text }); break;
+      case 'paint_start': emit(onPaintStart, { id: m.id, by: m.by, for: m.for || null, mask: m.mask, text: m.text, blot: m.blot || null, path: m.path || null }); break;
       case 'paint_end': emit(onPaintEnd, { id: m.id, by: m.by }); break;
       case 'peer': if (m.peer && m.peer.id) { const q = peers.get(m.peer.id); if (q) Object.assign(q, m.peer); else peers.set(m.peer.id, m.peer); } break;
       default:

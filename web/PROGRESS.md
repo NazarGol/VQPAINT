@@ -16,6 +16,15 @@
 6. **Replay** in the ⋯ menu (notes appear one by one) and **export replay video** (WebM in Chrome, MP4 in Safari untested).
 7. **Phones paint themselves**: packed int8 models (decoder 45 MB, CLIP 53 MB), decoder first, CLIP on first stroke; lasso capped at 14 tokens, 1.3× longer search; wake lock while painting; painter pauses in hidden tabs; CPU fallback with the int8 decoder finishes strokes; helpers off by default (⋯ menu). Realism slider (abstract ↔ realistic) in the note box replaces effort.
 
+## Round 6 (2026-10-01): simple and pleasant, especially on phones
+1. **No modes**: tools removed; tap a stroke → note, tap empty space → writer, drag → pan with momentum, pinch/wheel → zoom, hold → bigger drop (`lib/view.js`, `app/components/canvas.js`).
+2. **Write first**: writer at the tap (bottom sheet on phones), "paint" → the shape is born from the tapped point, notes written while painting wait in a queue (`app/test_flow.mjs`, 16/16).
+3. **Organic reveal**: prototypes a/b/c with sliders + copy settings on https://nazargol.github.io/VQPAINT/app/effects.html (`lib/effects/blot.js`, `shader.js`); in the app the reveal (ink by default) drives the stroke: instant start, ripple + haptic, ease-out, hold grows, drag stirs, settle pulse + softer haptic, seed per stroke, fog → clear through the engine's preview callback, the settled blot is the mask, other people's strokes get the softer version, canvas fallback, reduced motion (`lib/effects/reveal.js`, `contour.js`). Engine untouched.
+4. **First visit**: name asked once; empty-canvas hint; invite = share sheet on phones.
+5. **Look and feel**: instant pressed states, 180 ms soft motion, momentum pan, backdrop blur, one accent, 16 px / 44 px on phones, shimmer loading, calm layout.
+
+Phone flow video (Pixel 7 profile, helper painting): `app/shots/phone_flow_Pixel_7.webm`; ten ink drops: `app/shots/fx_ink_10.png`; effect moments: `app/shots/fx/*`.
+
 ## Round 5 (2026-09-30 night): replies, photos, Ukrainian, metaphors, HF hosting
 0. **Quick fixes**: Android jagged edge — helper-painted strokes lost their lasso path in the room relay (cell-mask edge); the worker now relays `path`/`realism` (and `parent`/`photo`/`lang`), verified on Pixel 7 emulation (`app/test_phone.mjs` checks the note carries its path). **Hugging Face**: models on `noi3noi3/vqpaint-web` (CORS + ranges verified from `nazargol.github.io`), app loads from HF with GitHub Pages as automatic fallback (`tools/test_mirror.mjs`: HF → ok, HF blocked → Pages, `?models=pages`). **Kaggle**: kernel v3 made 1500 paintings in 8.2 h (sample: `app/shots/kaggle_paintings_sample.png`); the bank is now 1500 paintings + 500 faces (2.2 MB) on HF and Pages, old photo bank kept as `?bank=bank_photos`; before/after `app/shots/bank_before_after.png`.
 1. **Replies**: "reply" in an open note → the next lasso must touch that shape → painting seeded from the parent's edge tokens → tree in room state (`parent`), thread shown in the open note, PDF indents replies (`app/test_replies.mjs`, 10/10).

@@ -15,7 +15,7 @@ async function paintAll(metaphors) {
   const roomId = 'met-' + Math.random().toString(36).slice(2, 8);
   const page = await (await browser.newContext({ viewport: { width: 1100, height: 760 } })).newPage();
   page.on('pageerror', (e) => console.error('[pageerror]', e.message));
-  await page.goto(`${base}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&models=pages&helpers=0&metaphors=${metaphors ? 1 : 0}`);
+  await page.goto(`${base}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&models=pages&name=tester&helpers=0&metaphors=${metaphors ? 1 : 0}`);
   await page.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready && window.__vqpaint.grid, null, { timeout: 180000 });
   await page.evaluate((s) => window.__vqpaint.setEffortSeconds(s), seconds);
   const out = [];
