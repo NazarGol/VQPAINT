@@ -8,7 +8,7 @@ const toCHW = (img) => {   // {rgba,w,h} -> {data: Float32Array CHW 0..1, w, h, 
   return { data, w: img.w, h: img.h, rgba: img.rgba };
 };
 
-export async function loadEngineBridge({ base, onProgress = null, bank = 'bank', variant = 'A', scorer = 'S', text = 'S', batch = 32 } = {}) {
+export async function loadEngineBridge({ base, onProgress = null, bank = 'bank', variant = 'auto', scorer = 'S', text = 'S', batch = 32 } = {}) {
   const engine = await Engine.load({ base, onProgress, bank, variant, scorer, text, fetchBuf: (u) => fetchCached(u, { onProgress }) });
   const times = [];
   const decoder = {
@@ -28,5 +28,6 @@ export async function loadEngineBridge({ base, onProgress = null, bank = 'bank',
     paint: (opts) => engine.paintStroke({ batch, ...opts, onPreview: opts.onProgress ? (p) => opts.onProgress({ ...p, image: toCHW(p.image) }) : null }).then((r) => ({ ...r, image: toCHW(r.image) })),
     tiny: true,
   };
+  decoder.variant = engine.decoder.variant || variant; decoder.probeMs = engine.decoder.probeMs;
   return { engine, decoder, clip, painter, probe: () => { engine.decode(new Int32Array(256).fill(6328), 16, 16); return engine.decoder.stats.lastMs; }, release: () => engine.release() };
 }
