@@ -1,6 +1,6 @@
 // Adapter: the light engine (web/engine) presented with the shapes room.js already uses for decoder / clip / painter.
 import { Engine } from '../engine/engine.js';
-import { fetchCached } from '../lib/models.js';
+import { fetchLowMem } from '../engine/engine.js';
 
 const toCHW = (img) => {   // {rgba,w,h} -> {data: Float32Array CHW 0..1, w, h, rgba}
   const n = img.w * img.h, data = new Float32Array(3 * n), p = img.rgba;
@@ -9,7 +9,7 @@ const toCHW = (img) => {   // {rgba,w,h} -> {data: Float32Array CHW 0..1, w, h, 
 };
 
 export async function loadEngineBridge({ base, onProgress = null, bank = 'bank', variant = 'auto', scorer = 'S', text = 'S', clip = 'clip_vision', mode = 'clip', batch = 32 } = {}) {
-  const engine = await Engine.load({ base, onProgress, bank, variant, scorer, text, clip, fetchBuf: (u) => fetchCached(u, { onProgress }) });
+  const engine = await Engine.load({ base, onProgress, bank, variant, scorer, text, clip, fetchBuf: (u) => fetchLowMem(u, { onProgress }) });
   const times = [];
   const decoder = {
     decode: async (tokens, h, w) => { const out = toCHW(engine.decode(tokens, h, w)); times.push(engine.decoder.stats.lastMs); if (times.length > 50) times.shift(); return out; },
