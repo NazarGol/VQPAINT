@@ -10,11 +10,10 @@
  "enable_internet": true,
  "dataset_sources": [
   "noi3noi3/vqpaint-assets",
-  "noi3noi3/vqpaint-tokens"
+  "noi3noi3/vqpaint-tokens",
+  "noi3noi3/vqpaint-decoder-v3"
  ],
  "competition_sources": [],
- "kernel_sources": [
-  "noi3noi3/vqpaint-tiny-decoder"
- ],
+ "kernel_sources": [],
  "model_sources": []
 }
