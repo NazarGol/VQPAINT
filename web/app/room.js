@@ -9,7 +9,7 @@ import { maskCells, maskToString, maskFromString, maskFromCells, maskHas, maskTo
 import { t, lang, setLang } from './i18n.js';
 import { lassoMask } from '../lib/lasso.js';
 import { connectRoom } from '../lib/room.js';
-import { LayerCache, encodeTokens, decodeTokens, paintedBounds, polygonAlpha, maskAlpha, composeLayer, intersects, makePreviewBlob } from '../lib/layers.js';
+import { LayerCache, encodeTokens, decodeTokens, paintedBounds, polygonAlpha, maskAlpha, composeLayer, intersects, makePreviewBlob, packCells, noteCellAlpha } from '../lib/layers.js';
 import { mountRoombar } from './components/roombar.js';
 import { RevealManager } from '../lib/effects/reveal.js';
 import { haptic } from '../lib/haptics.js';
@@ -186,8 +186,8 @@ function liveDrop(x, y, size = BASE_R) {
   return d;
 }
 function takeHeld() { const h = held; held = null; if (!h) return null; const d = h.drop; d.size = Math.max(d.size, reveal.sizeTokOf(d.pendingId) / INK_K); return d; }
-function dropHeld() { const h = held; held = null; if (h) reveal.fadeOut(h.drop.pendingId, 600); }
-function dissolveDrop(d) { if (d && d.pendingId) reveal.fadeOut(d.pendingId, 700); }
+function dropHeld() { const h = held; held = null; if (h) reveal.dissolve(h.drop.pendingId); }
+function dissolveDrop(d) { if (d && d.pendingId) reveal.dissolve(d.pendingId); }
 /** every reveal needs the canvas loop running: the ink only steps while frames are drawn */
 function startReveal(opts) { const it = reveal.start(opts); view.requestRender(); return it; }
 function beginWrite(w, hold = 0, existing = null) {
@@ -475,6 +475,11 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     reveal.setImage(jobId, res.image); reveal.setClarity(jobId, 1);
     const blotRes = await reveal.finish(jobId);                                 // the edge freezes: this is the stroke's shape
     const bc = blotRes ? blotRes.crop || res.crop : res.crop;
+    if (blotRes && blotRes.cellBits && (bc.x !== res.crop.x || bc.y !== res.crop.y || bc.w !== res.crop.w || bc.h !== res.crop.h)) {   // re-cut the cell bitmap to the painting's crop
+      const cpt = blotRes.cpt, sw = bc.w * cpt, dw = res.crop.w * cpt, dh = res.crop.h * cpt, nb = new Uint8Array(dw * dh), ox = (res.crop.x - bc.x) * cpt, oy = (res.crop.y - bc.y) * cpt;
+      for (let y = 0; y < dh; y++) for (let x = 0; x < dw; x++) { const sx = x + ox, sy = y + oy; if (sx >= 0 && sy >= 0 && sx < sw && sy < bc.h * cpt) nb[y * dw + x] = blotRes.cellBits[sy * sw + sx]; }
+      blotRes.cellBits = nb; blotRes.crop = res.crop;
+    }
     stats.lastBlot = blotRes ? { count: blotRes.count, path: blotRes.path ? blotRes.path.length : 0, crop: bc, maskCount: mask.count } : null;
     const finalMask = blotRes && blotRes.count ? intersectMasks({ x: bc.x, y: bc.y, w: bc.w, h: bc.h, cells: blotRes.cells, count: blotRes.count }, mask) : mask;
     if (blotRes && blotRes.path) path = blotRes.path;
@@ -500,8 +505,10 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     stats.strokes++; stats.strokeSeconds.push(secs); stats.lastTries = res.steps; stats.lastStatus = `${res.steps} tries in ${secs.toFixed(1)}s`;
     const anon = !!meta.anon;
     const note = { id: Math.random().toString(36).slice(2, 10), text, author: anon ? '' : author, color, time: Date.now(), mask: maskToString(finalMask), crop: res.crop, tokens: encodeTokens(res.tokens), path: path || undefined, realism, parent: parent || undefined, photo: photo ? (photo.thumb || thumbOf(await dataUrlToImage(photo.data))) : undefined,
-      lang: noteLang && noteLang !== 'en' ? noteLang : undefined, text_en: textEn || undefined, blot: blotRes ? blotRes.blot : undefined, merges: merges.length ? merges : undefined, chapter: meta.chapter || undefined, day: meta.day || undefined, source: meta.source || undefined, anon: anon || undefined };
+      lang: noteLang && noteLang !== 'en' ? noteLang : undefined, text_en: textEn || undefined, blot: blotRes ? blotRes.blot : undefined, merges: merges.length ? merges : undefined, cells: blotRes && blotRes.cellBits ? packCells(blotRes.cellBits) : undefined, cpt: blotRes && blotRes.cellBits ? blotRes.cpt : undefined, chapter: meta.chapter || undefined, day: meta.day || undefined, source: meta.source || undefined, anon: anon || undefined };
     strokes.push(note);
+    if (note.cells && bc.x === res.crop.x && bc.y === res.crop.y && bc.w === res.crop.w && bc.h === res.crop.h) alphaImg = noteCellAlpha(note, res.crop);   // the cells are the mask; shared cells with older strokes get the dither
+    else if (note.cells) { const a = noteCellAlpha(note, bc); alphaImg = cropAlpha(a, bc, res.crop); }
     await layers.fromImage(note, res.crop, res.image, alphaImg);
     undoStack.push({ cells, before, note }); menu.setUndoEnabled(true);
     sendCells(cells);
@@ -744,7 +751,10 @@ async function boot() {
   if (tgMode) { try { const sc = document.createElement('script'); sc.src = 'https://telegram.org/js/telegram-web-app.js'; sc.onload = () => { try { const wa = window.Telegram?.WebApp; wa?.ready(); wa?.expand(); if (wa?.initDataUnsafe?.user && !localStorage.getItem('vqpaint.name')) { const u = wa.initDataUnsafe.user; myName = (u.first_name || u.username || myName).slice(0, 24); localStorage.setItem('vqpaint.name', myName); } } catch (_) {} }; document.head.appendChild(sc); } catch (_) {} }
   const gpu = params.get('nogpu') === '1' ? null : await webgpuInfo();
   beacon('gpu', { gpu }); caps.gpu = !!gpu;
-  if (useTiny) { engine = new LightEngine(lightest ? { mode: 'clip', clip: 'clip_vision_i8', scorer: null, text: 'S' } : { mode: params.get('mode') || 'prefilter' }); stats.engine = 'tiny'; stats.engineMode = lightest ? 'lightest (int8 CLIP, no scorer)' : (params.get('mode') || 'prefilter'); stats.crashes = crashes; }
+  const lightCfg = lightest ? { mode: 'clip', clip: 'clip_vision_i8', scorer: null, text: 'S' } : { mode: params.get('mode') || 'prefilter' };
+  const workerLight = useTiny && params.get('lightworker') !== '0' && Engine.canHostLight();   // the light engine in a worker when the browser allows (page frames stay free); on the page thread otherwise (iOS 15/16)
+  if (useTiny && workerLight) { engine = new Engine({ light: lightCfg }); stats.engine = 'tiny-worker'; stats.engineMode = lightest ? 'lightest (int8 CLIP, no scorer)' : (params.get('mode') || 'prefilter'); }
+  else if (useTiny) { engine = new LightEngine(lightCfg); stats.engine = 'tiny'; stats.engineMode = lightest ? 'lightest (int8 CLIP, no scorer)' : (params.get('mode') || 'prefilter'); }
   mountDebugLine($('roombar'), () => { const secs = stats.strokeSeconds[stats.strokeSeconds.length - 1]; return { engine: (stats.engine || 'ort') + (stats.engineVariant ? ' ' + stats.engineVariant : ''), mode: stats.engineMode || ep || '-', crashes: stats.crashes ?? 0, 'last stroke': secs ? `${stats.lastTries} tries in ${secs.toFixed(1)} s (${(stats.lastTries / secs).toFixed(1)}/s)` : '-', 'decode ms': stats.fullDecodeMs ?? '-', memory: memoryInfo() }; });
   if (!gpu && !lowMem && !forceNoPaint) setStatus(t('msg.noGpuShort'), 7000);   // a quiet line, never a box over the canvas
   ep = gpu ? 'webgpu' : 'wasm';

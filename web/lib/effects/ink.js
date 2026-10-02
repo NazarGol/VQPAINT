@@ -10,7 +10,7 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 export function hashText(text) { let h = 0x811c9dc5; const s = String(text || ''); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return h >>> 0; }
 
 // ---- parameters: the sliders of the test page; `weird` shifts the per-stroke draw ----
-export const DEFAULTS = { size: 110, speed: 0.5, viscosity: 0.45, lobes: 3, lobeLength: 0.6, tendrils: 0.6, satellites: 0.5, holes: 0.3, twin: 0.25, stretch: 0.4, roughness: 0.5, weird: 0.5 };
+export const DEFAULTS = { size: 110, speed: 0.5, viscosity: 0.45, lobes: 3, lobeLength: 0.6, tendrils: 0.6, satellites: 0.5, holes: 0.3, twin: 0.25, stretch: 0.4, roughness: 0.5, weird: 0.5, cpt: 4, dither: 0.6, flash: 0.7, flicker: 0.5 };
 export const durationFor = (speed) => 0.9 + 11 * Math.pow(1 - clamp(speed, 0, 1), 1.5);
 /** draw one stroke's parameters from its seed around the slider values; ~70% weird, ~25% very weird, ~5% extreme */
 export function drawParams(seed, base = {}) {
@@ -32,7 +32,7 @@ export function drawParams(seed, base = {}) {
   const roughness = clamp(jitter(b.roughness, 0.5) * (0.9 + 0.3 * tier), 0, 1), roughFreq = 2 + 10 * rnd();
   const speed = clamp(jitter(b.speed, 0.3), 0, 1), viscosity = clamp(jitter(b.viscosity, 0.35), 0, 1);
   const swirl = (0.3 + 0.9 * rnd()) * (1 + 0.4 * tier), spin = rnd() < 0.5 ? -1 : 1, lobeAmp = 0.35 + 0.55 * rnd() * (0.7 + 0.3 * tier);
-  return { seed: seed >>> 0, tier, size: b.size * (0.8 + 0.4 * rnd()), lobes, angles, lens, lobeAmp, tend, sats, holes, twin, stretch, stretchA, roughness, roughFreq, speed, viscosity, swirl, spin, fseed: 3 + rnd() * 97, duration: durationFor(speed), lobeLength: clamp(jitter(b.lobeLength, 0.4), 0, 1) };
+  return { seed: seed >>> 0, tier, size: b.size * (0.8 + 0.4 * rnd()), cpt: b.cpt, dither: b.dither, flash: b.flash, flicker: b.flicker, lobes, angles, lens, lobeAmp, tend, sats, holes, twin, stretch, stretchA, roughness, roughFreq, speed, viscosity, swirl, spin, fseed: 3 + rnd() * 97, duration: durationFor(speed), lobeLength: clamp(jitter(b.lobeLength, 0.4), 0, 1) };
 }
 
 // ---- shaders (GLSL ES 1.0) ----
@@ -96,39 +96,39 @@ void main(){
   float border = smoothstep(0.0, 0.06, vUv.x) * smoothstep(0.0, 0.06, vUv.y) * smoothstep(1.0, 0.94, vUv.x) * smoothstep(1.0, 0.94, vUv.y);
   gl_FragColor = vec4(clamp(d * border, 0.0, 1.0), 0.0, 0.0, 1.0);
 }`;
-// render: dye -> mask with rough edges and holes; dye colour, texture reveal, or raw mask
+// render: PIXEL INK. The dye field is read at cell centres (cells per token = cpt, the sim grid is the cell grid), every cell
+// is filled or not — no blur, no anti-aliasing. A Bayer dither decides the cells in the band around the threshold, cells at the
+// edge flicker while the drop waits, newly reached cells flash while it spreads, cells dissolve by hash when a note is dropped.
 const FRAG_RENDER = `precision highp float; varying vec2 vUv; uniform sampler2D uDye, uTex; uniform vec2 uRes; uniform vec4 uRect;   // crop px rect of the sim grid (x,y,w,h)
-uniform float uThr, uRough, uRoughF, uSeed, uSoft, uTime, uRipple, uPulse, uClarity, uAlpha, uGridN, uOct, uPx; uniform int uMode, uHoles; uniform vec3 uHolev[4]; uniform vec3 uColor; uniform vec4 uTexRect; uniform vec2 uCenter;
-${NOISE}
-float fbmN(vec2 p, float oct){ float v = 0.0, a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { if (float(i) >= oct) break; v += a * vnoise(p); s += a; p = p * 2.03 + vec2(17.1, 9.7); a *= 0.5; } return v / s; }
+uniform float uThr, uSeed, uTime, uRipple, uPulse, uClarity, uAlpha, uN, uDither, uFlash, uFlicker, uTick, uDissolve, uPending, uBreath; uniform int uMode, uHoles; uniform vec3 uHolev[4]; uniform vec3 uColor; uniform vec4 uTexRect; uniform vec2 uCenter;
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float bayer2(vec2 p){ p = mod(floor(p), 2.0); return (2.0 * p.x + 3.0 * p.y - 4.0 * p.x * p.y) / 4.0; }
+float bayer4(vec2 p){ return (bayer2(p) * 4.0 + bayer2(floor(p / 2.0))) / 5.0; }
 void main(){
   vec2 px = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
-  vec2 g = (px - uRect.xy) / uRect.zw;                 // sim grid uv
-  // the dye field is sampled with a smoothed bilinear kernel: the contour is a smooth curve at any zoom, not the grid's polygon
-  vec2 st = g * uGridN - 0.5; vec2 i0 = floor(st); vec2 f = fract(st); f = f * f * (3.0 - 2.0 * f);
-  float dye = (g.x < 0.0 || g.y < 0.0 || g.x > 1.0 || g.y > 1.0) ? 0.0 : texture2D(uDye, (i0 + f + 0.5) / uGridN).r;
-  float dist = length(px - uCenter);
-  float ripple = 0.0;
-  if (uRipple >= 0.0) { float rr = (6.0 + 90.0 * (1.0 - pow(1.0 - uRipple, 3.0))) * uPx; ripple = 0.7 * exp(-pow((dist - rr) / (2.5 * uPx), 2.0)) * (1.0 - uRipple); }
-  if (dye < uThr - 0.5 && ripple < 0.002) discard;     // far outside: nothing to shade
-  float band = 1.0 - step(0.45, abs(dye - uThr));      // the edge band gets the fine noise; the body only its cloud
-  float rough = band * (uRough * 0.35 * (fbmN(g * uRoughF * 4.0 + uSeed, uOct) - 0.5) + uRough * 0.12 * (vnoise(g * uRoughF * 14.0 + uSeed * 3.0) - 0.5));
-  float s = dye + rough;
-  for (int i = 0; i < 4; i++) { if (i >= uHoles) break; vec2 d = g - uHolev[i].xy; s -= 0.9 * exp(-dot(d, d) / (uHolev[i].z * uHolev[i].z)); }
-  float mask = smoothstep(uThr - uSoft, uThr + uSoft, s);
-  float body = smoothstep(uThr, uThr + 0.35, s);
-  float dens = mask * (0.6 + 0.4 * body) * (0.72 + 0.5 * fbmN(g * 7.0 + uSeed + uTime * 0.05, min(uOct, 3.0)));
-  dens += ripple;
-  dens += 0.35 * uPulse * (1.0 - smoothstep(0.0, 0.12, abs(s - uThr))) * mask;
-  dens = clamp(dens, 0.0, 1.0);
-  if (uMode == 2) { gl_FragColor = vec4(mask, dens, 0.0, 1.0); return; }
-  if (uMode == 1) { vec2 uv = (px - uTexRect.xy) / uTexRect.zw; vec4 tf = texture2D(uTex, uv + 0.02 * vec2(fbm(g * 3.0 + uTime * 0.1) - 0.5, fbm(g * 3.0 + 7.0 - uTime * 0.1) - 0.5) * (1.0 - uClarity), 4.0);
-    vec4 tc = texture2D(uTex, uv, 0.0); float ta = mix(tf.a, tc.a, uClarity); vec3 col = mix(mix(tf.rgb, uColor, 0.35 * (1.0 - uClarity)), tc.rgb, uClarity);
-    if (dens <= 0.002) discard;
-    float a = clamp(mask * uAlpha * (0.6 + 0.4 * uClarity) + (dens - mask * 0.5) * 0.5 * (1.0 - uClarity), 0.0, 1.0) * ta; gl_FragColor = vec4(col * a, a); return; }
-  float rim = smoothstep(0.25, 0.0, abs(s - uThr)) * mask;
-  vec3 col = uColor * (0.72 + 0.3 * dens) + vec3(0.18, 0.14, 0.2) * rim + vec3(0.1) * dens * dens;
-  float a = clamp(dens * uAlpha, 0.0, 1.0); gl_FragColor = vec4(col * a, a);
+  vec2 g = (px - uRect.xy) / uRect.zw;                  // sim grid uv
+  if (g.x < 0.0 || g.y < 0.0 || g.x >= 1.0 || g.y >= 1.0) discard;
+  vec2 c = floor(g * uN); vec2 cc = (c + 0.5) / uN;    // the cell and its centre
+  float s = texture2D(uDye, cc).r;
+  for (int i = 0; i < 4; i++) { if (i >= uHoles) break; vec2 d = cc - uHolev[i].xy; s -= 0.9 * exp(-dot(d, d) / (uHolev[i].z * uHolev[i].z)); }
+  float band = abs(s - uThr);
+  float thr = uThr + (bayer4(c) - 0.5) * uDither * 0.3;           // ordered dither along the edge
+  float fill = step(thr, s);
+  if (uPending > 0.5 && band < 0.16 && hash(c + uTick * 0.37 + uSeed) < uFlicker * 0.6) fill = 1.0 - fill;   // waiting: edge cells flicker
+  if (uDissolve > 0.0 && hash(c * 1.7 + uSeed) < uDissolve) fill = 0.0;                                      // dropped note: cells go out in steps
+  // the impact ripple: a ring of cells, one cell wide, not part of the mask
+  vec2 cCenter = floor((uCenter - uRect.xy) / uRect.zw * uN) + 0.5; float rr = (4.0 + 26.0 * (1.0 - pow(1.0 - uRipple, 3.0))) * uN / 108.0;
+  float ring = (uRipple >= 0.0 && abs(length(c + 0.5 - cCenter) - rr) < 0.6) ? (1.0 - uRipple) : 0.0;
+  float flash = uBreath * uFlash * step(uThr, s) * (1.0 - smoothstep(0.0, 0.1, s - uThr)) * 0.9 + uPulse * 0.6;   // newly reached cells, and the settle flash
+  if (uMode == 2) { gl_FragColor = vec4(fill, fill, 0.0, 1.0); return; }
+  if (fill < 0.5 && ring <= 0.0) discard;
+  if (uMode == 1) { vec2 uv = (px - uTexRect.xy) / uTexRect.zw;
+    vec4 tf = texture2D(uTex, uv + 0.02 * vec2(hash(c) - 0.5, hash(c + 3.1) - 0.5) * (1.0 - uClarity), 4.0); vec4 tc = texture2D(uTex, uv, 0.0);
+    float ta = mix(tf.a, tc.a, uClarity); vec3 col = mix(mix(tf.rgb, uColor, 0.35 * (1.0 - uClarity)), tc.rgb, uClarity) + vec3(flash * 0.5);
+    float a = (fill > 0.5 ? uAlpha : 0.0) * ta + ring * 0.8 * (1.0 - fill); if (a <= 0.002) discard; gl_FragColor = vec4(col * a, a); return; }
+  float a = max(fill, ring) * uAlpha;
+  vec3 col = uColor * (0.78 + 0.1 * hash(c + uSeed)) + vec3(0.25) * flash + vec3(0.2) * ring;
+  gl_FragColor = vec4(col * a, a);
 }`;
 
 /** The GL side: one context, three programs, textures per drop. Throws without WebGL. */
@@ -235,7 +235,15 @@ export class InkDrop {
   /** advance the simulation to `now` (one or two substeps), returns true the frame it settles */
   step(now, forceDt = null) {
     if (this.settled || this.freed) return false;
-    let dt = forceDt ?? clamp((now - this.last) / 1000, 0, 0.05); this.last = now;
+    if (forceDt == null) {   // live: advance in ticks so cells pop in waves — 20 Hz at the start, 7 Hz as it settles; the waiting drop at 8 Hz
+      const prog = this.pending ? 0 : this.progress(now), hz = this.pending ? 8 : 20 - 13 * Math.pow(prog, 0.7);
+      this.acc = (this.acc || 0) + clamp((now - this.last) / 1000, 0, 0.25); this.last = now;
+      if (this.acc < 1 / hz) return false;
+      let done = false; const total = this.acc; this.acc = 0; const n = Math.ceil(total / 0.05);
+      for (let i = 0; i < n; i++) done = this.step(now, total / n) || done;
+      return done;
+    }
+    let dt = forceDt;
     if (dt <= 0) return false;
     const P = this.p, t = this.age(now), T = P.duration;
     let emitPhase = clamp(1 - t / (T * 0.38), 0, 1);                                     // ink flows in during the first ~40%
@@ -287,12 +295,13 @@ export class InkDrop {
     if (mode === 1 && ink.tex) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, ink.tex); gl.uniform1i(u.uTex, 1); gl.activeTexture(gl.TEXTURE0); }
     gl.uniform2f(u.uRes, ink.canvas.width, ink.canvas.height);
     gl.uniform4f(u.uRect, (this.rect.x - offset[0]) * k, (this.rect.y - offset[1]) * k, this.rect.w * k, this.rect.h * k);
-    const t = this.age(now), pulse = this.settled ? Math.max(0, 1 - (now - this.settledAt) / 420) * Math.sin(Math.min(1, (now - this.settledAt) / 420) * Math.PI) : 0;
-    gl.uniform1f(u.uThr, 0.42); gl.uniform1f(u.uRough, P.roughness); gl.uniform1f(u.uRoughF, P.roughFreq); gl.uniform1f(u.uSeed, P.fseed); gl.uniform1f(u.uSoft, (0.03 + 0.12 * P.viscosity) * 0.5); gl.uniform1f(u.uTime, t);
-    gl.uniform1f(u.uGridN, this.grid); gl.uniform1f(u.uOct, Math.max(2, 4 - (ink.detailCut || 0))); gl.uniform1f(u.uPx, k);
+    const t = this.age(now), pulse = this.settled ? Math.max(0, 1 - (now - this.settledAt) / 420) : 0;
     this.ripples = this.ripples.filter((r) => now - r.t < 500);
     const rip = this.ripples.length ? this.ripples[this.ripples.length - 1] : null;
-    gl.uniform1f(u.uRipple, this.reduce || this.settled ? -1 : rip ? (now - rip.t) / 500 : (t < 0.5 ? t / 0.5 : -1)); gl.uniform1f(u.uPulse, pulse); gl.uniform1f(u.uClarity, clarity); gl.uniform1f(u.uAlpha, alpha); gl.uniform1i(u.uMode, mode);
+    gl.uniform1f(u.uThr, 0.42); gl.uniform1f(u.uSeed, P.fseed); gl.uniform1f(u.uTime, t); gl.uniform1f(u.uN, this.grid);
+    gl.uniform1f(u.uDither, P.dither ?? 0.6); gl.uniform1f(u.uFlash, P.flash ?? 0.7); gl.uniform1f(u.uFlicker, P.flicker ?? 0.5); gl.uniform1f(u.uTick, Math.floor(now / 125));
+    gl.uniform1f(u.uDissolve, this.dissolve || 0); gl.uniform1f(u.uPending, this.pending ? 1 : 0); gl.uniform1f(u.uBreath, this.settled || this.pending ? 0 : 1);
+    gl.uniform1f(u.uRipple, this.reduce ? -1 : rip ? (now - rip.t) / 500 : (t < 0.5 && !this.settled ? t / 0.5 : -1)); gl.uniform1f(u.uPulse, pulse); gl.uniform1f(u.uClarity, clarity); gl.uniform1f(u.uAlpha, alpha); gl.uniform1i(u.uMode, mode);
     gl.uniform1i(u.uHoles, P.holes.length); P.holes.forEach((h, i) => gl.uniform3f(u[`uHolev[${i}]`], this.c0[0] + h.x * this.r0 * 2.4, this.c0[1] + h.y * this.r0 * 2.4, h.r * this.r0 * 1.6));
     gl.uniform3f(u.uColor, color[0], color[1], color[2]);
     if (texRect) gl.uniform4f(u.uTexRect, (texRect.x - offset[0]) * k, (texRect.y - offset[1]) * k, texRect.w * k, texRect.h * k);

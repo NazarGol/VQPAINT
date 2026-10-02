@@ -46,8 +46,9 @@ export function mountCanvas(stageEl, { onTap, onHoldStart, onHold, onHoldEnd, on
     ctx.clearRect(0, 0, W, H);
     const z = view.zoom, r = view.rect();
     ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-    const draw = (bitmap, crop) => { const [sx, sy] = view.toScreen(crop.x, crop.y); ctx.drawImage(bitmap, sx, sy, crop.w * z, crop.h * z); };
-    for (const l of state.layers) if (intersects(r, l.crop)) draw(l.bitmap, l.crop);
+    const draw = (bitmap, crop, pixel = false) => { const [sx, sy] = view.toScreen(crop.x, crop.y); ctx.imageSmoothingEnabled = !pixel; ctx.drawImage(bitmap, sx, sy, crop.w * z, crop.h * z); };   // pixel ink: nearest-neighbour, cells stay crisp
+    for (const l of state.layers) if (intersects(r, l.crop)) draw(l.bitmap, l.crop, l.pixel);
+    ctx.imageSmoothingEnabled = true;
     if (state.highlight) { const l = state.layers.find((x) => x.id === state.highlight.id); if (l) { const [sx, sy] = view.toScreen(l.crop.x, l.crop.y); ctx.globalAlpha = 0.35 * (1 - state.highlight.k) * (0.5 + 0.5 * Math.sin(state.highlight.k * Math.PI * 4)); ctx.globalCompositeOperation = 'lighter'; ctx.drawImage(l.bitmap, sx, sy, l.crop.w * z, l.crop.h * z); ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; } }
     let animating = false;
     if (reveal && reveal.active) { reveal.draw(ctx, view, now); animating = true; }

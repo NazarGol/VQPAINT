@@ -74,6 +74,7 @@ function cleanBlot(b) {
     speed: num(b.speed, 0, 1), viscosity: num(b.viscosity, 0, 1), detail: num(b.detail, 0, 1), tendrils: num(b.tendrils, 0, 1), duration: num(b.duration, 0.1, 60) };
   if ([out.x, out.y, out.size, out.seed].some((v) => v == null)) return null;
   if (typeof b.effect === 'string' && /^[a-z]{2,16}$/.test(b.effect)) out.effect = b.effect;
+  if ([2, 4, 8].includes(b.cpt)) out.cpt = b.cpt;
   for (const k of Object.keys(out)) if (out[k] == null) delete out[k];
   return out;
 }
@@ -94,6 +95,7 @@ function cleanNote(n, att) {
   if (typeof n.text_en === 'string' && n.text_en.length <= MAX_NOTE_TEXT) out.text_en = n.text_en;
   if (typeof n.lang === 'string' && n.lang.length <= 8) out.lang = n.lang;
   const blot = cleanBlot(n.blot); if (blot) out.blot = blot;
+  if (typeof n.cells === 'string' && n.cells.length <= 40000 && /^[A-Za-z0-9+/=]+$/.test(n.cells)) { extra += n.cells.length; out.cells = n.cells; if ([2, 4, 8].includes(n.cpt)) out.cpt = n.cpt; }   // pixel ink: the filled cells (bit-packed) and cells per token
   if (Number.isInteger(n.v) && n.v >= 0) out.v = Math.min(n.v, 1e6);                                   // edit version (reactions, merges)
   if (Array.isArray(n.merges)) { const m = n.merges.filter((x) => x && typeof x.with === 'string' && x.with.length <= 16 && typeof x.cells === 'string' && x.cells.length <= MAX_MASK_STR).slice(0, 6).map((x) => ({ with: x.with, cells: x.cells })); if (m.length) { out.merges = m; extra += JSON.stringify(m).length; } }
   if (n.reactions && typeof n.reactions === 'object') { const r = {}; for (const k of ['fire', 'ice', 'grow']) if (Array.isArray(n.reactions[k])) r[k] = n.reactions[k].filter((x) => typeof x === 'string').slice(0, 40).map((x) => x.slice(0, 24)); out.reactions = r; }
@@ -130,6 +132,8 @@ export default {
   async scheduled(event, env, ctx) { ctx.waitUntil(telegramCron(env, event.cron)); },
 };
 const MAX_SNAPSHOT_BYTES = 1500 * 1024;
+const EXPIRE_MS = 183 * 24 * 3600 * 1000, WARN_MS = 153 * 24 * 3600 * 1000;   // rooms idle for 6 months are deleted; the last month shows "archived soon"
+const expiry = (active) => (active ? { active, archiveSoon: Date.now() - active > WARN_MS, archiveAt: active + EXPIRE_MS } : {});
 const SETTINGS_KEYS = { kind: (v) => ['book', 'meeting', 'diary', 'group', 'default'].includes(v) ? v : null, title: (v) => (typeof v === 'string' ? v.slice(0, 120) : null), author: (v) => (typeof v === 'string' ? v.slice(0, 80) : null),
   chapters: (v) => (Array.isArray(v) ? v.filter((c) => typeof c === 'string').slice(0, 200).map((c) => c.slice(0, 80)) : null), anon: (v) => (typeof v === 'boolean' ? v : null), private: (v) => (typeof v === 'boolean' ? v : null),
   tz: (v) => (typeof v === 'string' && v.length <= 48 ? v : null), finished: (v) => (Number.isFinite(+v) ? +v : null) };
@@ -161,7 +165,7 @@ export class Room {
     if (!meta) return; // room not created yet
     this.w = meta.w;
     this.h = meta.h;
-    this.v = meta.v | 0;
+    this.v = meta.v | 0; this.active = meta.active || 0;
     const n = this.w * this.h;
     this.tokens = new Int32Array(n);
     this.blank = meta.blank | 0;
@@ -260,6 +264,15 @@ export class Room {
     return json({ ok: true, id, waiting: this.requests.size, online: this.peers().length });
   }
 
+  /** something happened in this room: keep the time, re-arm the 6-month expiry */
+  touch() { this.active = Date.now(); this.dirty = true; this.scheduleSave(); this.ctx.storage.setAlarm(this.active + EXPIRE_MS).catch(() => {}); }
+  /** the expiry alarm: no activity for 6 months → the room and everything in it is deleted */
+  async alarm() {
+    const active = this.active || 0;
+    if (Date.now() - active < EXPIRE_MS - 60000) { await this.ctx.storage.setAlarm(active + EXPIRE_MS).catch(() => {}); return; }
+    try { this.sql().exec('DROP TABLE IF EXISTS notes'); this.sql().exec('DROP TABLE IF EXISTS previews'); } catch (e) { console.error('expire tables', e); }
+    await this.ctx.storage.deleteAll(); this.tokens = null; this.notes = []; this.requests.clear(); this.cfg = {};
+  }
   init(params) {
     this.w = clampDim(params.get('w'));
     this.h = clampDim(params.get('h'));
@@ -284,8 +297,9 @@ export class Room {
 
   async save() {
     if (!this.dirty || !this.tokens) return;
+    if (!this.notes.length) { this.dirty = false; return; }   // an empty room is never stored: it exists only while someone looks at it
     this.dirty = false;
-    const put = { meta: { w: this.w, h: this.h, v: this.v, blank: this.blank } };
+    const put = { meta: { w: this.w, h: this.h, v: this.v, blank: this.blank, active: this.active || Date.now() } };
     const chunks = this.dirtyChunks.size ? [...this.dirtyChunks] : (await this.ctx.storage.get('tokens')) ? [...Array(Math.ceil(this.tokens.length / CHUNK)).keys()] : [];
     for (const i of chunks) put['tokens:' + i] = this.tokens.slice(i * CHUNK, Math.min(this.tokens.length, (i + 1) * CHUNK)).buffer;
     this.dirtyChunks.clear();
@@ -306,7 +320,7 @@ export class Room {
 
     if (kind === 'state') {
       if (!this.tokens) return json({ error: 'room does not exist yet' }, 404);
-      if (url.searchParams.get('light') === '1') return json({ w: this.w, h: this.h, v: this.v, notes: this.notes.length, waiting: this.requests.size, online: this.peers().length, settings: this.cfg || {}, snapshotAt: await this.ctx.storage.get('snapshotAt') || null });
+      if (url.searchParams.get('light') === '1') return json({ w: this.w, h: this.h, v: this.v, notes: this.notes.length, waiting: this.requests.size, online: this.peers().length, settings: this.cfg || {}, snapshotAt: await this.ctx.storage.get('snapshotAt') || null, ...expiry(this.active) });
       return json({ w: this.w, h: this.h, v: this.v, blank: this.blank, tokens: Array.from(this.tokens), notes: this.notes, settings: this.cfg || {} });
     }
 
@@ -350,7 +364,7 @@ export class Room {
         att = { id: att.id, ready: true, name, color, caps };
         ws.serializeAttachment(att);
         ws.send(JSON.stringify({
-          t: 'state', id: att.id, w: this.w, h: this.h, v: this.v, blank: this.blank, settings: this.cfg || {},
+          t: 'state', id: att.id, w: this.w, h: this.h, v: this.v, blank: this.blank, settings: this.cfg || {}, ...expiry(this.active),
           rle: rle(this.tokens),
           peers: this.peers().filter((p) => p.id !== att.id),
           notes: this.notes,
@@ -403,7 +417,7 @@ export class Room {
       case 'note': {
         const n = cleanNote(data.note, att);
         if (!n) return;
-        this.addNote(n);
+        this.addNote(n); this.touch();
         this.broadcast(JSON.stringify({ t: 'note', note: n }), ws);
         return;
       }
