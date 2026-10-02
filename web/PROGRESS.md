@@ -72,3 +72,7 @@ Full painting pack = 108 MB (was 204 MB). Realism 0.6 default = 14 s search on d
 6. Safari on iPhone: ⋯ → export replay video (the MP4 path is untested).
 
 ## Earlier phases: see git history and DECISIONS.md.
+
+## 2026-10-02 (research agent) — light engine merged into web-spikes (PR #3) and deployed
+- `lib/engine/light.js` (same facade as `lib/engine/client.js`) is now the default engine on every device; `?engine=ort` keeps the ONNX worker. room.js changes are 15 small edits applied by `web/research/patch_room.py` (re-runnable after your changes: `python web/research/patch_room.py web/app/room.js --check`). Crash flag: one crash → lightest mode (int8 CLIP, no scorer), two → the note waits for a computer. Debug line: tap the room bar 5×. Engine source of truth: https://github.com/NazarGol/tiny-vqgan (vendored, `web/engine/VENDOR.md`).
+- Your local web-spikes is behind origin after the merge: `git pull --rebase` before pushing; `deploy_pages.sh` now also copies `engine/` and `models/tiny/`.
