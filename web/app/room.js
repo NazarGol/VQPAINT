@@ -112,7 +112,8 @@ const notes = mountNotes(stage, {
   anchorFor: () => null,
   phone: isPhone, threadOf,
   onSubmit: (text, realism, extra = {}) => { const d = pendingDrop, parent = extra.replyTo; pendingDrop = null; replyTo = null; updateScene(); if (d) enqueueStroke({ drop: d, text, realism, parent: parent ? parent.id : null, photo: extra.photo || null, chapter: extra.chapter || null, anon: roomSettings.kind === 'meeting' && roomSettings.anon && !extra.signed ? true : undefined, day: roomSettings.kind === 'diary' ? today() : undefined }); },
-  onCancel: () => { pendingDrop = null; replyTo = null; updateScene(); },
+  onCancel: () => { dissolveDrop(pendingDrop); pendingDrop = null; replyTo = null; updateScene(); },
+  onInput: (text) => { if (pendingDrop) reveal.nudge(pendingDrop.pendingId, text); },
   onReply: (note) => startReply(note),
   onOpen: (id) => openNote(id),
   onPhoto: (file) => readPhoto(file),
@@ -127,13 +128,16 @@ function mergeAt(st, w) { if (!st.merges) return null; const x = Math.floor(w[0]
 const view = mountCanvas(stage, {
   reveal,
   onTap: (w, stagePt, hold) => {
-    if (!ready || !grid) return;
-    if (notes.isEditing) { notes.cancel(true); return; }                       // a tap outside the sheet discards it
-    if (notes.openedId) { notes.close(); return; }                              // first tap just closes the open note
+    if (!ready || !grid) { dropHeld(); return; }
+    if (notes.isEditing) { dropHeld(); notes.cancel(true); return; }           // a tap outside the sheet discards it
+    if (notes.openedId) { dropHeld(); notes.close(); return; }                  // first tap just closes the open note
     const st = strokeAt(w[0], w[1]);
-    if (st) { haptic('tap'); const other = mergeAt(st, w); notes.open(st, view.anchorFor(st.crop || st._mask), { mergeWith: other }); noteOpenedAt = performance.now(); return; }
-    beginWrite(w, hold);
+    if (st) { dropHeld(); haptic('tap'); const other = mergeAt(st, w); notes.open(st, view.anchorFor(st.crop || st._mask), { mergeWith: other }); noteOpenedAt = performance.now(); return; }
+    beginWrite(w, hold, takeHeld());
   },
+  onHoldStart: (w) => { if (!ready || !grid || notes.isEditing || notes.openedId || strokeAt(w[0], w[1])) return; held = { drop: liveDrop(w[0], w[1]), t: performance.now() }; },   // the ink lands under the finger at once
+  onHold: (t, dt) => { if (held) reveal.grow(held.drop.pendingId, dt, Math.min(MAX_R, held.drop.size * GROW_MAX) * INK_K); },
+  onHoldEnd: () => { if (held) { const h = held; setTimeout(() => { if (held === h) dropHeld(); }, 150); } },   // no tap followed (a pan started): dissolve
   onPointer: (phase, w, stagePt, delta) => {   // a finger on a spreading stroke stirs it (and grows it while held)
     if (phase === 'down') { const id = painting && painting.jobId && reveal.inside(painting.jobId, w[0], w[1]) ? painting.jobId : null; if (!id) return false; stirring = { id, t: performance.now() }; return true; }
     if (!stirring) return;
@@ -142,8 +146,8 @@ const view = mountCanvas(stage, {
   },
   onCursor: (w) => room?.sendCursor(w[0], w[1]),
   onResize: () => { if (ready && grid && !userMoved) fitToPainting(); },   // phones report a tiny stage before their first layout settles
-  onUserMove: () => { userMoved = true; },
   onViewChange: () => { notes.reposition((n) => (n.note ? view.anchorFor(n.note.crop || n.note._mask) : pendingDrop ? view.anchorFor(dropRect(pendingDrop)) : null)); scheduleVisibleLayers(); },
+  onUserMove: () => { userMoved = true; },
 });
 view.canvas.id = 'canvas';
 window.__vqpaintView = view;
@@ -151,22 +155,34 @@ let noteOpenedAt = 0;
 document.addEventListener('pointerdown', (e) => { if (performance.now() - noteOpenedAt < 600) return; if (!e.target.closest('.note') && !e.target.closest('.ui') && !e.target.closest('.menu') && !e.target.closest('canvas')) notes.close(); });
 const setStatus = (s, ms) => toast.status(s, ms);
 const peerName = (id) => (id === room?.id ? myName : peers.get(id)?.name || t('someone'));
-// ---------- write first: a tap on empty space is where the next note lands ----------
+// ---------- write first: a tap on empty space is where the next note lands; the ink is alive from that moment ----------
 const MAX_R = lowMem ? 4 : 12, BASE_R = lowMem ? 3 : 4.5;           // radius in tokens; phones keep strokes small enough to decode fast
 const dropRect = (d) => ({ x: d.x - d.size, y: d.y - d.size, w: d.size * 2, h: d.size * 2 });
+let held = null;                                                      // the drop growing under a held finger, before the tap completes
+/** the sim rect of a drop: ~5× its size (the ink's dynamics depend on the drop-to-rect ratio, so this follows the size), plus the search margin */
+function dropCrop(x, y, size = BASE_R) { const reach = Math.ceil(size * INK_K * 2.4) + 2 + MARGIN; const x0 = Math.max(0, Math.floor(x) - reach), y0 = Math.max(0, Math.floor(y) - reach); return { x: x0, y: y0, w: Math.min(grid.w, Math.floor(x) + reach + 1) - x0, h: Math.min(grid.h, Math.floor(y) + reach + 1) - y0 }; }
+const GROW_MAX = 1.6;   // hold-to-grow stays within the rect the drop was born in
+/** a live ink drop at a world point: impact + ripple now, then a small breathing body that waits for the note */
+function liveDrop(x, y, size = BASE_R) {
+  const d = { x, y, size, seed: (Math.random() * 2 ** 31) | 0, pendingId: 'pending-' + Math.random().toString(36).slice(2, 8), crop: dropCrop(x, y, size) };
+  startReveal({ id: d.pendingId, crop: d.crop, cx: x, cy: y, size: size * INK_K, seed: d.seed, pending: true });
+  return d;
+}
+function takeHeld() { const h = held; held = null; if (!h) return null; const d = h.drop; d.size = Math.max(d.size, reveal.sizeTokOf(d.pendingId) / INK_K); return d; }
+function dropHeld() { const h = held; held = null; if (h) reveal.fadeOut(h.drop.pendingId, 600); }
+function dissolveDrop(d) { if (d && d.pendingId) reveal.fadeOut(d.pendingId, 700); }
 /** every reveal needs the canvas loop running: the ink only steps while frames are drawn */
 function startReveal(opts) { const it = reveal.start(opts); view.requestRender(); return it; }
-function beginWrite(w, hold = 0) {
-  if (tgMode && !caps.gpu && !bestHelper()) {   // Telegram's webview has no WebGPU here and nobody online can paint for it
+function beginWrite(w, hold = 0, existing = null) {
+  if (tgMode && !caps.gpu && !bestHelper()) { dissolveDrop(existing);   // Telegram's webview has no WebGPU here and nobody online can paint for it
     const link = location.origin + location.pathname + '?r=' + roomId;
     toast.message(`${t('tg.openBrowser')}<br><br><button class="pill go" data-open>${t('tg.openBrowserBtn')}</button> <button class="pill" data-close>${t('ok')}</button>`);
     const m = document.querySelector('[data-message]'); m.querySelector('[data-open]').onclick = () => { try { window.Telegram?.WebApp?.openLink(link); } catch (_) { window.open(link, '_blank'); } m.hidden = true; }; m.querySelector('[data-close]').onclick = () => { m.hidden = true; };
     return;
   }
-  const size = Math.min(MAX_R, BASE_R + hold * 2.6);                 // hold before lifting the finger -> bigger drop
-  const d = { x: w[0], y: w[1], size, seed: (Math.random() * 2 ** 31) | 0 };
-  if (replyTo && !maskTouches(discMask(d.x, d.y, d.size, grid.w, grid.h), replyTo._mask ||= maskFromString(replyTo.mask))) { setStatus(t('note.reply.mustTouch'), 5000); return; }
-  pendingDrop = d; window.__vqpaintPending = d; haptic('tap'); updateScene(); hint.hidden = true;
+  const d = existing || liveDrop(w[0], w[1], Math.min(MAX_R, BASE_R + hold * 2.6));   // the drop that landed under the finger, or a new one now
+  if (replyTo && !maskTouches(discMask(d.x, d.y, d.size, grid.w, grid.h), replyTo._mask ||= maskFromString(replyTo.mask))) { dissolveDrop(d); setStatus(t('note.reply.mustTouch'), 5000); return; }
+  pendingDrop = d; window.__vqpaintPending = d; updateScene(); hint.hidden = true;
   notes.edit(view.anchorFor(dropRect(d)), '', { replyTo });
 }
 /** paint now, or wait for the stroke in progress */
@@ -178,7 +194,10 @@ function enqueueStroke(job) {
 /** the search region of a drop: the ink's own future shape (pre-simulated from its seed), one token wider, clipped to the grid */
 function inkMask(drop) {
   let m = null;
-  try { m = reveal.presim({ cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: 6 }); } catch (e) { console.warn('presim', e); }
+  const exact = drop.pendingId ? reveal.paramsOf(drop.pendingId) : null;   // the live drop's (drifted, grown) shape, not just its seed
+  if (exact) drop.size = Math.max(drop.size, exact.size / F / INK_K);
+  drop.crop ||= dropCrop(drop.x, drop.y, drop.size);                         // the live drop and the presim must share one sim rect
+  try { m = reveal.presim({ cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: 6, exact, crop: drop.crop }); } catch (e) { console.warn('presim', e); }
   if (!m || !m.count) return discMask(drop.x, drop.y, drop.size, grid.w, grid.h);
   const x0 = Math.max(0, m.x - 1), y0 = Math.max(0, m.y - 1), x1 = Math.min(grid.w, m.x + m.w + 1), y1 = Math.min(grid.h, m.y + m.h + 1), w = x1 - x0, h = y1 - y0;
   if (w <= 0 || h <= 0) return discMask(drop.x, drop.y, drop.size, grid.w, grid.h);
@@ -223,8 +242,8 @@ function strokeAt(gx, gy) {
 
 // ---------- scene ----------
 function updateScene() {
-  const labels = [...othersPainting.values()].map((j) => { const m = j._mask ||= maskFromString(j.mask); return { x: j.blot ? j.blot.x : m.x + m.w / 2, y: (j.blot ? j.blot.y - j.blot.size : m.y) - 0.3, text: `${peerName(j.by)}${j.for ? ' · ' + peerName(j.for) : ''}` }; });
-  view.setScene({ layers: layers ? strokes.filter((s) => !hiddenLayers.has(s.id)).map((s) => layers.get(s.id)).filter(Boolean) : [], labels, peers: [...peers.values()], pending: pendingDrop ? { x: pendingDrop.x, y: pendingDrop.y, r: pendingDrop.size } : null });
+  const labels = [...othersPainting.values()].filter((j) => j.for !== room?.id).map((j) => { const m = j._mask ||= maskFromString(j.mask); return { x: j.blot ? j.blot.x : m.x + m.w / 2, y: (j.blot ? j.blot.y - j.blot.size : m.y) - 0.3, text: `${peerName(j.by)}${j.for ? ' · ' + peerName(j.for) : ''}` }; });   // no label over my own stroke
+  view.setScene({ layers: layers ? strokes.filter((s) => !hiddenLayers.has(s.id)).map((s) => layers.get(s.id)).filter(Boolean) : [], labels, peers: [...peers.values()] });
   if (hint) hint.hidden = !(ready && grid && !strokes.length && !painting && !pendingDrop && !queue.length && !myRequests.size && !reveal.active && !notes.isEditing);
 }
 let layersTimer = null;
@@ -243,7 +262,7 @@ function scheduleVisibleLayers() {
     for (const s of todo) {
       if (layers.has(s.id)) { done++; continue; }
       let ok = false;
-      if (s.crop && s.path) { const blob = await fetchPreview(s); if (blob) { try { await layers.fromPreview(s, blob); ok = true; } catch (e) { console.warn('preview', e); } } }
+      if (s.crop) { const blob = await fetchPreview(s); if (blob) { try { await layers.fromPreview(s, blob); ok = true; } catch (e) { console.warn('preview', e); } } }
       if (!ok && decoder) { await layers.render(s, grid); ok = true; }
       if (ok && hiddenLayers.has(s.id)) revealArrived(s);
       done++; loading.set(t('load.paintingN', { done, total })); updateScene();
@@ -395,8 +414,9 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
   let path = points ? points.map(([x, y]) => [Math.round(x * 100) / 100, Math.round(y * 100) / 100]) : null;
   drop ||= { x: mask.x + mask.w / 2, y: mask.y + mask.h / 2, size: Math.max(mask.w, mask.h) / 2, seed: (Math.random() * 2 ** 31) | 0 };
   const cropRect = expandRegion(grid, { x: mask.x, y: mask.y, w: mask.w, h: mask.h }, MARGIN);   // same crop the painter decodes
-  // the reveal starts at the moment of touch: lilac fog that turns into the painting as the search sharpens it
-  const rv = startReveal({ id: jobId, crop: cropRect, cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: rp.seconds, holdOpen: true, blot: drop.blot || null });
+  // the ink has been alive since the tap: now it bursts into the full spread and turns into the painting as the search sharpens it
+  const rv = (drop.pendingId && reveal.adopt(drop.pendingId, jobId, { texCrop: cropRect, duration: rp.seconds })) || startReveal({ id: jobId, crop: drop.crop || dropCrop(drop.x, drop.y, drop.size), texCrop: cropRect, cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: rp.seconds, holdOpen: true, blot: drop.blot || null });
+  drop.pendingId = null; view.requestRender();
   painting = { abort, mask, jobId, forId, reqId, progress: 0, points: path, drop }; updateScene(); renderPeers(); menu.setUndoEnabled(false);
   sessionStorage.setItem('vqpaint.boot', 'painting');
   room?.paintStart({ id: jobId, mask: maskToString(mask), text: text.slice(0, 80), for: forId, path, blot: { x: drop.x, y: drop.y, size: drop.size * INK_K, seed: rv.drop.seed, duration: rp.seconds } });
@@ -435,10 +455,13 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     });
     reveal.setImage(jobId, res.image); reveal.setClarity(jobId, 1);
     const blotRes = await reveal.finish(jobId);                                 // the edge freezes: this is the stroke's shape
-    const finalMask = blotRes && blotRes.count ? intersectMasks({ x: res.crop.x, y: res.crop.y, w: res.crop.w, h: res.crop.h, cells: blotRes.cells, count: blotRes.count }, mask) : mask;
+    const bc = blotRes ? blotRes.crop || res.crop : res.crop;
+    stats.lastBlot = blotRes ? { count: blotRes.count, path: blotRes.path ? blotRes.path.length : 0, crop: bc, maskCount: mask.count } : null;
+    const finalMask = blotRes && blotRes.count ? intersectMasks({ x: bc.x, y: bc.y, w: bc.w, h: bc.h, cells: blotRes.cells, count: blotRes.count }, mask) : mask;
     if (blotRes && blotRes.path) path = blotRes.path;
     if (finalMask !== mask) { cells.forEach(([x, y], i) => { if (!maskHas(finalMask, x, y)) grid.tokens[y * grid.w + x] = before[i]; }); }   // outside the blot nothing changed
-    alphaImg = blotRes ? blotRes.alpha : (path ? polygonAlpha(res.crop, path, 6) : maskAlpha(res.crop, mask));
+    alphaImg = blotRes && blotRes.count ? cropAlpha(blotRes.alpha, bc, res.crop) : (path ? polygonAlpha(res.crop, path, 6) : maskAlpha(res.crop, mask));
+    if (!path || !blotRes || !blotRes.count) { const o = cellsOutline(finalMask, res.crop); path = o.path; alphaImg = new ImageData(res.crop.w * F, res.crop.h * F); for (let i = 0; i < o.alpha.data.length; i++) { const a = Math.round(255 * Math.min(1, Math.max(0, (o.alpha.data[i] - 0.3) / 0.4))); alphaImg.data[i * 4] = alphaImg.data[i * 4 + 3] = a; } }   // the ink gave nothing usable: a rounded outline of the painted cells, so every viewer can still draw it
     if (blotRes) { const clip = maskAlpha(res.crop, mask, 1); for (let i = 3; i < alphaImg.data.length; i += 4) { const a = alphaImg.data[i] * clip.data[i] / 255; alphaImg.data[i] = a; alphaImg.data[i - 3] = a; } }   // ink outside the painted cells shows nothing
     // overlap merge: where this shape covers older strokes, that zone is painted toward a blend of both notes
     const merges = [];
@@ -485,6 +508,13 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     setTimeout(claimNextRequest, 300);
     processQueue();
   }
+}
+/** an alpha ImageData over crop `from` (tokens) re-cut to crop `to` */
+function cropAlpha(alpha, from, to) {
+  if (from.x === to.x && from.y === to.y && from.w === to.w && from.h === to.h) return alpha;
+  const W = to.w * F, H = to.h * F, out = new ImageData(W, H), ox = (to.x - from.x) * F, oy = (to.y - from.y) * F;
+  for (let y = 0; y < H; y++) { const sy = y + oy; if (sy < 0 || sy >= alpha.height) continue; for (let x = 0; x < W; x++) { const sx = x + ox; if (sx < 0 || sx >= alpha.width) continue; const si = (sy * alpha.width + sx) * 4, di = (y * W + x) * 4; out.data[di] = alpha.data[si]; out.data[di + 3] = alpha.data[si + 3]; } }
+  return out;
 }
 /** cells of `a` that are also in `b` (both {x,y,w,h,cells}) */
 function intersectMasks(a, b) {
@@ -595,12 +625,14 @@ async function makePostcard() {
 function bestHelper() { let best = null; for (const p of peers.values()) { const c = p.caps; if (c && (c.paint || c.helper) && !p.busy && (!best || (c.speed || 1e9) < (best.caps.speed || 1e9))) best = p; } return best; }
 function requestHelp(mask, text, points, realism, { parent = null, photo = null, lang: noteLang = null, drop = null } = {}) {
   const cropRect = expandRegion(grid, { x: mask.x, y: mask.y, w: mask.w, h: mask.h }, 2);
-  const rv = drop ? startReveal({ id: 'req-' + Date.now(), crop: cropRect, cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: 6, holdOpen: true }) : null;   // instant start: live ink while the helper paints
+  const fogId = 'req-' + Date.now();
+  const rv = drop ? ((drop.pendingId && reveal.adopt(drop.pendingId, fogId, { duration: 6 })) || startReveal({ id: fogId, crop: drop.crop || dropCrop(drop.x, drop.y, drop.size), cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: 6, holdOpen: true })) : null;   // the live ink bursts while the helper paints
+  if (drop) { drop.pendingId = null; view.requestRender(); }
   const blot = rv ? { x: drop.x, y: drop.y, size: drop.size * INK_K, seed: rv.drop.seed, duration: 6 } : undefined;
   const req = { id: Math.random().toString(36).slice(2, 10), text, mask: maskToString(mask), path: points, realism, parent: parent || undefined, photo: photo ? photo.data : undefined, lang: noteLang || undefined, blot };
   if (!room) { setStatus(t('status.notConnected')); if (rv) reveal.cancel(rv.id); return; }
   room.paintRequest(req);
-  const entry = { req, mask, text, points, realism, parent, photo, lang: noteLang, drop: drop ? { ...drop, blot } : null, fogId: rv ? rv.id : null, timer: null, assigned: null };
+  const entry = { req, mask, text, points, realism, parent, photo, lang: noteLang, drop: drop ? { ...drop, blot } : null, fogId: rv ? fogId : null, timer: null, assigned: null };
   myRequests.set(req.id, entry);
   setStatus(t('status.helperWill', { name: peerName(bestHelper().id) }), 6000);
   entry.timer = setTimeout(() => { if (!myRequests.has(req.id) || entry.assigned) return; myRequests.delete(req.id); room.paintDone(req.id, false); paintHere(entry); }, 12000);   // nobody claimed: paint here if this device can
@@ -804,7 +836,12 @@ function connect() {
       if (ready) { room.setCaps(caps); claimNextRequest(); }
     },
     onSet: (m) => { if (m.from === room.id || !grid) return; for (const [x, y, tok] of m.cells) grid.tokens[y * grid.w + x] = tok; },
-    onNote: (n) => { const old = strokes.find((s) => s.id === n.id); if (old) { if ((n.v || 0) > (old.v || 0)) { Object.assign(old, n); for (const k of ['_mask', '_previewTries']) delete old[k]; if (old.merges) for (const m of old.merges) delete m._mask; layers?.drop(n.id); if (notes.openedId === n.id) notes.close(); updateScene(); scheduleVisibleLayers(); } return; } { strokes.push(n); const mine = [...myRequests.values()].find((e) => e.assigned && n.author === myName && n.blot && e.drop && Math.hypot(n.blot.x - e.drop.x, n.blot.y - e.drop.y) < 2); if (mine) dropFog(mine); if (ready && n.by !== room.id) revealIncoming(n); updateScene(); scheduleVisibleLayers(); } },
+    onNote: (n) => { const old = strokes.find((s) => s.id === n.id); if (old) { if ((n.v || 0) > (old.v || 0)) { Object.assign(old, n); for (const k of ['_mask', '_previewTries']) delete old[k]; if (old.merges) for (const m of old.merges) delete m._mask; layers?.drop(n.id); if (notes.openedId === n.id) notes.close(); updateScene(); scheduleVisibleLayers(); } return; }
+      strokes.push(n);
+      const mine = [...myRequests.values()].find((e) => e.assigned && n.author === myName && n.blot && e.drop && Math.hypot(n.blot.x - e.drop.x, n.blot.y - e.drop.y) < 2);
+      if (mine && mine.fogId && n.crop && reveal.adopt(mine.fogId, n.id, { texCrop: n.crop, burst: false })) { mine.fogId = null; hiddenLayers.add(n.id); }   // my own ink, painted by a helper: keep it and let the painting appear inside it
+      else { if (mine) dropFog(mine); if (ready && n.by !== room.id) revealIncoming(n); }
+      updateScene(); scheduleVisibleLayers(); },
     onNoteDelete: (id) => { const i = strokes.findIndex((s) => s.id === id); if (i >= 0) { strokes.splice(i, 1); layers?.drop(id); if (notes.openedId === id) notes.close(); updateScene(); } },
     onPaintRequest, onPaintAssigned, onPaintDone,
     onSettings: (cfg) => applySettings(cfg),
@@ -824,7 +861,7 @@ function paintAt({ cx, cy, radius = 3, prompt = null, seed = (Math.random() * 1e
 function paintRegion(r, prompt = null) { const cells = new Uint8Array(r.w * r.h).fill(1); return startStroke({ x: r.x, y: r.y, w: r.w, h: r.h, cells, count: r.w * r.h }, prompt ?? pendingText, null, 0.6); }
 function lassoPaint(points, prompt, realism = 0.6, extra = {}) { return startStroke(lassoMask(points, grid.w, grid.h), prompt ?? pendingText, points, realism, extra); }
 /** the real flow: tap at (x, y) in tokens (held `hold` s), write `text`, paint; resolves when the stroke is queued/started */
-function tapPaint(x, y, text, realism = 0.6, hold = 0, extra = {}) { beginWrite([x, y], hold); if (extra.photo) notes.current.editing.photo = extra.photo; notes.editingText = text; void realism; notes.submit(); }
+function tapPaint(x, y, text, realism = 0.6, hold = 0, extra = {}) { beginWrite([x, y], hold); if (extra.photo) notes.current.editing.photo = extra.photo; notes.editingText = text; if (pendingDrop) reveal.nudge(pendingDrop.pendingId, text); void realism; notes.submit(); }
 (async () => {
   if (!params.get('auto')) return;
   while (!ready || !grid) await new Promise((r) => setTimeout(r, 200));

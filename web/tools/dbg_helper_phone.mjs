@@ -1,0 +1,21 @@
+import http from 'node:http'; import fs from 'node:fs'; import path from 'node:path';
+import { chromium, devices } from 'playwright';
+const root = '/Users/noi3/VQPAINT/web';
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json', '.wasm': 'application/wasm', '.css': 'text/css', '.png': 'image/png' };
+const server = http.createServer((req, res) => { const p = path.join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname)); if (!p.startsWith(root) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); } res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream', 'Cache-Control': 'no-store' }); fs.createReadStream(p).pipe(res); });
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const url = `http://127.0.0.1:${server.address().port}/app/room.html?r=hp-${Math.random().toString(36).slice(2, 8)}&ort=/node_modules/onnxruntime-web/dist/&models=pages&name=tester&helpers=1`;
+const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
+const dead = setTimeout(async () => { console.log('DEADLINE'); await browser.close().catch(() => {}); process.exit(2); }, 240000);
+const H = await browser.newPage({ viewport: { width: 1100, height: 760 } }); H.on('pageerror', (e) => console.log('[H pageerror]', e.message));
+await H.goto(url); await H.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready, null, { timeout: 120000 }); await H.evaluate(() => window.__vqpaint.setEffortSeconds(4)); await H.evaluate(() => window.__vqpaint.ensureBrush()).catch(() => {});
+const ctx = await browser.newContext({ ...devices['Pixel 7'] }); const P = await ctx.newPage(); P.on('pageerror', (e) => console.log('[P pageerror]', e.message)); P.on('console', (m) => { if (m.type() === 'error' && !/onnxruntime|404/.test(m.text())) console.log('[P console]', m.text().slice(0, 200)); });
+await P.goto(url); await P.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready && window.__vqpaint.grid, null, { timeout: 120000 });
+await P.waitForFunction(() => [...window.__vqpaint.peers.values()].some((p) => p.caps && (p.caps.paint || p.caps.helper)), null, { timeout: 60000 });
+const cdp = await ctx.newCDPSession(P); const box = await P.locator('#canvas').boundingBox(); const x = box.x + box.width * 0.5, y = box.y + box.height * 0.36;
+await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] }); await P.waitForTimeout(90); await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+await P.waitForSelector('.note.editing [data-note-input]'); await P.type('[data-note-input]', 'the lake was freezing', { delay: 60 }); await P.click('.note.editing [data-paint]');
+const snap = () => P.evaluate(() => { const v = window.__vqpaint; const items = [...v.reveal.items.entries()].map(([id, it]) => ({ id, pending: it.drop.pending, settled: it.drop.settled, held: it.drop.held, freed: it.drop.freed, prog: +it.drop.progress(performance.now()).toFixed(2), hold: it.drop.holdUntil === Infinity ? 'inf' : it.drop.holdUntil ? 'set' : null, done: it.done, fade: it.fade != null, tex: !!it.tex, dur: it.drop.p && it.drop.p.duration })); const n = v.strokes[0]; return { items, strokes: v.strokes.length, path: n && n.path && n.path.length, hasLayer: n && v.layers.has(n.id), reqs: v.myRequests.size }; });
+for (let i = 0; i < 20; i++) { await P.waitForTimeout(2000); const st = await snap(); console.log(i * 2 + 's', JSON.stringify(st)); if (st.strokes && st.hasLayer && !st.items.length) break; }
+const H1 = await H.evaluate(() => ({ blot: window.__vqpaint.stats.lastBlot, status: window.__vqpaint.stats.lastStatus })); console.log('helper:', JSON.stringify(H1));
+clearTimeout(dead); await browser.close(); server.close();

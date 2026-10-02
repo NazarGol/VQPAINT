@@ -18,7 +18,7 @@ Ink is in (procedural fluid ink, 30-blob grid and circularity numbers in the rep
 
 ## Test on the phones (round 7), laptop open in the same room
 Live: https://nazargol.github.io/VQPAINT/ (same links as before). Minimum phones: iPhone XR / 11 / SE 2 (iOS 15+), 3 GB 2020 Android.
-1. **Ink**: tap → write → paint. Every stroke should be a clearly different, non-round blot (lobes, filaments, droplets, sometimes a hole or two bodies). Hold the finger before lifting it for more ink; drag across the spreading ink to stir it. The lab for tuning: https://nazargol.github.io/VQPAINT/app/effects.html ("copy settings" → send me the line).
+1. **Ink**: tap → the ink lands at once (ripple), a small living drop waits while you write and moves a little with each keystroke → paint → it bursts into the full stroke; close the box without painting → it dissolves. Every stroke should be a clearly different, non-round blot (lobes, filaments, droplets, sometimes a hole or two bodies). Hold the finger before lifting it for more ink; drag across the spreading ink to stir it. The lab for tuning: https://nazargol.github.io/VQPAINT/app/effects.html ("copy settings" → send me the line).
 2. **Alone**: close the laptop's tab, write a note. Expected: "preparing the brush… N%", then the stroke paints on the phone (slower; an iOS 15 phone without WebGPU takes minutes per stroke).
 3. **Overlap**: write a note on top of an existing stroke. Expected: the overlap paints toward both; tapping it shows "A × B".
 4. **Reactions**: open a note → 🔥 🧊 🌱. Expected: the stroke actually changes (warmer / colder / grows a little into its neighbours) for everyone in the room; a second tap of the same reaction is refused.

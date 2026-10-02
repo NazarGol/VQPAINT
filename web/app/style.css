@@ -121,24 +121,24 @@ button.pill:active, .menu .items button:active, .note .link:active { transform: 
 .note .reacts .pill.react { min-height: 36px; padding: 0 12px; font-size: 18px; background: rgba(255, 255, 255, 0.25); }
 .note .reacts .pill.react:disabled { opacity: 0.4; }
 @media (pointer: coarse) { .note .reacts .pill.react { min-height: 44px; min-width: 44px; } }
-/* sheets: setup, notes list, calendar, import, postcard */
-.sheet { position: absolute; z-index: var(--z-overlay); left: 50%; top: 50%; transform: translate(-50%, -46%); width: min(440px, calc(100vw - 24px)); max-height: 80vh; overflow: auto; background: rgba(227, 208, 230, 0.96); color: var(--color-text); border-radius: 18px; padding: 14px 16px; opacity: 0; transition: opacity var(--motion) var(--ease), transform var(--motion) var(--ease); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
-.sheet.in { opacity: 1; transform: translate(-50%, -50%); }
-.sheet.bottom { left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 82vh; border-radius: 18px 18px 0 0; transform: translateY(100%); padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
-.sheet.bottom.in { transform: translateY(0); }
-.sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
-.sheet-title { font-weight: var(--font-weight-medium); }
-.sheet .field { display: block; margin: var(--space-2) 0; } .sheet .field span { display: block; font-size: var(--font-size-small); opacity: 0.75; margin-bottom: 2px; }
-.sheet input[type=text], .sheet textarea, .sheet select { width: 100%; font-size: 16px; padding: 10px 12px; border-radius: var(--radius); background: rgba(255, 255, 255, 0.6); min-height: 44px; font-family: inherit; }
-.sheet textarea { resize: vertical; }
-.sheet .row { display: flex; gap: var(--space-2); align-items: center; margin-top: var(--space-2); flex-wrap: wrap; } .sheet .row.end { justify-content: flex-end; }
-.sheet .pill.go { background: var(--color-text); color: var(--color-pill); min-height: 44px; padding: 0 18px; } .sheet .pill.ghost { background: rgba(255, 255, 255, 0.45); min-height: 44px; }
-.sheet .check { display: flex; gap: var(--space-2); align-items: center; min-height: 36px; }
-.sheet .item { padding: 8px 6px; border-radius: 10px; cursor: pointer; white-space: normal; } .sheet .item:active { background: var(--color-pill-active); }
-.sheet .group { font-weight: var(--font-weight-medium); margin: var(--space-3) 0 var(--space-1); opacity: 0.8; }
-.sheet .cal-head { display: flex; justify-content: space-between; align-items: center; margin: var(--space-1) 0; }
-.sheet .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; } .sheet .day { min-height: 40px; border-radius: 10px; background: rgba(255, 255, 255, 0.35); font: inherit; } .sheet .day.has { background: var(--color-pill-done); color: var(--color-text-on-done); } .sheet .day:active { transform: scale(0.95); }
-.sheet .daylist { margin-top: var(--space-2); }
+/* panels: setup, notes list, calendar, import, postcard */
+.panel { position: absolute; z-index: var(--z-overlay); left: 50%; top: 50%; transform: translate(-50%, -46%); width: min(440px, calc(100vw - 24px)); max-height: 80vh; overflow: auto; background: rgba(227, 208, 230, 0.96); color: var(--color-text); border-radius: 18px; padding: 14px 16px; opacity: 0; transition: opacity var(--motion) var(--ease), transform var(--motion) var(--ease); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+.panel.in { opacity: 1; transform: translate(-50%, -50%); }
+.panel.bottom { left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 82vh; border-radius: 18px 18px 0 0; transform: translateY(100%); padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
+.panel.bottom.in { transform: translateY(0); }
+.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
+.panel-title { font-weight: var(--font-weight-medium); }
+.panel .field { display: block; margin: var(--space-2) 0; } .panel .field span { display: block; font-size: var(--font-size-small); opacity: 0.75; margin-bottom: 2px; }
+.panel input[type=text], .sheet textarea, .sheet select { width: 100%; font-size: 16px; padding: 10px 12px; border-radius: var(--radius); background: rgba(255, 255, 255, 0.6); min-height: 44px; font-family: inherit; }
+.panel textarea { resize: vertical; }
+.panel .row { display: flex; gap: var(--space-2); align-items: center; margin-top: var(--space-2); flex-wrap: wrap; } .panel .row.end { justify-content: flex-end; }
+.panel .pill.go { background: var(--color-text); color: var(--color-pill); min-height: 44px; padding: 0 18px; } .panel .pill.ghost { background: rgba(255, 255, 255, 0.45); min-height: 44px; }
+.panel .check { display: flex; gap: var(--space-2); align-items: center; min-height: 36px; }
+.panel .item { padding: 8px 6px; border-radius: 10px; cursor: pointer; white-space: normal; } .panel .item:active { background: var(--color-pill-active); }
+.panel .group { font-weight: var(--font-weight-medium); margin: var(--space-3) 0 var(--space-1); opacity: 0.8; }
+.panel .cal-head { display: flex; justify-content: space-between; align-items: center; margin: var(--space-1) 0; }
+.panel .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; } .panel .day { min-height: 40px; border-radius: 10px; background: rgba(255, 255, 255, 0.35); font: inherit; } .panel .day.has { background: var(--color-pill-done); color: var(--color-text-on-done); } .panel .day:active { transform: scale(0.95); }
+.panel .daylist { margin-top: var(--space-2); }
 .menu .items .divider { height: 1px; background: rgba(0, 0, 0, 0.12); margin: 4px 6px; }
 .note .chapter { display: block; width: 100%; font-size: 16px; padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.5); margin-bottom: var(--space-2); min-height: 40px; font-family: inherit; }
 .note .sign { display: flex; gap: var(--space-2); align-items: center; font-size: var(--font-size-small); margin-bottom: var(--space-1); }
