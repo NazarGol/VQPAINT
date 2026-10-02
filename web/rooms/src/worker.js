@@ -264,6 +264,14 @@ export class Room {
     return json({ ok: true, id, waiting: this.requests.size, online: this.peers().length });
   }
 
+  /** what this room takes on disk: token chunks, note rows (json), previews (jpeg) — the numbers behind DECISIONS "storage" */
+  async storageBytes() {
+    const out = { tokens: 0, notes: 0, previews: 0 };
+    try { const chunks = await this.ctx.storage.list({ prefix: 'tokens:' }); for (const v of chunks.values()) out.tokens += v instanceof ArrayBuffer ? v.byteLength : 0; } catch (_) {}
+    const sum = (q) => { try { const rows = this.sql().exec(q).toArray(); return Number(rows[0] && rows[0].n) || 0; } catch (e) { console.error('storageBytes', e); return 0; } };
+    out.notes = sum('SELECT COALESCE(SUM(LENGTH(json)), 0) AS n FROM notes'); out.previews = sum('SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM previews');
+    out.total = out.tokens + out.notes + out.previews; return out;
+  }
   /** something happened in this room: keep the time, re-arm the 6-month expiry */
   touch() { this.active = Date.now(); this.dirty = true; this.scheduleSave(); this.ctx.storage.setAlarm(this.active + EXPIRE_MS).catch(() => {}); }
   /** the expiry alarm: no activity for 6 months → the room and everything in it is deleted */
@@ -281,8 +289,9 @@ export class Room {
     this.blank = Number.isInteger(b) && b >= 0 && b < MAX_TOKEN ? b : 0;   // the creator's blank token fills the room
     this.tokens = new Int32Array(this.w * this.h).fill(this.blank);
     this.dirtyChunks = new Set();
+    this.loadNotes();   // creates the notes table: without it the first notes of a new room only lived in memory and were lost when the object restarted
     this.dirty = true;
-    return this.save(); // fix the size immediately
+    return this.save(); // fix the size (nothing is written until the first note)
   }
   markDirty(idx) { this.dirtyChunks.add((idx / CHUNK) | 0); }
 
@@ -320,7 +329,7 @@ export class Room {
 
     if (kind === 'state') {
       if (!this.tokens) return json({ error: 'room does not exist yet' }, 404);
-      if (url.searchParams.get('light') === '1') return json({ w: this.w, h: this.h, v: this.v, notes: this.notes.length, waiting: this.requests.size, online: this.peers().length, settings: this.cfg || {}, snapshotAt: await this.ctx.storage.get('snapshotAt') || null, ...expiry(this.active) });
+      if (url.searchParams.get('light') === '1') return json({ w: this.w, h: this.h, v: this.v, notes: this.notes.length, waiting: this.requests.size, online: this.peers().length, settings: this.cfg || {}, snapshotAt: await this.ctx.storage.get('snapshotAt') || null, ...expiry(this.active), bytes: await this.storageBytes() });
       return json({ w: this.w, h: this.h, v: this.v, blank: this.blank, tokens: Array.from(this.tokens), notes: this.notes, settings: this.cfg || {} });
     }
 

@@ -76,3 +76,13 @@ Full painting pack = 108 MB (was 204 MB). Realism 0.6 default = 14 s search on d
 ## 2026-10-02 (research agent) — light engine merged into web-spikes (PR #3) and deployed
 - `lib/engine/light.js` (same facade as `lib/engine/client.js`) is now the default engine on every device; `?engine=ort` keeps the ONNX worker. room.js changes are 15 small edits applied by `web/research/patch_room.py` (re-runnable after your changes: `python web/research/patch_room.py web/app/room.js --check`). Crash flag: one crash → lightest mode (int8 CLIP, no scorer), two → the note waits for a computer. Debug line: tap the room bar 5×. Engine source of truth: https://github.com/NazarGol/tiny-vqgan (vendored, `web/engine/VENDOR.md`).
 - Your local web-spikes is behind origin after the merge: `git pull --rebase` before pushing; `deploy_pages.sh` now also copies `engine/` and `models/tiny/`.
+
+## 2026-10-02 — round 9: compact UI + pixel ink
+- Top bar = room pill + presence dots + ⋯; invite and my paintings moved into ⋯; 8-line menu (40 px rows, 15 px) with save… and room options… sheets; pills 36 px / 44 px touch; writer sheet 106 px tall on a Pixel 7.
+- Storage: numbers in DECISIONS (≈ 20 KB per note, ≈ 1.1 MB per 50-note painting, ≈ 4 500 paintings in the free tier); empty rooms never stored; 6-month expiry alarm + "archived soon" line; found and fixed the lost-notes bug (new rooms had no notes table).
+- Last resort line "will paint as soon as a computer joins".
+- Pixel ink: cells aligned to the token grid are the mask (`note.cells` + `cpt`), Bayer-dithered edge, stepwise spread with flashes, edge flicker while writing, hash dissolve on cancel; seeds, hover/touch highlight with 150 ms fades, tap-cycling of overlapping notes, all-notes overlay (menu or long press) with labels.
+- Light engine moved into the engine worker; phone-profile frames p95 116.7 → 16.8 ms, max 299.9 → 33.3 ms (desktop flow p95 183 → 16.7 ms).
+- Fixed striped painter layers (cells unpacked at the wrong width) and the waiting drop collapsing under fast typing.
+- Tests: `test_flow` 20/20, `test_phone` Pixel 7 10/10, `firefox_smoke` ok (canvas 1.4 s, stroke via helper 16.2 s), rooms `npm test` 19/19, `test_step1`, `test_kinds --only book`. Tools: `tools/shots_r9.mjs` (phone screenshots + storage bytes), `tools/pending_room_check.mjs` (live-drop size through typing).
+- Shots: `app/shots/r9_*.png` (topbar, menu, save_sheet, options_sheet, note_sheet, zoom_drop_writing, zoom_settled, zoom_touching, highlight, zoom_highlight, all_notes, note_open), video `app/shots/tap_type_paint_phone.webm`.

@@ -79,6 +79,8 @@ check(await P.evaluate(() => !!document.querySelector('.note.done.open')), 'tap 
 await P.screenshot({ path: path.join(outDir, `phone_${deviceName.replace(/\s+/g, '_')}_note.png`) });
 await tap(box.x + 30, box.y + box.height - 120); await P.waitForTimeout(400);
 check(await P.evaluate(() => !document.querySelector('.note.done.open')), 'tap elsewhere closes it');
+const fr = await P.evaluate(() => (window.__vqpaint.frameStats ? window.__vqpaint.frameStats() : null));
+if (fr) console.log(`frames (phone profile, ink animating + engine): p50 ${fr.p50} ms, p95 ${fr.p95} ms, max ${fr.max} ms over ${fr.n} frames`);
 // one-finger pan with momentum
 const x0 = await P.evaluate(() => window.__vqpaint.view.x);
 if (cdp) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: cx + 100, y: cy + 150 }] }); for (let i = 1; i <= 8; i++) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: cx + 100 - i * 18, y: cy + 150 }] }); await P.waitForTimeout(14); } await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); }

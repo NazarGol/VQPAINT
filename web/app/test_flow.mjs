@@ -44,7 +44,7 @@ check((await A.evaluate(() => window.__vqpaint.queue.length)) === 1, 'note writt
 await A.waitForFunction(() => window.__vqpaint.strokes.length === 2 && !window.__vqpaint.painting, null, { timeout: 240000 });
 await A.waitForFunction(() => !window.__vqpaint.reveal.active, null, { timeout: 5000 }).catch(() => {});
 const inside = (v, n) => { const m = n._mask; let best = null, bd = 1e9; for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) if (m.cells[y * m.w + x]) { const d = Math.hypot(m.x + x + 0.5 - n.blot.x, m.y + y + 0.5 - n.blot.y); if (d < bd) { bd = d; best = [m.x + x + 0.5, m.y + y + 0.5]; } } return best; };
-const s0 = await A.evaluate((insideSrc) => { const inside = eval(insideSrc); const v = window.__vqpaint, n = v.strokes[0]; v.strokeAt(0, 0); const c = inside(v, n); return { blot: !!n.blot, path: n.path ? n.path.length : 0, cells: !!c && v.strokeAt(c[0], c[1]) === n, seed: n.blot && n.blot.seed, size: n.blot && n.blot.size, settledFx: !v.reveal.active, lobes: n.blot && n.blot.lobes, tier: n.blot && n.blot.tier }; }, inside.toString());
+const s0 = await A.evaluate((insideSrc) => { const inside = eval(insideSrc); const v = window.__vqpaint, n = v.strokes[0]; v.strokeAt(0, 0); const c = inside(v, n); return { blot: !!n.blot, path: n.path ? n.path.length : 0, cells: !!c && v.strokesAt(c[0], c[1]).includes(n), hits: c ? v.strokesAt(c[0], c[1]).length : 0, seed: n.blot && n.blot.seed, size: n.blot && n.blot.size, settledFx: !v.reveal.active, lobes: n.blot && n.blot.lobes, tier: n.blot && n.blot.tier }; }, inside.toString());
 check(s0.blot && s0.path > 8 && s0.cells, `stroke carries its blot (seed ${s0.seed}, size ${s0.size} tokens, ${s0.lobes} lobes, tier ${s0.tier}) and an outline of ${s0.path} points; the ink is the hit shape`);
 check(s0.settledFx, 'queue painted the second note; reveals ended');
 const fr = await A.evaluate(() => window.__vqpaint.frameStats());
@@ -55,6 +55,9 @@ await A.screenshot({ path: path.join(outDir, 'flow_two_strokes.png') });
 const [sx, sy] = await A.evaluate((insideSrc) => { const inside = eval(insideSrc); const v = window.__vqpaint, n = v.strokes[0]; const V = v.view; const c = inside(v, n) || [n.blot.x, n.blot.y]; return [(c[0] - V.x) * V.zoom, (c[1] - V.y) * V.zoom]; }, inside.toString());
 await A.mouse.click(box.x + sx, box.y + sy); await A.waitForTimeout(300);
 check(await A.evaluate(() => !!document.querySelector('.note.done.open')), 'tap on a stroke opens its note');
+if (s0.hits > 1) { const first = await A.evaluate(() => window.__vqpaint.notes.openedId); await A.mouse.click(box.x + sx, box.y + sy); await A.waitForTimeout(300);
+  check(await A.evaluate((f) => { const id = window.__vqpaint.notes.openedId; return !!id && id !== f; }, first), `tapping the same spot again cycles to the other note under it (${s0.hits} overlap here)`);
+  await A.evaluate(() => window.__vqpaint.notes.close()); await A.waitForTimeout(200); await A.mouse.click(box.x + sx, box.y + sy); await A.waitForTimeout(300); }   // reopen one note so the "tap elsewhere" step below starts from the same state
 await A.mouse.click(box.x + 40, box.y + box.height - 40); await A.waitForTimeout(300);
 check(await A.evaluate(() => !document.querySelector('.note.done.open') && !window.__vqpaint.notes.isEditing), 'tap elsewhere closes it (and does not open the writer)');
 check(await A.evaluate(() => document.getElementById('hint').hidden), 'hint gone after the first stroke');

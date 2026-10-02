@@ -199,11 +199,13 @@ export class InkDrop {
   progress(now) { return clamp(this.age(now) / this.p.duration, 0, 1); }
   grow(dt, maxSize = Infinity) { this.held = true; this.heldFor = (this.heldFor || 0) + dt; if (this.p.size < maxSize) { this.p.size = Math.min(maxSize, this.p.size * (1 + dt * 0.45)); this.r0 = this.p.size / this.rect.w * 0.55; } }   // hold = more ink and a bigger drop
   /** a keystroke: a small velocity push at a random point of the body (the ink moves as you type) */
-  nudge(now = performance.now(), strength = 0.15) {
+  nudge(now = performance.now(), strength = this.pending ? 0.07 : 0.15) {
     if (this.settled) return;
+    if (now - (this.lastNudge || 0) < 140) return;   // fast typing is one stir per 140 ms, not one per key: the waiting body must not be shaken apart
+    this.lastNudge = now;
     const a = Math.random() * Math.PI * 2, d = this.r0 * (0.5 + 0.4 * Math.random());
     const x = this.c0[0] + Math.cos(a) * d, y = this.c0[1] + Math.sin(a) * d;
-    this.impulses.push({ x, y, a: a + Math.PI / 2 * (Math.random() < 0.5 ? 1 : -1), s: strength, t: now }); if (this.impulses.length > 8) this.impulses.shift();   // a tangential push: the ink turns, it is not blown outward
+    this.impulses.push({ x, y, a: a + Math.PI / 2 * (Math.random() < 0.5 ? 1 : -1), s: strength, t: now }); while (this.impulses.length > (this.pending ? 3 : 8)) this.impulses.shift();   // a tangential push: the ink turns, it is not blown outward
     this.ripples.push({ x: this.x + Math.cos(a) * d * this.rect.w, y: this.y + Math.sin(a) * d * this.rect.h, t: now, r: 22 });
   }
   /** drift the continuous shape parameters toward another parameter set (the note's text seeds it): k per call */

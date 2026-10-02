@@ -9,7 +9,7 @@ import { maskCells, maskToString, maskFromString, maskFromCells, maskHas, maskTo
 import { t, lang, setLang } from './i18n.js';
 import { lassoMask } from '../lib/lasso.js';
 import { connectRoom } from '../lib/room.js';
-import { LayerCache, encodeTokens, decodeTokens, paintedBounds, polygonAlpha, maskAlpha, composeLayer, intersects, makePreviewBlob, packCells, noteCellAlpha } from '../lib/layers.js';
+import { LayerCache, encodeTokens, decodeTokens, paintedBounds, polygonAlpha, maskAlpha, composeLayer, intersects, makePreviewBlob, packCells, noteCellAlpha, outlineCells } from '../lib/layers.js';
 import { mountRoombar } from './components/roombar.js';
 import { RevealManager } from '../lib/effects/reveal.js';
 import { haptic } from '../lib/haptics.js';
@@ -85,35 +85,40 @@ const metaphorsOn = params.get('metaphors') !== '0';   // ?metaphors=0 paints th
 // ---------- UI ----------
 const stage = $('stage');
 const toast = mountToast(stage);
-const roombar = mountRoombar($('roombar'), { roomId, onInvite: invite, onMine: () => showMine() });
+const roombar = mountRoombar($('roombar'), { roomId });
 const hint = $('hint'); hint.textContent = t('hint.empty');
 const menu = mountMenu($('menu-root'));
 const sheets = mountSheets(stage, { phone: isPhone });
 function menuItems() {
-  const k = roomSettings.kind || 'default', helpersLabel = () => t(lowMem ? 'menu.helpers.phone' : 'menu.helpers.desktop', { state: t(helpersOn ? 'on' : 'off') });
-  const items = [
+  const k = roomSettings.kind || 'default';
+  return [
     { id: 'undo', label: t('menu.undo'), onClick: undo, disabled: !undoStack.length },
-    { id: 'notes', label: k === 'diary' ? t('menu.calendar') : t('menu.notes'), onClick: showList },
-    { divider: true },
-    { id: 'chapters', label: t('menu.chapters'), onClick: addChapters },
-    { id: 'anon', label: t('menu.anon', { state: t(roomSettings.anon ? 'on' : 'off') }), onClick: () => postSettings({ kind: roomSettings.anon ? (roomSettings.chapters && roomSettings.chapters.length ? 'book' : 'default') : 'meeting', anon: !roomSettings.anon }) },
-    { id: 'daily', label: t('menu.daily', { state: t(k === 'diary' ? 'on' : 'off') }), onClick: () => postSettings({ kind: k === 'diary' ? 'default' : 'diary', private: k !== 'diary' }) },
-    { id: 'import', label: t('menu.import'), onClick: importHighlights },
-    { id: 'paste', label: t('menu.paste'), onClick: pasteNotes },
+    { id: 'notes', label: k === 'diary' ? t('menu.calendar') : t('menu.notes'), onClick: () => (k === 'diary' ? showList() : showAllNotes()) },
+    { id: 'invite', label: t('menu.invite'), onClick: invite },
+    { id: 'mine', label: t('menu.mine'), onClick: showMine },
+    { id: 'save', label: t('menu.save'), onClick: saveSheet },
+    { id: 'replay', label: t('menu.replay'), onClick: () => replay() },
+    { id: 'options', label: t('menu.options'), onClick: optionsSheet },
+    { row: [{ id: 'lang', label: t('menu.langShort'), onClick: () => { setLang(lang === 'uk' ? 'en' : 'uk'); const u = new URL(location.href); u.searchParams.delete('lang'); location.replace(u.href); } },
+            { id: 'source', label: t('menu.sourceShort'), onClick: () => window.open('https://github.com/NazarGol/VQPAINT/tree/web-spikes/web', '_blank') }] },
   ];
-  if (k === 'meeting' || roomSettings.anon) items.push({ id: 'finish', label: t('menu.finish'), onClick: finishMeeting });
-  if (k === 'diary') items.push({ id: 'invites', label: t('menu.invites', { state: t(roomSettings.private === false ? 'on' : 'off') }), onClick: toggleInvites });
-  items.push({ divider: true },
-    { id: 'png', label: t('menu.png'), onClick: () => exportPng() }, { id: 'pdf', label: t('menu.pdf'), onClick: () => exportPdf() },
-    { id: 'postcard', label: t('menu.postcard'), onClick: makePostcard },
-    { id: 'print', label: t('menu.print'), onClick: () => exportPrint('bookplate') }, { id: 'printA4', label: t('menu.printA4'), onClick: () => exportPrint('a4') }, { id: 'printA3', label: t('menu.printA3'), onClick: () => exportPrint('a3') },
-    { id: 'replay', label: t('menu.replay'), onClick: () => replay() }, { id: 'video', label: t('menu.video'), onClick: () => exportVideo() },
-    { divider: true },
-    { id: 'helpers', label: helpersLabel(), onClick: () => { helpersOn = !helpersOn; menu.render(menuItems()); } },
-    { id: 'lang', label: t('menu.lang'), onClick: () => { setLang(lang === 'uk' ? 'en' : 'uk'); const u = new URL(location.href); u.searchParams.delete('lang'); location.replace(u.href); } },
-    { id: 'source', label: t('menu.source'), onClick: () => window.open('https://github.com/NazarGol/VQPAINT/tree/web-spikes/web', '_blank') });
-  return items;
 }
+/** every secondary action by id (the sheets list them; tests call them directly) */
+const actions = {
+  png: () => exportPng(), pdf: () => exportPdf(), postcard: () => makePostcard(), print: () => exportPrint('bookplate'), printA4: () => exportPrint('a4'), printA3: () => exportPrint('a3'), video: () => exportVideo(),
+  chapters: () => addChapters(), anon: () => postSettings({ kind: roomSettings.anon ? (roomSettings.chapters && roomSettings.chapters.length ? 'book' : 'default') : 'meeting', anon: !roomSettings.anon }),
+  daily: () => postSettings({ kind: roomSettings.kind === 'diary' ? 'default' : 'diary', private: roomSettings.kind !== 'diary' }), import: () => importHighlights(), paste: () => pasteNotes(), finish: () => finishMeeting(), list: () => showList(),
+};
+function saveSheet() { notes.close(); sheets.actions([
+  { id: 'png', label: t('save.png'), onClick: actions.png }, { id: 'pdf', label: t('save.pdf'), onClick: actions.pdf }, { id: 'postcard', label: t('save.postcard'), onClick: actions.postcard },
+  { id: 'print', label: t('save.print'), onClick: actions.print }, { id: 'printA4', label: t('save.printA4'), onClick: actions.printA4 }, { id: 'printA3', label: t('save.printA3'), onClick: actions.printA3 },
+  { id: 'video', label: t('save.video'), onClick: actions.video }], { title: t('sheet.save') }); }
+function optionsSheet() { notes.close(); const k = roomSettings.kind || 'default'; sheets.actions([
+  { id: 'chapters', label: t('menu.chapters'), onClick: actions.chapters },
+  { id: 'anon', label: t('menu.anon', { state: t(roomSettings.anon ? 'on' : 'off') }), onClick: actions.anon },
+  { id: 'daily', label: t('menu.daily', { state: t(k === 'diary' ? 'on' : 'off') }), onClick: actions.daily },
+  { id: 'import', label: t('menu.import'), onClick: actions.import }, { id: 'paste', label: t('menu.paste'), onClick: actions.paste },
+  { id: 'finish', label: t('menu.finish'), onClick: actions.finish }], { title: t('sheet.options') }); }
 menu.render(menuItems());
 const loading = mountLoading($('loading'));
 const previewUrl = (id, v = 0) => `${CONFIG.roomsUrl}/room/${roomId}/preview/${id}${v ? '?v=' + v : ''}`;   // v busts the immutable cache after an edit
@@ -144,15 +149,24 @@ function openNote(id) { const st = strokes.find((s) => s.id === id); if (!st) re
 function mergeAt(st, w) { if (!st.merges) return null; const x = Math.floor(w[0]), y = Math.floor(w[1]); for (const m of st.merges) { m._mask ||= maskFromString(m.cells); if (maskHas(m._mask, x, y)) return strokes.find((o) => o.id === m.with) || null; } return null; }
 const view = mountCanvas(stage, {
   reveal,
+  outlineOf: (id) => { const st = strokes.find((s) => s.id === id); return st && st.cells && st.crop ? { cells: outlineCells(st, st.crop), cpt: st.cpt || 4 } : null; },
+  onPress: (w) => { if (isPhone && ready && grid) hoverAt(w); },   // a finger on a stroke highlights it before the tap lands
   onTap: (w, stagePt, hold) => {
     if (!ready || !grid) { dropHeld(); return; }
+    if (overlayHold) { overlayHold = false; dropHeld(); return; }               // the hold that showed all notes ends here
+    if (view.overlayActive) { dropHeld(); const id = view.labelAt(stagePt); view.setOverlay(null); if (id) openNote(id); return; }   // a label opens its note; elsewhere just closes the overlay
     if (notes.isEditing) { dropHeld(); notes.cancel(true); return; }           // a tap outside the sheet discards it
-    if (notes.openedId) { dropHeld(); notes.close(); return; }                  // first tap just closes the open note
-    const st = strokeAt(w[0], w[1]);
-    if (st) { dropHeld(); haptic('tap'); const other = mergeAt(st, w); notes.open(st, view.anchorFor(st.crop || st._mask), { mergeWith: other }); noteOpenedAt = performance.now(); return; }
+    const hits = strokesAt(w[0], w[1]);
+    if (notes.openedId) { dropHeld(); const i = hits.findIndex((h) => h.id === notes.openedId);
+      if (i >= 0 && hits.length > 1) { openNote(hits[(i + 1) % hits.length].id); return; }   // the same spot again: the next overlapping note
+      notes.close(); if (i >= 0 || !hits.length) { hoverAt(null); return; } }
+    const st = hits[0];
+    if (st) { dropHeld(); haptic('tap'); const other = mergeAt(st, w); notes.open(st, view.anchorFor(st.crop || st._mask), { mergeWith: other }); noteOpenedAt = performance.now(); view.setHover(st.id); return; }
     beginWrite(w, hold, takeHeld());
   },
-  onHoldStart: (w) => { if (!ready || !grid || notes.isEditing || notes.openedId || strokeAt(w[0], w[1])) return; held = { drop: liveDrop(w[0], w[1]), t: performance.now() }; },   // the ink lands under the finger at once
+  onHoldStart: (w) => { if (!ready || !grid || notes.isEditing || notes.openedId) return;
+    if (strokeAt(w[0], w[1])) { overlayHold = true; haptic('tap'); showAllNotes(); return; }   // a long press on the painting: every note, briefly
+    held = { drop: liveDrop(w[0], w[1]), t: performance.now() }; },   // the ink lands under the finger at once
   onHold: (t, dt) => { if (held) reveal.grow(held.drop.pendingId, dt, Math.min(MAX_R, held.drop.size * GROW_MAX) * INK_K); },
   onHoldEnd: () => { if (held) { const h = held; setTimeout(() => { if (held === h) dropHeld(); }, 150); } },   // no tap followed (a pan started): dissolve
   onPointer: (phase, w, stagePt, delta) => {   // a finger on a spreading stroke stirs it (and grows it while held)
@@ -161,13 +175,22 @@ const view = mountCanvas(stage, {
     if (phase === 'move' && delta) { const [px, py] = reveal.cropPx(stirring.id, w[0], w[1]); const k = F / view.view.zoom; reveal.stir(stirring.id, px, py, delta[0] * k, delta[1] * k); const now = performance.now(); reveal.grow(stirring.id, Math.min(0.05, (now - stirring.t) / 1000)); stirring.t = now; }
     if (phase === 'up') { reveal.release(stirring.id); stirring = null; }
   },
-  onCursor: (w) => room?.sendCursor(w[0], w[1]),
+  onCursor: (w) => { room?.sendCursor(w[0], w[1]); if (!isPhone && ready && grid) hoverAt(w); },
   onResize: () => { if (ready && grid && !userMoved) fitToPainting(); },   // phones report a tiny stage before their first layout settles
   onViewChange: () => { notes.reposition((n) => (n.note ? view.anchorFor(n.note.crop || n.note._mask) : pendingDrop ? view.anchorFor(dropRect(pendingDrop)) : null)); scheduleVisibleLayers(); },
   onUserMove: () => { userMoved = true; },
 });
 view.canvas.id = 'canvas';
 window.__vqpaintView = view;
+let overlayHold = false, hoverId = null;
+/** the stroke under the pointer gets the 1-cell outline and the rest dims; null clears (the open note keeps its highlight) */
+function hoverAt(w) { const st = w && !notes.isEditing ? strokeAt(w[0], w[1]) : null; const id = st ? st.id : notes.openedId; if (id === hoverId) return; hoverId = id; view.setHover(id); }
+/** "all notes": every stroke outlined, with its first words as a tiny label for ~2 s; a tap on a label opens the note */
+function showAllNotes() {
+  notes.close(); hoverAt(null);
+  const items = strokes.map((s) => { s._mask ||= maskFromString(s.mask); const b = s.blot; return { id: s.id, x: b ? b.x : s._mask.x + s._mask.w / 2, y: b ? b.y : s._mask.y + s._mask.h / 2, text: String(s.text).replace(/\s+/g, ' ').trim().split(' ').slice(0, 3).join(' ').slice(0, 24) }; });
+  view.setOverlay(items.length ? items : null);
+}
 let noteOpenedAt = 0;
 document.addEventListener('pointerdown', (e) => { if (performance.now() - noteOpenedAt < 600) return; if (!e.target.closest('.note') && !e.target.closest('.ui') && !e.target.closest('.menu') && !e.target.closest('canvas')) notes.close(); });
 const setStatus = (s, ms) => toast.status(s, ms);
@@ -214,7 +237,15 @@ function inkMask(drop) {
   const exact = drop.pendingId ? reveal.paramsOf(drop.pendingId) : null;   // the live drop's (drifted, grown) shape, not just its seed
   if (exact) drop.size = Math.max(drop.size, exact.size / F / INK_K);
   drop.crop ||= dropCrop(drop.x, drop.y, drop.size);                         // the live drop and the presim must share one sim rect
-  try { m = reveal.presim({ cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: 6, exact, crop: drop.crop }); } catch (e) { console.warn('presim', e); }
+  const floor = Math.max(6, Math.round(0.8 * Math.PI * (drop.size * INK_K) ** 2));   // a shape under 0.8× the drop's own disc starved at cell resolution (the median settles at ~5×): try the next seed
+  let seed = drop.seed, ex = exact;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try { m = reveal.presim({ cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed, duration: 6, exact: ex, crop: drop.crop }); } catch (e) { console.warn('presim', e); m = null; break; }
+    if (m && m.count >= floor) break;
+    seed = (seed + 7919 * (attempt + 1)) | 0; ex = null;
+  }
+  if (m && m.count >= floor && seed !== drop.seed) { drop.seed = seed; stats.reseeds = (stats.reseeds || 0) + 1; if (drop.pendingId) reveal.reseed(drop.pendingId, seed); }
+  drop.presimBits = m && m.bits ? m.bits : null;
   if (!m || !m.count) return discMask(drop.x, drop.y, drop.size, grid.w, grid.h);
   const x0 = Math.max(0, m.x - 1), y0 = Math.max(0, m.y - 1), x1 = Math.min(grid.w, m.x + m.w + 1), y1 = Math.min(grid.h, m.y + m.h + 1), w = x1 - x0, h = y1 - y0;
   if (w <= 0 || h <= 0) return discMask(drop.x, drop.y, drop.size, grid.w, grid.h);
@@ -249,6 +280,12 @@ function runJob(job) {
   const m = inkMask(job.drop); if (!m.count) return; startStroke(m, job.text, null, job.realism, { parent: job.parent, photo: job.photo, drop: job.drop, chapter: job.chapter, day: job.day, source: job.source, anon: job.anon, author: job.author });
 }
 function processQueue() { if (painting || starting || myRequests.size || !queue.length) return; const job = queue.shift(); starting = true; Promise.resolve(runJob(job)).catch((e) => console.warn('job', e)).finally(() => { starting = false; processQueue(); }); }
+function strokesAt(gx, gy) {
+  const x = Math.floor(gx), y = Math.floor(gy), out = [];
+  for (let i = strokes.length - 1; i >= 0; i--) { const s = strokes[i]; s._mask ||= maskFromString(s.mask); if (maskHas(s._mask, x, y)) out.push(s); }
+  if (!out.length) { const s = strokeAt(gx, gy); if (s) out.push(s); }
+  return out;
+}
 function strokeAt(gx, gy) {
   const x = Math.floor(gx), y = Math.floor(gy);
   for (let i = strokes.length - 1; i >= 0; i--) { const s = strokes[i]; s._mask ||= maskFromString(s.mask); if (maskHas(s._mask, x, y)) return s; }
@@ -262,7 +299,8 @@ function strokeAt(gx, gy) {
 // ---------- scene ----------
 function updateScene() {
   const labels = [...othersPainting.values()].filter((j) => j.for !== room?.id).map((j) => { const m = j._mask ||= maskFromString(j.mask); return { x: j.blot ? j.blot.x : m.x + m.w / 2, y: (j.blot ? j.blot.y - j.blot.size : m.y) - 0.3, text: `${peerName(j.by)}${j.for ? ' · ' + peerName(j.for) : ''}` }; });   // no label over my own stroke
-  view.setScene({ layers: layers ? strokes.filter((s) => !hiddenLayers.has(s.id)).map((s) => layers.get(s.id)).filter(Boolean) : [], labels, peers: [...peers.values()] });
+  const seeds = strokes.filter((s) => s.blot && s.cells && !hiddenLayers.has(s.id) && layers && layers.has(s.id)).map((s) => ({ id: s.id, x: s.blot.x, y: s.blot.y, cpt: s.cpt || 4 }));
+  view.setScene({ layers: layers ? strokes.filter((s) => !hiddenLayers.has(s.id)).map((s) => layers.get(s.id)).filter(Boolean) : [], labels, seeds, peers: [...peers.values()] });
   if (hint) hint.hidden = !(ready && grid && !strokes.length && !painting && !pendingDrop && !queue.length && !myRequests.size && !reveal.active && !notes.isEditing);
 }
 let layersTimer = null;
@@ -434,7 +472,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
   drop ||= { x: mask.x + mask.w / 2, y: mask.y + mask.h / 2, size: Math.max(mask.w, mask.h) / 2, seed: (Math.random() * 2 ** 31) | 0 };
   const cropRect = expandRegion(grid, { x: mask.x, y: mask.y, w: mask.w, h: mask.h }, MARGIN);   // same crop the painter decodes
   // the ink has been alive since the tap: now it bursts into the full spread and turns into the painting as the search sharpens it
-  const rv = (drop.pendingId && reveal.adopt(drop.pendingId, jobId, { texCrop: cropRect, duration: rp.seconds })) || startReveal({ id: jobId, crop: drop.crop || dropCrop(drop.x, drop.y, drop.size), texCrop: cropRect, cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: rp.seconds, holdOpen: true, blot: drop.blot || null });
+  const rv = (drop.pendingId && reveal.adopt(drop.pendingId, jobId, { texCrop: cropRect, duration: rp.seconds, fallbackBits: drop.presimBits })) || startReveal({ id: jobId, fallbackBits: drop.presimBits, crop: drop.crop || dropCrop(drop.x, drop.y, drop.size), texCrop: cropRect, cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: rp.seconds, holdOpen: true, blot: drop.blot || null });
   drop.pendingId = null; view.requestRender();
   painting = { abort, mask, jobId, forId, reqId, progress: 0, points: path, drop }; updateScene(); renderPeers(); menu.setUndoEnabled(false);
   sessionStorage.setItem('vqpaint.boot', 'painting');
@@ -507,8 +545,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     const note = { id: Math.random().toString(36).slice(2, 10), text, author: anon ? '' : author, color, time: Date.now(), mask: maskToString(finalMask), crop: res.crop, tokens: encodeTokens(res.tokens), path: path || undefined, realism, parent: parent || undefined, photo: photo ? (photo.thumb || thumbOf(await dataUrlToImage(photo.data))) : undefined,
       lang: noteLang && noteLang !== 'en' ? noteLang : undefined, text_en: textEn || undefined, blot: blotRes ? blotRes.blot : undefined, merges: merges.length ? merges : undefined, cells: blotRes && blotRes.cellBits ? packCells(blotRes.cellBits) : undefined, cpt: blotRes && blotRes.cellBits ? blotRes.cpt : undefined, chapter: meta.chapter || undefined, day: meta.day || undefined, source: meta.source || undefined, anon: anon || undefined };
     strokes.push(note);
-    if (note.cells && bc.x === res.crop.x && bc.y === res.crop.y && bc.w === res.crop.w && bc.h === res.crop.h) alphaImg = noteCellAlpha(note, res.crop);   // the cells are the mask; shared cells with older strokes get the dither
-    else if (note.cells) { const a = noteCellAlpha(note, bc); alphaImg = cropAlpha(a, bc, res.crop); }
+    if (note.cells) alphaImg = noteCellAlpha(note, res.crop);   // the cells are the mask (already re-cut to the painting's crop above); shared cells with older strokes get the dither
     await layers.fromImage(note, res.crop, res.image, alphaImg);
     undoStack.push({ cells, before, note }); menu.setUndoEnabled(true);
     sendCells(cells);
@@ -575,10 +612,11 @@ function undo() {
 }
 async function invite() {
   ensureRoom();
+  if (roomSettings.private) await postSettings({ private: false });   // a diary is private until its owner invites someone
   const link = location.origin + location.pathname + '?r=' + roomId;
   haptic('tap');
   if (navigator.share) { try { await navigator.share({ title: roomSettings.title || t('untitled'), url: link }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
-  try { await navigator.clipboard.writeText(link); roombar.setInviteLabel(t('bar.copied')); setTimeout(() => roombar.setInviteLabel(t('bar.invite')), 2000); } catch { prompt(t('bar.copyPrompt'), link); }
+  try { await navigator.clipboard.writeText(link); setStatus(t('bar.copied'), 2500); } catch { prompt(t('bar.copyPrompt'), link); }
 }
 
 // ---------- photo in a note ----------
@@ -646,7 +684,6 @@ async function finishMeeting() {
   setStatus(t('finish.done'), 5000);
   if (navigator.share) { try { await Promise.race([navigator.share({ title: roomSettings.title || t('untitled'), text: t('finish.done'), url: link }), new Promise((r) => setTimeout(r, 15000))]); } catch (_) {} }   // the share sheet may never resolve (headless, dismissed)
 }
-async function toggleInvites() { await postSettings({ private: roomSettings.private === false }); roombar.setInviteVisible(roomSettings.private === false); menu.render(menuItems()); }
 async function makePostcard() {
   const ym = today().slice(0, 7);
   const got = await sheets.postcard(strokes, { defaultYm: ym, names: [...new Set(strokes.filter((n) => !n.anon && n.author).map((n) => n.author))].slice(0, 8).join(', ') }); if (!got) return;
@@ -808,7 +845,6 @@ function applySettings(cfg) {
   menu.render(menuItems());
   roombar.setTitle?.(roomSettings.title || '');
   document.title = roomSettings.title || t('untitled');
-  if (roomSettings.private) roombar.setInviteVisible?.(params.get('invite') === '1');
   updateScene();
 }
 /** the whole painting as one small image for the Telegram bot (/show, weekly post); uploaded by painters, throttled */
@@ -844,6 +880,7 @@ function connect() {
       roomBlank = st.blank || blankToken;
       strokes.length = 0; if (Array.isArray(st.notes)) strokes.push(...st.notes);
       if (st.settings) applySettings(st.settings);
+      if (st.archiveSoon && strokes.length) setStatus(t('status.archiveSoon'), 12000);
       openRequests.clear(); for (const r of st.requests || []) if (r.from !== st.id) openRequests.set(r.id, r);
       renderPeers();
       if (ready && !viewFitted) fitToPainting();
@@ -891,4 +928,4 @@ function tapPaint(x, y, text, realism = 0.6, hold = 0, extra = {}) { beginWrite(
   try { await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(stats) }); } catch (_) {}
 })();
 window.__vqpaint = { get grid() { return grid; }, stats, strokes, caps, get ready() { return ready; }, get mode() { return mode; }, get modelsLoaded() { return modelsLoaded; }, ensureBrush, releaseBrush, get safeMode() { return safeMode; }, get name() { return myName; }, get decodeTimes() { return []; }, engine, canPaintHere, frameStats: () => reveal.frameStats(), paintRegion, paintAt, lassoPaint, peers, get room() { return room; },
-  get painting() { return painting; }, othersPainting, myRequests, ensurePainter: ensureBrush, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, tapPaint, get queue() { return queue; }, reveal, beginWrite, strokeAt, react, mergeAt, autoPlace, get fresh() { return fresh; }, showMine, listRecent, get settings() { return roomSettings; }, scheduleSnapshot, sheets, importHighlights, pasteNotes, finishMeeting, makePostcard, exportPrint, showList, postSettings, enqueueStroke, get menu() { return menu; }, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; }, startReply, openNote, get replyTo() { return replyTo; }, threadOf, maskTouches: (a, b) => maskTouches(a, b), lassoMask: (pts) => lassoMask(pts, grid.w, grid.h), readPhoto, get lang() { return lang; } };
+  get painting() { return painting; }, othersPainting, myRequests, ensurePainter: ensureBrush, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, tapPaint, get queue() { return queue; }, reveal, beginWrite, strokeAt, react, mergeAt, autoPlace, get fresh() { return fresh; }, showMine, listRecent, get settings() { return roomSettings; }, scheduleSnapshot, sheets, importHighlights, pasteNotes, finishMeeting, makePostcard, exportPrint, showList, postSettings, enqueueStroke, get menu() { return menu; }, actions, showAllNotes, hoverAt, saveSheet, optionsSheet, strokesAt, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; }, startReply, openNote, get replyTo() { return replyTo; }, threadOf, maskTouches: (a, b) => maskTouches(a, b), lassoMask: (pts) => lassoMask(pts, grid.w, grid.h), readPhoto, get lang() { return lang; } };

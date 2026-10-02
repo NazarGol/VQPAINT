@@ -61,7 +61,10 @@ export function maskAlpha(crop, mask, feather = 2) {
 /** Compose a decoded crop (CHW float 0..1) with an alpha ImageData into an RGBA ImageData. */
 export function composeLayer(img, alpha) {
   const plane = img.w * img.h, out = new ImageData(img.w, img.h);
-  for (let i = 0; i < plane; i++) { const o = i * 4; out.data[o] = img.data[i] * 255; out.data[o + 1] = img.data[plane + i] * 255; out.data[o + 2] = img.data[2 * plane + i] * 255; out.data[o + 3] = alpha.data[o]; }
+  if (alpha.width === img.w && alpha.height === img.h) { for (let i = 0; i < plane; i++) { const o = i * 4; out.data[o] = img.data[i] * 255; out.data[o + 1] = img.data[plane + i] * 255; out.data[o + 2] = img.data[2 * plane + i] * 255; out.data[o + 3] = alpha.data[o]; } return out; }
+  // the decoder's pixels per token differ from the mask's (the light engine decodes smaller): sample the alpha nearest-neighbour so cells stay cells
+  const sx = alpha.width / img.w, sy = alpha.height / img.h;
+  for (let y = 0; y < img.h; y++) { const ay = Math.min(alpha.height - 1, Math.floor(y * sy)); for (let x = 0; x < img.w; x++) { const i = y * img.w + x, o = i * 4, ax = Math.min(alpha.width - 1, Math.floor(x * sx)); out.data[o] = img.data[i] * 255; out.data[o + 1] = img.data[plane + i] * 255; out.data[o + 2] = img.data[2 * plane + i] * 255; out.data[o + 3] = alpha.data[(ay * alpha.width + ax) * 4]; } }
   return out;
 }
 

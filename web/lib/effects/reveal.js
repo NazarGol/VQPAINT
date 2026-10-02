@@ -9,6 +9,8 @@ import { maskToCells, blotPath } from './contour.js';
 import { cellAlphaImage } from '../layers.js';
 const DYE = [0.84, 0.65, 0.86];   // the lilac ink seen before the painting arrives
 const isPhone = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 700;
+/** an N×N readback (0/1 floats) as a cw×ch cell bitmap (edge cells repeat when the grid is smaller) */
+const bitsFrom = (m, cw, ch) => { const bits = new Uint8Array(cw * ch); for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) bits[y * cw + x] = m.data[Math.min(m.h - 1, y) * m.w + Math.min(m.w - 1, x)] >= 0.5 ? 1 : 0; return bits; };
 export class RevealManager {
   constructor({ F = 16, params = {} } = {}) {
     this.F = F; this.params = { ...params }; this.items = new Map(); this.scale = 1; this.slow = 0; this.cpt = params.cpt || 4;   // pixel ink: the sim grid IS the cell grid, cpt cells per token side
@@ -26,14 +28,14 @@ export class RevealManager {
    * holdOpen keeps the ink breathing until finish() (the search is still running). softer: other people's strokes.
    * blot: a stored {x, y, size, seed, duration} rebuilds the same stroke (viewers).
    */
-  start({ id, crop, cx, cy, size, seed, duration, holdOpen = false, softer = false, params = null, image = null, blot = null, pending = false, texCrop = null }) {
+  start({ id, crop, cx, cy, size, seed, duration, holdOpen = false, softer = false, params = null, image = null, blot = null, pending = false, texCrop = null, fallbackBits = null }) {
     const F = this.F, now = performance.now(), W = crop.w * F, H = crop.h * F;
     const px = ((blot ? blot.x : cx) - crop.x) * F, py = ((blot ? blot.y : cy) - crop.y) * F, sizePx = (blot ? blot.size : size) * F, sd = blot ? blot.seed : seed, dur = duration ?? (blot ? Math.min(blot.duration || 4, 4) : undefined);
-    let drop; const cpt = (blot && blot.cpt) || (params && params.cpt) || this.cpt, N = Math.max(8, Math.round(Math.max(crop.w, crop.h) * cpt));
-    if (this.gl) drop = new InkDrop(this.R, { x: px, y: py, params: { ...this.params, ...(params || {}), cpt, size: sizePx }, seed: sd, now, duration: dur, haptics: !softer, grid: N, rect: { x: 0, y: 0, w: W, h: H }, pending });
-    else drop = new Drop({ x: px, y: py, params: { ...(params || {}), cpt, size: sizePx }, seed: sd, now, duration: dur, haptics: !softer, exact: !!blot, pending });
-    if (holdOpen || pending) drop.holdUntil = Infinity;
-    const it = { id, crop, drop, cpt, tex: null, texCrop, clarity: 0, softer, alpha: softer ? 0.92 : 1, started: now, resolve: null, done: false, fade: null, fadeMs: 220, sizeTok: blot ? blot.size : size };
+    const cpt = (blot && blot.cpt) || (params && params.cpt) || this.cpt, N = Math.max(8, Math.round(Math.max(crop.w, crop.h) * cpt));
+    const make = (sd2, now2) => { const d = this.gl ? new InkDrop(this.R, { x: px, y: py, params: { ...this.params, ...(params || {}), cpt, size: sizePx }, seed: sd2, now: now2, duration: dur, haptics: !softer, grid: N, rect: { x: 0, y: 0, w: W, h: H }, pending })
+      : new Drop({ x: px, y: py, params: { ...(params || {}), cpt, size: sizePx }, seed: sd2, now: now2, duration: dur, haptics: !softer, exact: !!blot, pending }); if (holdOpen || pending) d.holdUntil = Infinity; return d; };
+    const drop = make(sd, now);
+    const it = { id, crop, drop, make, cpt, tex: null, texCrop, clarity: 0, softer, alpha: softer ? 0.92 : 1, started: now, resolve: null, done: false, fade: null, fadeMs: 220, sizeTok: blot ? blot.size : size, fallbackBits };
     this.items.set(id, it);
     if (image) this.setImage(id, image);
     return it;
@@ -50,15 +52,17 @@ export class RevealManager {
   }
   setClarity(id, c) { const it = this.items.get(id); if (it) it.clarity = Math.max(0, Math.min(1, c)); }
   /** the waiting drop of a note being written becomes the stroke's reveal: same ink, new id, the painting's crop for the texture */
-  adopt(oldId, newId, { texCrop = null, duration = null, burst = true } = {}) {
+  adopt(oldId, newId, { texCrop = null, duration = null, burst = true, fallbackBits = null } = {}) {
     const it = this.items.get(oldId); if (!it) return null;
-    this.items.delete(oldId); it.id = newId; it.texCrop = texCrop; it.fade = null; it.done = false; it.resolve = null; this.items.set(newId, it);
+    this.items.delete(oldId); it.id = newId; it.texCrop = texCrop; it.fade = null; it.done = false; it.resolve = null; it.fallbackBits = fallbackBits || it.fallbackBits || null; this.items.set(newId, it);
     if (burst) it.drop.burst?.(duration); it.drop.holdUntil = Infinity;
     return it;
   }
   /** a keystroke while the drop waits: a small push, and the shape drifts toward what the text seeds */
-  nudge(id, text = null) { const it = this.items.get(id); if (!it || it.drop.settled) return; it.drop.nudge?.(); if (text != null && it.drop.drift) it.drop.drift(drawParams(hashText(text), { ...this.params, size: it.drop.p.size }), 0.12); }
+  nudge(id, text = null) { const it = this.items.get(id); if (!it || it.drop.settled) return; it.drop.nudge?.(); if (text != null && it.drop.drift) it.drop.drift(drawParams(hashText(text), { ...this.params, size: it.drop.p.size }), it.drop.pending ? 0.06 : 0.12); }
   paramsOf(id) { const it = this.items.get(id); return it && it.drop.p ? it.drop.p : null; }
+  /** the presim found this seed starves at cell resolution: the waiting drop restarts with the seed that works, so live ink and mask agree */
+  reseed(id, seed) { const it = this.items.get(id); if (!it || !it.make) return false; const d = it.drop; it.drop = it.make(seed, performance.now()); if (d.held) { it.drop.held = true; it.drop.p.size = d.p.size; it.drop.r0 = d.r0; } d.free?.(); return true; }
   /** debug: px area of the current dye mask of a drop */
   areaOf(id) { const it = this.items.get(id); if (!it || !this.gl) return -1; const F = this.F, W = it.crop.w * F, H = it.crop.h * F; this.R.resize(W, H, 0.5); this.R.clear(); it.drop.draw(performance.now(), { mode: 2, offset: [0, 0], scissor: false }); const m = this.R.readMask(); let a = 0; for (let i = 0; i < m.data.length; i++) if (m.data[i] >= 0.5) a++; return a * 4; }
   sizeTokOf(id) { const it = this.items.get(id); return it && it.drop.p ? it.drop.p.size / this.F : (it ? it.sizeTok : 0); }
@@ -110,8 +114,9 @@ export class RevealManager {
     if (this.gl) { R.resize(W, H, N / W); R.clear(); it.drop.draw(now, { mode: 2, offset: [0, 0], scissor: false }); }   // one GL pixel per cell: the readback IS the cell bitmap
     else { R.resize(W, H, N / W); R.clear(); R.draw(it.drop, now, { mode: 2, scissor: false }); }
     const m = R.readMask();                                 // N×N (0/1)
-    const cw = it.crop.w * cpt, ch = it.crop.h * cpt, bits = new Uint8Array(cw * ch);
-    for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) bits[y * cw + x] = m.data[Math.min(m.h - 1, y) * m.w + Math.min(m.w - 1, x)] >= 0.5 ? 1 : 0;
+    const cw = it.crop.w * cpt, ch = it.crop.h * cpt; let bits = bitsFrom(m, cw, ch);
+    const fb = it.fallbackBits && it.fallbackBits.length === bits.length ? it.fallbackBits : null;
+    if (fb) { let a = 0, b = 0; for (let i = 0; i < bits.length; i++) { a += bits[i]; b += fb[i]; } if (a < 0.25 * b) bits = fb; }   // the live run starved (stalled frames, a stir too many): the pre-simulated shape is the mask
     const cells = new Uint8Array(it.crop.w * it.crop.h); let count = 0;   // token mask = tokens that own at least one filled cell
     for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) if (bits[y * cw + x]) { const i = Math.floor(y / cpt) * it.crop.w + Math.floor(x / cpt); if (!cells[i]) { cells[i] = 1; count++; } }
     const alpha = cellAlphaImage(bits, cw, ch, F / cpt);  // hard cells at crop px
@@ -135,7 +140,7 @@ export class RevealManager {
     this.R.resize(W, H, d.grid / W); this.R.clear(); d.draw(now + (steps + 2) * 33.4, { mode: 2, offset: [0, 0], scissor: false });
     const m = this.R.readMask(); d.free();
     const { cells, count } = maskToCells(m, d.grid / rw, rw, rh, 0.01);   // any filled cell paints its token
-    return { x: rx, y: ry, w: rw, h: rh, cells, count };
+    return { x: rx, y: ry, w: rw, h: rh, cells, count, bits: bitsFrom(m, rw * this.cpt, rh * this.cpt), cpt: this.cpt };
   }
   /** fade the live reveal out (220 ms crossfade into the cached layer; a longer, softer dissolve for a discarded note) */
   fadeOut(id, ms = 220) { const it = this.items.get(id); if (it) { it.fade = performance.now(); it.fadeMs = ms; } }

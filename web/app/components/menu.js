@@ -7,13 +7,14 @@ export function mountMenu(el, { items = [] } = {}) {
   el.querySelector('#menu').onclick = (e) => { e.stopPropagation(); box.hidden = !box.hidden; };
   document.addEventListener('pointerdown', (e) => { if (!el.contains(e.target)) box.hidden = true; });
   let current = items;
-  /** items: [{id, label, onClick, disabled?, divider?}] */
+  /** items: [{id, label, onClick, disabled?, divider?, row?: [item, item]}] — a row puts two small items on one line */
+  const button = (it) => { const b = document.createElement('button'); b.textContent = it.label; b.id = it.id ? it.id : ''; if (it.id) b.dataset.item = it.id; b.disabled = !!it.disabled; b.onclick = () => { box.hidden = true; it.onClick?.(); }; return b; };
   function render(list) {
-    current = list; box.innerHTML = '';
+    current = list.flatMap((it) => (it.row ? it.row : [it])); box.innerHTML = '';
     for (const it of list) {
       if (it.divider) { const d = document.createElement('div'); d.className = 'divider'; box.appendChild(d); continue; }
-      const b = document.createElement('button'); b.textContent = it.label; b.id = it.id ? it.id : ''; if (it.id) b.dataset.item = it.id; b.disabled = !!it.disabled;
-      b.onclick = () => { box.hidden = true; it.onClick?.(); }; box.appendChild(b);
+      if (it.row) { const r = document.createElement('div'); r.className = 'row'; for (const x of it.row) r.appendChild(button(x)); box.appendChild(r); continue; }
+      box.appendChild(button(it));
     }
   }
   render(items);

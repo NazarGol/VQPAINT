@@ -55,6 +55,12 @@ export function mountSheets(stageEl, { phone = false } = {}) {
       for (const i of el.querySelectorAll('[data-open]')) i.onclick = () => { close(); onOpen?.(i.dataset.open); };
       return el;
     },
+    /** a short list of actions, one per line: [{id, label, onClick, disabled?}]; the sheet closes before the action runs */
+    actions(list, { title = '' }) {
+      const el = open(`<div class="acts">${list.map((it) => `<button type="button" class="act" data-act="${escapeHtml(it.id)}" ${it.disabled ? 'disabled' : ''}>${escapeHtml(it.label)}</button>`).join('')}</div>`, { title });
+      for (const b of el.querySelectorAll('[data-act]')) b.onclick = () => { const it = list.find((x) => x.id === b.dataset.act); close(); it?.onClick?.(); };
+      return el;
+    },
     /** paste or pick a file; returns a promise of {text, filename} or null */
     importText({ title, hint, accept = '.txt,.md,text/plain,text/markdown' }) {
       return new Promise((res) => {
