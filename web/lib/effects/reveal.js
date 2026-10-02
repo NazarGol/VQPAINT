@@ -11,9 +11,13 @@ const isPhone = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coars
 export class RevealManager {
   constructor({ F = 16, params = {} } = {}) {
     this.F = F; this.params = { ...params }; this.items = new Map(); this.scale = 1; this.slow = 0; this.grid = isPhone ? 128 : 192;   // sim cells per drop (the drop's crop is sized for the biggest drop, so desktop gets more cells)
-    try { this.R = new InkGL(document.createElement('canvas')); this.gl = true; }
+    try { this.R = new InkGL(document.createElement('canvas')); this.gl = true; this.R.onRestore = () => { for (const it of this.items.values()) { try { it.drop.rebuild?.(); } catch (e) { console.warn('drop rebuild', e); } } }; }
     catch (e) { console.warn('WebGL unavailable, canvas fallback:', e.message); this.R = new Blot2D(document.createElement('canvas')); this.gl = false; }
+    this.dpr = Math.min(3, (typeof devicePixelRatio === 'number' && devicePixelRatio) || 1);
+    this.frameMs = [];                                   // last frame times while something animates (adaptive quality + stats)
   }
+  /** render px per crop px at this zoom: the ink is drawn at device resolution (never a blurry upscale), capped per drop */
+  renderScale(zoom, W, H) { const k = (zoom / this.F) * this.dpr, cap = (isPhone ? 1536 : 2560) / Math.max(W, H); return Math.min(k, cap); }
   setParams(params) { this.params = { ...params }; }
   get active() { return this.items.size > 0; }
   /**
@@ -73,7 +77,8 @@ export class RevealManager {
       const crop = it.crop, W = crop.w * F, H = crop.h * F;
       const settledNow = this.gl ? it.drop.step(now) : it.drop.update(now);
       if (settledNow && !it.done) this.#settle(it);
-      const scale = Math.min(1, this.scale, 1024 / Math.max(W, H));
+      const scale = this.gl ? this.renderScale(view.zoom, W, H) : Math.min(1, 1024 / Math.max(W, H));
+      if (this.gl && this.R.lost) { if (performance.now() - (this.R.lostAt || 0) > 4000 && !this.fallbackWarned) { this.fallbackWarned = true; console.warn('WebGL context not restored; reveals paused'); } continue; }   // lost context: the drop waits (the cached layer appears when the stroke lands)
       R.resize(W, H, scale);
       R.clear();
       if (it.tex && it.texDirty) { R.setTexture(it.tex); it.texDirty = false; }
@@ -88,8 +93,15 @@ export class RevealManager {
       if (it.fade != null && now - it.fade > it.fadeMs) { this.items.delete(id); it.drop.free?.(); }
     }
   }
-  /** adaptive quality: call with the last frame's ms; lowers the render resolution, never the frame rate */
-  frameTime(ms) { if (!this.items.size) return; if (ms > 21) { if (++this.slow >= 10) { this.slow = 0; this.scale = Math.max(0.5, this.scale - 0.25); } } else if (ms < 13) this.slow = Math.max(0, this.slow - 1); }
+  /** adaptive quality: call with the last frame's ms; lowers the sim grid for new drops and the noise octaves, never resolution or frame rate */
+  frameTime(ms) {
+    if (!this.items.size) return;
+    this.frameMs.push(ms); if (this.frameMs.length > 600) this.frameMs.shift();
+    if (ms > 21) { if (++this.slow >= 8) { this.slow = 0; if (this.R.detailCut < 2) this.R.detailCut++; else if (this.grid > 64) this.grid = Math.max(64, Math.round(this.grid * 0.75)); this.lowered = performance.now(); } }
+    else if (ms < 13) { this.slow = Math.max(0, this.slow - 1); if (this.lowered && performance.now() - this.lowered > 15000 && this.R.detailCut > 0) { this.R.detailCut--; this.lowered = performance.now(); } }
+  }
+  /** frame statistics of the animated frames: {n, p50, p95, max, over16} ms */
+  frameStats() { const a = [...this.frameMs].sort((x, y) => x - y); if (!a.length) return null; const q = (p) => a[Math.min(a.length - 1, Math.floor(p * a.length))]; return { n: a.length, p50: +q(0.5).toFixed(1), p95: +q(0.95).toFixed(1), max: +a[a.length - 1].toFixed(1), over16: a.filter((x) => x > 16.9).length }; }
   #settle(it) {
     it.done = true;
     const F = this.F, W = it.crop.w * F, H = it.crop.h * F, R = this.R, now = performance.now();

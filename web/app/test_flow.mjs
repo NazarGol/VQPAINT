@@ -47,6 +47,8 @@ const inside = (v, n) => { const m = n._mask; let best = null, bd = 1e9; for (le
 const s0 = await A.evaluate((insideSrc) => { const inside = eval(insideSrc); const v = window.__vqpaint, n = v.strokes[0]; v.strokeAt(0, 0); const c = inside(v, n); return { blot: !!n.blot, path: n.path ? n.path.length : 0, cells: !!c && v.strokeAt(c[0], c[1]) === n, seed: n.blot && n.blot.seed, size: n.blot && n.blot.size, settledFx: !v.reveal.active, lobes: n.blot && n.blot.lobes, tier: n.blot && n.blot.tier }; }, inside.toString());
 check(s0.blot && s0.path > 8 && s0.cells, `stroke carries its blot (seed ${s0.seed}, size ${s0.size} tokens, ${s0.lobes} lobes, tier ${s0.tier}) and an outline of ${s0.path} points; the ink is the hit shape`);
 check(s0.settledFx, 'queue painted the second note; reveals ended');
+const fr = await A.evaluate(() => window.__vqpaint.frameStats());
+check(fr && fr.p95 <= 34, `page frames while the ink animated and the engine searched (worker): p50 ${fr && fr.p50} ms, p95 ${fr && fr.p95} ms, max ${fr && fr.max} ms over ${fr && fr.n} frames`);
 await A.evaluate(() => window.__vqpaint.view.fit({ x: 118, y: 118, w: 24, h: 24 }, 1.2, 24)); await A.waitForTimeout(400);
 await A.screenshot({ path: path.join(outDir, 'flow_two_strokes.png') });
 // 5. tap a stroke -> its note opens; tap empty -> closes

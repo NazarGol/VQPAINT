@@ -98,25 +98,33 @@ void main(){
 }`;
 // render: dye -> mask with rough edges and holes; dye colour, texture reveal, or raw mask
 const FRAG_RENDER = `precision highp float; varying vec2 vUv; uniform sampler2D uDye, uTex; uniform vec2 uRes; uniform vec4 uRect;   // crop px rect of the sim grid (x,y,w,h)
-uniform float uThr, uRough, uRoughF, uSeed, uSoft, uTime, uRipple, uPulse, uClarity, uAlpha; uniform int uMode, uHoles; uniform vec3 uHolev[4]; uniform vec3 uColor; uniform vec4 uTexRect; uniform vec2 uCenter;
+uniform float uThr, uRough, uRoughF, uSeed, uSoft, uTime, uRipple, uPulse, uClarity, uAlpha, uGridN, uOct, uPx; uniform int uMode, uHoles; uniform vec3 uHolev[4]; uniform vec3 uColor; uniform vec4 uTexRect; uniform vec2 uCenter;
 ${NOISE}
+float fbmN(vec2 p, float oct){ float v = 0.0, a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { if (float(i) >= oct) break; v += a * vnoise(p); s += a; p = p * 2.03 + vec2(17.1, 9.7); a *= 0.5; } return v / s; }
 void main(){
   vec2 px = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
   vec2 g = (px - uRect.xy) / uRect.zw;                 // sim grid uv
-  float dye = (g.x < 0.0 || g.y < 0.0 || g.x > 1.0 || g.y > 1.0) ? 0.0 : texture2D(uDye, g).r;
-  float rough = uRough * 0.35 * (fbm(g * uRoughF * 4.0 + uSeed) - 0.5) + uRough * 0.12 * (vnoise(g * uRoughF * 14.0 + uSeed * 3.0) - 0.5);
+  // the dye field is sampled with a smoothed bilinear kernel: the contour is a smooth curve at any zoom, not the grid's polygon
+  vec2 st = g * uGridN - 0.5; vec2 i0 = floor(st); vec2 f = fract(st); f = f * f * (3.0 - 2.0 * f);
+  float dye = (g.x < 0.0 || g.y < 0.0 || g.x > 1.0 || g.y > 1.0) ? 0.0 : texture2D(uDye, (i0 + f + 0.5) / uGridN).r;
+  float dist = length(px - uCenter);
+  float ripple = 0.0;
+  if (uRipple >= 0.0) { float rr = (6.0 + 90.0 * (1.0 - pow(1.0 - uRipple, 3.0))) * uPx; ripple = 0.7 * exp(-pow((dist - rr) / (2.5 * uPx), 2.0)) * (1.0 - uRipple); }
+  if (dye < uThr - 0.5 && ripple < 0.002) discard;     // far outside: nothing to shade
+  float band = 1.0 - step(0.45, abs(dye - uThr));      // the edge band gets the fine noise; the body only its cloud
+  float rough = band * (uRough * 0.35 * (fbmN(g * uRoughF * 4.0 + uSeed, uOct) - 0.5) + uRough * 0.12 * (vnoise(g * uRoughF * 14.0 + uSeed * 3.0) - 0.5));
   float s = dye + rough;
   for (int i = 0; i < 4; i++) { if (i >= uHoles) break; vec2 d = g - uHolev[i].xy; s -= 0.9 * exp(-dot(d, d) / (uHolev[i].z * uHolev[i].z)); }
   float mask = smoothstep(uThr - uSoft, uThr + uSoft, s);
   float body = smoothstep(uThr, uThr + 0.35, s);
-  float dens = mask * (0.6 + 0.4 * body) * (0.72 + 0.5 * fbm(g * 7.0 + uSeed + uTime * 0.05));
-  float dist = length(px - uCenter);
-  if (uRipple >= 0.0) { float rr = 6.0 + 90.0 * (1.0 - pow(1.0 - uRipple, 3.0)); dens += 0.7 * exp(-pow((dist - rr) / 2.5, 2.0)) * (1.0 - uRipple); }
+  float dens = mask * (0.6 + 0.4 * body) * (0.72 + 0.5 * fbmN(g * 7.0 + uSeed + uTime * 0.05, min(uOct, 3.0)));
+  dens += ripple;
   dens += 0.35 * uPulse * (1.0 - smoothstep(0.0, 0.12, abs(s - uThr))) * mask;
   dens = clamp(dens, 0.0, 1.0);
   if (uMode == 2) { gl_FragColor = vec4(mask, dens, 0.0, 1.0); return; }
   if (uMode == 1) { vec2 uv = (px - uTexRect.xy) / uTexRect.zw; vec4 tf = texture2D(uTex, uv + 0.02 * vec2(fbm(g * 3.0 + uTime * 0.1) - 0.5, fbm(g * 3.0 + 7.0 - uTime * 0.1) - 0.5) * (1.0 - uClarity), 4.0);
     vec4 tc = texture2D(uTex, uv, 0.0); float ta = mix(tf.a, tc.a, uClarity); vec3 col = mix(mix(tf.rgb, uColor, 0.35 * (1.0 - uClarity)), tc.rgb, uClarity);
+    if (dens <= 0.002) discard;
     float a = clamp(mask * uAlpha * (0.6 + 0.4 * uClarity) + (dens - mask * 0.5) * 0.5 * (1.0 - uClarity), 0.0, 1.0) * ta; gl_FragColor = vec4(col * a, a); return; }
   float rim = smoothstep(0.25, 0.0, abs(s - uThr)) * mask;
   vec3 col = uColor * (0.72 + 0.3 * dens) + vec3(0.18, 0.14, 0.2) * rim + vec3(0.1) * dens * dens;
@@ -130,15 +138,21 @@ export class InkGL {
     const gl = canvas.getContext('webgl', { premultipliedAlpha: true, alpha: true, antialias: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
     if (!gl) throw new Error('no WebGL');
     this.gl = gl;
+    this.#build();
+    this.tex = null; this.scale = 1; this.detailCut = 0; this.lost = false; this.onRestore = null;
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; this.lostAt = performance.now(); });
+    canvas.addEventListener('webglcontextrestored', () => { try { this.#build(); this.lost = false; this.onRestore?.(); } catch (err) { console.warn('WebGL restore failed', err); } });
+  }
+  /** (re)compile the programs and the quad: the constructor and a context restore */
+  #build() {
+    const gl = this.gl;
     const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error('shader: ' + gl.getShaderInfoLog(s)); return s; };
     const vs = sh(gl.VERTEX_SHADER, VERT);
     const prog = (fs) => { const p = gl.createProgram(); gl.attachShader(p, vs); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('program: ' + gl.getProgramInfoLog(p)); const u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); for (let i = 0; i < n; i++) { const info = gl.getActiveUniform(p, i); const name = info.name.replace(/\[0\]$/, ''); u[name] = gl.getUniformLocation(p, info.name); if (info.size > 1) for (let k = 0; k < info.size; k++) u[`${name}[${k}]`] = gl.getUniformLocation(p, `${name}[${k}]`); } return { p, u }; };
     this.vel = prog(FRAG_VEL); this.dye = prog(FRAG_DYE); this.render = prog(FRAG_RENDER);
     const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     for (const pr of [this.vel, this.dye, this.render]) { const loc = gl.getAttribLocation(pr.p, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0); }
-    gl.disable(gl.BLEND);
-    this.tex = null; this.scale = 1; this.detailCut = 0; this.lost = false;
-    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; });
+    gl.disable(gl.BLEND); this.tex = null;
   }
   makeTarget(n) { const gl = this.gl, t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, n, n, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); const fb = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); gl.clearColor(0.5, 0.5, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.bindFramebuffer(gl.FRAMEBUFFER, null); return { t, fb, n }; }
   freeTarget(x) { if (!x) return; this.gl.deleteTexture(x.t); this.gl.deleteFramebuffer(x.fb); }
@@ -274,7 +288,8 @@ export class InkDrop {
     gl.uniform2f(u.uRes, ink.canvas.width, ink.canvas.height);
     gl.uniform4f(u.uRect, (this.rect.x - offset[0]) * k, (this.rect.y - offset[1]) * k, this.rect.w * k, this.rect.h * k);
     const t = this.age(now), pulse = this.settled ? Math.max(0, 1 - (now - this.settledAt) / 420) * Math.sin(Math.min(1, (now - this.settledAt) / 420) * Math.PI) : 0;
-    gl.uniform1f(u.uThr, 0.42); gl.uniform1f(u.uRough, P.roughness); gl.uniform1f(u.uRoughF, P.roughFreq); gl.uniform1f(u.uSeed, P.fseed); gl.uniform1f(u.uSoft, 0.03 + 0.12 * P.viscosity); gl.uniform1f(u.uTime, t);
+    gl.uniform1f(u.uThr, 0.42); gl.uniform1f(u.uRough, P.roughness); gl.uniform1f(u.uRoughF, P.roughFreq); gl.uniform1f(u.uSeed, P.fseed); gl.uniform1f(u.uSoft, (0.03 + 0.12 * P.viscosity) * 0.5); gl.uniform1f(u.uTime, t);
+    gl.uniform1f(u.uGridN, this.grid); gl.uniform1f(u.uOct, Math.max(2, 4 - (ink.detailCut || 0))); gl.uniform1f(u.uPx, k);
     this.ripples = this.ripples.filter((r) => now - r.t < 500);
     const rip = this.ripples.length ? this.ripples[this.ripples.length - 1] : null;
     gl.uniform1f(u.uRipple, this.reduce || this.settled ? -1 : rip ? (now - rip.t) / 500 : (t < 0.5 ? t / 0.5 : -1)); gl.uniform1f(u.uPulse, pulse); gl.uniform1f(u.uClarity, clarity); gl.uniform1f(u.uAlpha, alpha); gl.uniform1i(u.uMode, mode);
@@ -286,6 +301,15 @@ export class InkDrop {
     gl.disable(gl.BLEND); gl.disable(gl.SCISSOR_TEST);
   }
   free() { if (this.freed) return; this.freed = true; for (const x of [...this.vel, ...this.dyeT]) this.ink.freeTarget(x); }
+  /** after a WebGL context restore: new textures, the sim replayed to where it was (capped at 3 s of steps) */
+  rebuild(now = performance.now()) {
+    if (this.freed) return;
+    const ink = this.ink; this.vel = [ink.makeTarget(this.grid), ink.makeTarget(this.grid)]; this.dyeT = [ink.makeTarget(this.grid), ink.makeTarget(this.grid)];
+    for (const d of this.dyeT) { this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, d.fb); this.gl.clearColor(0, 0, 0, 1); this.gl.clear(this.gl.COLOR_BUFFER_BIT); } this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+    const age = Math.min(this.age(now), this.settled ? this.p.duration + 0.5 : 3), steps = Math.ceil(age * 30), wasSettled = this.settled; this.settled = false; this.born = now - age * 1000; this.last = this.born; for (const s of this.satState) s.fired = false;
+    for (let i = 0; i < steps; i++) this.step(this.born + (i + 1) * 33.4, 1 / 30);
+    this.last = now; if (wasSettled) { this.settled = true; this.settledAt = now - 1000; }
+  }
   toJSON() { const P = this.p; return { x: Math.round(this.x * 10) / 10, y: Math.round(this.y * 10) / 10, seed: this.seed, size: Math.round(P.size), speed: +P.speed.toFixed(3), viscosity: +P.viscosity.toFixed(3), duration: +P.duration.toFixed(2), lobes: P.lobes, tendrils: P.tend.length, satellites: P.sats.length, holes: P.holes.length, twin: !!P.twin, stretch: +P.stretch.toFixed(2), roughness: +P.roughness.toFixed(2), tier: P.tier }; }
 }
 export function createInk(canvas) { return new InkGL(canvas); }

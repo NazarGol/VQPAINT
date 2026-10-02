@@ -1,6 +1,6 @@
 // Room page orchestrator: models, room connection, shapes → notes → stroke layers, view, export hooks. UI lives in components/.
 import { CONFIG } from './config.js';
-import { webgpuInfo } from '../lib/models.js';
+import { webgpuInfo, setModelMirror } from '../lib/models.js';
 import { F, expandRegion, readRegion } from '../lib/decoder.js';
 import { Engine } from '../lib/engine/client.js';
 import { maskCells, maskToString, maskFromString, maskFromCells, maskHas, maskTouches, noisyMask, discMask } from '../lib/mask.js';
@@ -247,7 +247,9 @@ function strokeAt(gx, gy) {
   for (let i = strokes.length - 1; i >= 0; i--) { const s = strokes[i]; s._mask ||= maskFromString(s.mask); if (maskHas(s._mask, x, y)) return s; }
   for (let i = strokes.length - 1; i >= 0; i--) { const s = strokes[i], m = s._mask; if (x < m.x - 1 || y < m.y - 1 || x > m.x + m.w || y > m.y + m.h) continue;   // a hole or a gap inside the ink still counts
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (maskHas(m, x + dx, y + dy)) return s; }
-  return null;
+  let best = null, bd = Infinity;   // where the note was written (the ink may have left a hole there): the nearest drop centre within its size
+  for (const s of strokes) { const b = s.blot; if (!b) continue; const d = Math.hypot(gx - b.x, gy - b.y); if (d <= (b.size || 3) * 1.3 && d < bd) { bd = d; best = s; } }
+  return best;
 }
 
 // ---------- scene ----------
@@ -505,9 +507,10 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     room?.sendNote(note);
     ok = true; scheduleSnapshot(); rememberThis();
   } catch (e) {
-    console.error(e); setStatus(t('status.paintFailed', { error: e.message }));
+    console.error(e); setStatus(engine.broken ? t(isPhone ? 'status.waitingDevice' : 'status.cannotPaint') : t('status.paintFailed', { error: e.message }), 8000);
     cells.forEach(([x, y], i) => (grid.tokens[y * grid.w + x] = before[i]));
-    reveal.cancel(jobId);
+    if (!reqId && !forId && room && !abort.signal.aborted) { drop = { ...drop, pendingId: jobId }; requestHelp(mask, text, points, realism, { parent, photo, lang: noteLang, drop, wait: true }); }   // keep the note: another device paints it
+    else reveal.cancel(jobId);
   } finally {
     try { wake?.release(); } catch (_) {}
     room?.paintEnd(jobId);
@@ -868,5 +871,5 @@ function tapPaint(x, y, text, realism = 0.6, hold = 0, extra = {}) { beginWrite(
   stats.autoStrokeMs = Math.round(performance.now() - t); stats.ua = navigator.userAgent; stats.caps = caps;
   try { await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(stats) }); } catch (_) {}
 })();
-window.__vqpaint = { get grid() { return grid; }, stats, strokes, caps, get ready() { return ready; }, get mode() { return mode; }, get modelsLoaded() { return modelsLoaded; }, ensureBrush, releaseBrush, get safeMode() { return safeMode; }, get name() { return myName; }, get decodeTimes() { return []; }, engine, canPaintHere, paintRegion, paintAt, lassoPaint, peers, get room() { return room; },
+window.__vqpaint = { get grid() { return grid; }, stats, strokes, caps, get ready() { return ready; }, get mode() { return mode; }, get modelsLoaded() { return modelsLoaded; }, ensureBrush, releaseBrush, get safeMode() { return safeMode; }, get name() { return myName; }, get decodeTimes() { return []; }, engine, canPaintHere, frameStats: () => reveal.frameStats(), paintRegion, paintAt, lassoPaint, peers, get room() { return room; },
   get painting() { return painting; }, othersPainting, myRequests, ensurePainter: ensureBrush, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, tapPaint, get queue() { return queue; }, reveal, beginWrite, strokeAt, react, mergeAt, autoPlace, get fresh() { return fresh; }, showMine, listRecent, get settings() { return roomSettings; }, scheduleSnapshot, sheets, importHighlights, pasteNotes, finishMeeting, makePostcard, exportPrint, showList, postSettings, enqueueStroke, get menu() { return menu; }, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; }, startReply, openNote, get replyTo() { return replyTo; }, threadOf, maskTouches: (a, b) => maskTouches(a, b), lassoMask: (pts) => lassoMask(pts, grid.w, grid.h), readPhoto, get lang() { return lang; } };
