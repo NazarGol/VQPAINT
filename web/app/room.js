@@ -315,7 +315,7 @@ async function startStroke(mask, text, points = null, realism = 0.6, extra = {})
   const parent = extra.parent && strokes.some((s) => s.id === extra.parent) ? extra.parent : null;
   const noteLang = detectLanguage(text);
   const drop = extra.drop || { x: mask.x + mask.w / 2, y: mask.y + mask.h / 2, size: Math.max(mask.w, mask.h) / 2, seed: (Math.random() * 2 ** 31) | 0 };   // lasso-era callers: a drop at the mask's centre
-  if (helpersOn && (forceNoPaint || lowMem || !caps.gpu) && (bestHelper() || (room && room.status !== 'open'))) return requestHelp(mask, text, points, realism, { parent, photo: extra.photo || null, lang: noteLang, drop });   // phones, no-WebGPU and forced devices ask (also while the fresh room is still connecting: whoever is there claims it); desktops paint themselves
+  if (helpersOn && (forceNoPaint || (!useTiny && (lowMem || !caps.gpu))) && (bestHelper() || (room && room.status !== 'open'))) return requestHelp(mask, text, points, realism, { parent, photo: extra.photo || null, lang: noteLang, drop });   // phones, no-WebGPU and forced devices ask (also while the fresh room is still connecting: whoever is there claims it); desktops paint themselves
   if (!canPaintHere()) return requestHelp(mask, text, points, realism, { parent, photo: extra.photo || null, lang: noteLang, drop, wait: true });   // a weak phone: the note waits on the server until a device that can paint opens the room
   const photo = extra.photo || null;
   if (photo && lowMem) { try { await encodePhotoTokens(photo); } catch (e) { console.warn('photo', e); setStatus(t('status.paintFailed', { error: e.message }), 6000); return; } }
@@ -744,6 +744,8 @@ async function boot() {
   if (tgMode) { try { const sc = document.createElement('script'); sc.src = 'https://telegram.org/js/telegram-web-app.js'; sc.onload = () => { try { const wa = window.Telegram?.WebApp; wa?.ready(); wa?.expand(); if (wa?.initDataUnsafe?.user && !localStorage.getItem('vqpaint.name')) { const u = wa.initDataUnsafe.user; myName = (u.first_name || u.username || myName).slice(0, 24); localStorage.setItem('vqpaint.name', myName); } } catch (_) {} }; document.head.appendChild(sc); } catch (_) {} }
   const gpu = params.get('nogpu') === '1' ? null : await webgpuInfo();
   beacon('gpu', { gpu }); caps.gpu = !!gpu;
+  if (useTiny) { engine = new LightEngine(lightest ? { mode: 'clip', clip: 'clip_vision_i8', scorer: null, text: 'S' } : { mode: params.get('mode') || 'prefilter' }); stats.engine = 'tiny'; stats.engineMode = lightest ? 'lightest (int8 CLIP, no scorer)' : (params.get('mode') || 'prefilter'); stats.crashes = crashes; }
+  mountDebugLine($('roombar'), () => { const secs = stats.strokeSeconds[stats.strokeSeconds.length - 1]; return { engine: (stats.engine || 'ort') + (stats.engineVariant ? ' ' + stats.engineVariant : ''), mode: stats.engineMode || ep || '-', crashes: stats.crashes ?? 0, 'last stroke': secs ? `${stats.lastTries} tries in ${secs.toFixed(1)} s (${(stats.lastTries / secs).toFixed(1)}/s)` : '-', 'decode ms': stats.fullDecodeMs ?? '-', memory: memoryInfo() }; });
   if (!gpu && !lowMem && !forceNoPaint) setStatus(t('msg.noGpuShort'), 7000);   // a quiet line, never a box over the canvas
   ep = gpu ? 'webgpu' : 'wasm';
   caps.helper = (useTiny || !!gpu) && !lowMem && !forceNoPaint && helpersOn;   // a desktop with WebGPU can paint for phones (loads models when it claims)
