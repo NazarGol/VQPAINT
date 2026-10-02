@@ -32,7 +32,7 @@ for f in bank.json bank_tokens_4.u16 bank_tokens_6.u16 bank_tokens_8.u16 bank_to
 for f in encoder.onnx encoder.bin encoder.json; do sync_file "$WEB/models/pack/$f" "models/pack/$f"; done     # photo encoder (loaded only when a note has a photo)
 sync_file "$WEB/models/encoder_int8.onnx" models/encoder_int8.onnx
 for f in metaphors.json metaphors.f16; do sync_file "$WEB/models/metaphors/$f" "models/metaphors/$f"; done
-for f in "$WEB"/models/tiny/*.bin "$WEB"/models/tiny/*.json; do [ -f "$f" ] && sync_file "$f" "models/tiny/$(basename "$f")"; done   # light engine (tiny decoder / scorer / text)
+for f in "$WEB"/models/tiny/*.bin "$WEB"/models/tiny/*.json; do [ -f "$f" ] && sync_file "$f" "models/tiny/$(basename "$f")"; done   # light engine (tiny decoder / CLIP / text)
 touch .nojekyll
 echo "vqpaint $(git -C "$REPO_ROOT" rev-parse --short HEAD) $(date -u +%FT%TZ)" > VERSION.txt
 git add -A

@@ -3,6 +3,7 @@ import { CONFIG } from './config.js';
 import { webgpuInfo, setModelMirror } from '../lib/models.js';
 import { F, expandRegion, readRegion } from '../lib/decoder.js';
 import { Engine } from '../lib/engine/client.js';
+import { LightEngine } from '../lib/engine/light.js';
 import { maskCells, maskToString, maskFromString, maskFromCells, maskHas, maskTouches, noisyMask, discMask } from '../lib/mask.js';
 import { t, lang, setLang } from './i18n.js';
 import { lassoMask } from '../lib/lasso.js';
@@ -52,16 +53,16 @@ let safeMode = params.get('safe') === '1' || (lastBoot === 'loading' || lastBoot
 if (safeMode) localStorage.setItem('vqpaint.crashes', String((+localStorage.getItem('vqpaint.crashes') || 0) + 1));
 sessionStorage.setItem('vqpaint.boot', 'loading');
 const lowMem = isPhone || safeMode || params.get('lowmem') === '1';
-let useTiny = params.get('engine') === 'tiny';   // the light engine (tiny decoder + token scorer, WebGL2): default on phones and without WebGPU, ?engine=ort forces the ONNX path   // release models after every stroke, small caches, 1 wasm thread
+let useTiny = params.get('engine') === 'tiny';   // the light engine (tiny decoder + MobileCLIP as WebGL2 shaders, no ONNX Runtime): default on phones and without WebGPU, ?engine=ort forces the ONNX worker   // release models after every stroke, small caches, 1 wasm thread
 
 // ---------- state ----------
 let grid = null;                  // {w, h, tokens} from the room (256x256 by default), the search context
 let roomBlank = 0;                // the room's blank token (set by its creator)
 let ready = false, room = null, ep = 'webgpu', decoder = null, clip = null, painter = null, blankToken = 0, layers = null, modelsLoaded = false, mode = 'view';
-const engine = new Engine();                              // the models and the search live in a worker; the page only animates
+let engine = new Engine();                              // the models and the search live in a worker; the page only animates
 const deviceMemory = navigator.deviceMemory || 0;         // Chrome/Android: 0.25…8 (power of 2, rounded down); Safari: undefined
 /** can this device paint on its own without risking its memory? phones only with ≥ 8 GB reported (Android) or on iOS in non-safe mode */
-function canPaintHere() { if (forceNoPaint || safeMode || engine.broken) return false; if (!lowMem) return true; if (!caps.gpu) return false; if (deviceMemory) return deviceMemory >= 8; return isIOS; }
+function canPaintHere() { if (forceNoPaint || safeMode || engine.broken) return false; if (useTiny) return true; if (!lowMem) return true; if (!caps.gpu) return false; if (deviceMemory) return deviceMemory >= 8; return isIOS; }
 const isIOS = /iP(hone|ad|od)/.test(navigator.platform) || (navigator.userAgent.includes('Mac') && navigator.maxTouchPoints > 1);
 let roomSettings = {};                                   // kind (book / meeting / diary / group), title, author, chapters, anon, private
 const tgMode = params.get('tg') === '1';                 // opened inside Telegram's Mini App webview
@@ -167,7 +168,7 @@ document.addEventListener('pointerdown', (e) => { if (performance.now() - noteOp
 const setStatus = (s, ms) => toast.status(s, ms);
 const peerName = (id) => (id === room?.id ? myName : peers.get(id)?.name || t('someone'));
 // ---------- write first: a tap on empty space is where the next note lands; the ink is alive from that moment ----------
-const MAX_R = lowMem ? 4 : 12, BASE_R = lowMem ? 3 : 4.5;           // radius in tokens; phones keep strokes small enough to decode fast
+const MAX_R = useTiny ? 8 : lowMem ? 4 : 12, BASE_R = useTiny ? 4 : lowMem ? 3 : 4.5;           // radius in tokens; phones keep strokes small enough to decode fast
 const dropRect = (d) => ({ x: d.x - d.size, y: d.y - d.size, w: d.size * 2, h: d.size * 2 });
 let held = null;                                                      // the drop growing under a held finger, before the tap completes
 /** the sim rect of a drop: ~5× its size (the ink's dynamics depend on the drop-to-rect ratio, so this follows the size), plus the search margin */
@@ -342,7 +343,7 @@ function react(note, kind) {
 }
 function startReaction(job) {
   const note = strokes.find((s) => s.id === job.noteId); if (!note) { processQueue(); return; }
-  if (helpersOn) { const h = bestHelper(); if (h && (forceNoPaint || lowMem || !caps.gpu)) return requestReaction(note, job.kind); }
+  if (helpersOn) { const h = bestHelper(); if (h && (forceNoPaint || (!useTiny && (lowMem || !caps.gpu)))) return requestReaction(note, job.kind); }
   if (forceNoPaint) { setStatus(t('status.noPaint'), 6000); processQueue(); return; }
   ensureBrush().then(() => applyReaction(note, job.kind, { author: myName })).catch((e) => { setStatus(t('status.brushFailed', { error: e.message }), 8000); processQueue(); });
 }
@@ -390,12 +391,12 @@ async function applyReaction(note, kind, { author = myName, reqId = null } = {})
       if (ring.length < 2) { for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) { const gx = Math.round(b.x) + dx, gy = Math.round(b.y) + dy; if (!maskHas(mask, gx, gy) && gx >= 0 && gy >= 0 && gx < grid.w && gy < grid.h) ring.push([gx, gy]); } }
       const rmask = maskFromCells(ring, grid.w);
       grown = rmask;
-      await painter.paint({ grid, mask: rmask, target: base, seconds: secs, margin: MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, seeds: 3, sources: 1, patch: 3, growEdge: 0.95, temperature: 0.03, mutation: 0.08, anneal: 0.002, bankPatch: 0.15, parent: cur, parentMix: 0.7, onProgress });
+      await painter.paint({ grid, mask: rmask, target: base, seconds: secs, margin: useTiny ? 2 : MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, seeds: 3, sources: 1, patch: 3, growEdge: 0.95, temperature: 0.03, mutation: 0.08, anneal: 0.002, bankPatch: 0.15, parent: cur, parentMix: 0.7, onProgress });
       mask = unionMasks(mask, rmask); crop = expandRegion(grid, { x: mask.x, y: mask.y, w: mask.w, h: mask.h }, MARGIN);
     } else {
       const mood = await clip.embedText(kind === 'fire' ? 'warm glowing orange and red light, sunlit, fire' : 'cold icy blue and white light, frost, winter');
       target = mixEmb(base, mood, 0.45);
-      await painter.paint({ grid, mask, target, seconds: secs, margin: MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, seeds: 2, sources: 0, patch: 4, growEdge: 0.3, temperature: 0.02, mutation: 0.06, anneal: 0.002, bankPatch: 0, parent: cur, parentMix: 1.0, onProgress });
+      await painter.paint({ grid, mask, target, seconds: secs, margin: useTiny ? 2 : MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, seeds: 2, sources: 0, patch: 4, growEdge: 0.3, temperature: 0.02, mutation: 0.06, anneal: 0.002, bankPatch: 0, parent: cur, parentMix: 1.0, onProgress });
     }
     const tokens = readRegion(grid, crop), img = await decoder.decode(tokens, crop.h, crop.w);
     note.v = (note.v || 0) + 1; note.reactions = { ...(note.reactions || {}) }; note.reactions[kind] = [...(note.reactions[kind] || []), author];
@@ -410,7 +411,7 @@ async function applyReaction(note, kind, { author = myName, reqId = null } = {})
     stats.reactions = (stats.reactions || 0) + 1; ok = true; haptic('settle'); scheduleSnapshot();
     if (kind === 'grow') setStatus(t('react.grew'), 3000);
   } catch (e) { console.error(e); setStatus(t('status.paintFailed', { error: e.message })); if (rv) reveal.cancel(jobId); hiddenLayers.delete(note.id); }
-  finally { room?.paintEnd(jobId); if (reqId) room?.paintDone(reqId, ok); painting = null; updateScene(); renderPeers(); if (lowMem) await releaseBrush(); setTimeout(claimNextRequest, 300); processQueue(); }
+  finally { room?.paintEnd(jobId); if (reqId) room?.paintDone(reqId, ok); painting = null; updateScene(); renderPeers(); if (lowMem && !useTiny) await releaseBrush(); setTimeout(claimNextRequest, 300); processQueue(); }
 }
 /** cells of `mask` that older strokes own, grouped by stroke (biggest first): {note, mask} per zone */
 function overlapZones(mask, exclude) {
@@ -447,7 +448,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
       if (!metaphors) { try { metaphors = await Metaphors.load(M + 'metaphors/'); } catch (e) { console.warn('metaphors', e); } }
       if (metaphors) { const b = metaphors.blend(target); target = b.target; stats.lastMetaphors = b.used; stats.lastMetaphorWeight = b.weight; }
     } else stats.lastMetaphors = null;
-    if (photo && photo.chw) {   // the photo guides CLIP too (light engine: the shader MobileCLIP image tower): target = text + photo embedding (more with realism)
+    if (photo && photo.chw) {   // the photo guides CLIP too: target = text + photo embedding (more with realism)
       const [pe] = await clip.embedImages(photo.chw.length === 3 * clip.size * clip.size ? photo.chw : imageToCHW(await dataUrlToImage(photo.data), clip.size, clip.size), 1);
       const w = 0.3 + 0.25 * realism, mixed = new Float32Array(target.length); let n = 0;
       for (let k = 0; k < mixed.length; k++) { mixed[k] = (1 - w) * target[k] + w * pe[k]; n += mixed[k] * mixed[k]; }
@@ -485,7 +486,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
         const ot = (await engine.embedLong(otherText)).target, mixed = new Float32Array(target.length); let n = 0;
         for (let k = 0; k < mixed.length; k++) { mixed[k] = 0.5 * target[k] + 0.5 * ot[k]; n += mixed[k] * mixed[k]; } n = Math.sqrt(n) + 1e-8; for (let k = 0; k < mixed.length; k++) mixed[k] /= n;
         setStatus(t('note.mergeHint'), 4000);
-        await painter.paint({ grid, mask: z.mask, target: mixed, seconds: Math.min(4, Math.max(2, rp.seconds * 0.4)), margin: MARGIN, blankToken: roomBlank, signal: abort.signal, seeds: 3, sources: 1, patch: 3, growEdge: 0.6, mutation: 0.08, anneal: 0.002, bankPatch: 0.2, parent: { crop: res.crop, tokens: res.tokens }, parentMix: 0.5 });
+        await painter.paint({ grid, mask: z.mask, target: mixed, seconds: Math.min(4, Math.max(2, rp.seconds * 0.4)), margin: useTiny ? 2 : MARGIN, blankToken: roomBlank, signal: abort.signal, seeds: 3, sources: 1, patch: 3, growEdge: 0.6, mutation: 0.08, anneal: 0.002, bankPatch: 0.2, parent: { crop: res.crop, tokens: res.tokens }, parentMix: 0.5 });
         merges.push({ with: z.note.id, cells: maskToString(z.mask) });
       }
       if (merges.length) { res.tokens = readRegion(grid, res.crop); res.image = await decoder.decode(res.tokens, res.crop.h, res.crop.w); reveal.setImage(jobId, res.image); }
