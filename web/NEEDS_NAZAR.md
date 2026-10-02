@@ -16,16 +16,12 @@ Check: `curl https://vqpaint-rooms.vqpaint-rooms.workers.dev/tg/health` → `con
 ## Pick the reveal effect
 Ink is in (procedural fluid ink, 30-blob grid and circularity numbers in the report). Tune it on https://nazargol.github.io/VQPAINT/app/effects.html → "copy settings" → paste me the line; it goes into `app/config.js` (`CONFIG.ink`).
 
-## Test on the phones (round 7), laptop open in the same room
-Live: https://nazargol.github.io/VQPAINT/ (same links as before). Minimum phones: iPhone XR / 11 / SE 2 (iOS 15+), 3 GB 2020 Android.
-1. **Ink**: tap → the ink lands at once (ripple), a small living drop waits while you write and moves a little with each keystroke → paint → it bursts into the full stroke; close the box without painting → it dissolves. Every stroke should be a clearly different, non-round blot (lobes, filaments, droplets, sometimes a hole or two bodies). Hold the finger before lifting it for more ink; drag across the spreading ink to stir it. The lab for tuning: https://nazargol.github.io/VQPAINT/app/effects.html ("copy settings" → send me the line).
-2. **Alone**: close the laptop's tab, write a note. Expected: "preparing the brush… N%", then the stroke paints on the phone (slower; an iOS 15 phone without WebGPU takes minutes per stroke).
-3. **Overlap**: write a note on top of an existing stroke. Expected: the overlap paints toward both; tapping it shows "A × B".
-4. **Reactions**: open a note → 🔥 🧊 🌱. Expected: the stroke actually changes (warmer / colder / grows a little into its neighbours) for everyone in the room; a second tap of the same reaction is refused.
-5. **Book / meeting / diary**: from the home page create each kind. Book: chapter picker, ⋯ → import highlights (paste a Kindle "My Clippings.txt"), ⋯ → all notes (grouped), ⋯ → print: bookplate. Meeting: notes anonymous unless signed, ⋯ → paste notes, ⋯ → finish meeting (PNG + PDF + share sheet). Diary: no invite pill, ⋯ → calendar, tap a day, export this month.
-6. **Postcard**: ⋯ → make a postcard → pick notes → PDF (2 pages, A6 with bleed). Open it on the phone: Ukrainian text must render.
-7. Tell me the phone model, OS version, and whether anything stuttered or reloaded.
-
+## Firefox on the phone: 5-step manual check (until remote debugging is possible)
+1. Open https://nazargol.github.io/VQPAINT/ in Firefox: the canvas must appear within 2 s with the hint "tap anywhere and write a thought" and nothing over it.
+2. Tap, write a name and a note, tap "paint": the ink lands at once and stays alive while you type; after "paint" it bursts. With a laptop in the room the painting appears in ~10 s; without one you get "this phone cannot paint yet; the note waits for a laptop in this room" and the note is painted later when a laptop opens the room.
+3. Tap the stroke: the note opens; tap elsewhere: it closes. Drag and pinch: smooth, no stutter while the ink animates.
+4. ⋯ → my paintings → the room is listed with a thumbnail; "new painting" opens a fresh canvas.
+5. Note the phone model, Android version, Firefox version, and whether the tab ever crashed or reloaded.
 
 ## Connect the Android phone for real-device testing (nothing is visible on USB right now)
 1. Plug the phone into the Mac with a data cable (a charge-only cable shows nothing; `system_profiler SPUSBDataType` lists zero USB devices at the moment).

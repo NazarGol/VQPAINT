@@ -41,6 +41,7 @@ export function attachGestures(el, view, { onTap = null, onHoldStart = null, onH
   const local = (ev) => { const r = el.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; };
   const endHold = (ev) => { clearTimeout(holdTimer); holdTimer = null; if (holdRaf) { cancelAnimationFrame(holdRaf); holdRaf = 0; } if (holding) { holding = false; onHoldEnd?.(ev); } };
   el.addEventListener('pointerdown', (ev) => {
+    if (window.__gestureLog) window.__gestureLog.push(['down', ev.pointerType, ev.isPrimary]);
     stopMomentum();
     pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
     try { el.setPointerCapture(ev.pointerId); } catch (_) {}   // WebKit throws for touch pointers
@@ -66,6 +67,7 @@ export function attachGestures(el, view, { onTap = null, onHoldStart = null, onH
     if (moved) { const now = performance.now(), dt = Math.max(1, now - vel.t); vel.vx = 0.7 * vel.vx + 0.3 * dx / dt; vel.vy = 0.7 * vel.vy + 0.3 * dy / dt; vel.t = now; view.panBy(dx, dy); }
   });
   const up = (ev) => {
+    if (window.__gestureLog) window.__gestureLog.push(['up', ev.type, moved, holding]);
     pointers.delete(ev.pointerId);
     if (pointers.size < 2) pinch = null;
     if (!start) return;

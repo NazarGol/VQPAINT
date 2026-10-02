@@ -16,14 +16,14 @@ const browser = await chromium.launch({ channel: 'chromium', headless: true, arg
 const fails = []; const check = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails.push(m); };
 // 1. UI language follows the browser language
 const uk = await (await browser.newContext({ locale: 'uk-UA', viewport: { width: 1100, height: 760 } })).newPage();
-await uk.goto(`${base}/app/index.html`); await uk.waitForFunction(() => /room\.html\?r=/.test(location.href) && window.__vqpaint && window.__vqpaint.ready, null, { timeout: 60000 });
+await uk.goto(`${base}/app/index.html`); await uk.waitForFunction(() => /[?&]r=/.test(location.href) && window.__vqpaint && window.__vqpaint.ready, null, { timeout: 60000 });
 check((await uk.evaluate(() => document.getElementById('hint').textContent)) === 'торкніться будь-де і напишіть думку' && (await uk.evaluate(() => window.__vqpaint.fresh)), 'the site opens straight onto a fresh canvas, hint in Ukrainian for a uk-UA browser');
 await uk.goto(url + '&nopaint=1'); await uk.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready, null, { timeout: 120000 });
 check((await uk.evaluate(() => document.querySelector('[data-invite]').textContent)) === 'запросити' && (await uk.evaluate(() => document.documentElement.lang)) === 'uk', 'room UI in Ukrainian (invite pill, html lang)');
 await uk.evaluate(() => { document.querySelector('#menu').click(); });
 await uk.screenshot({ path: path.join(outDir, 'ui_uk_menu.png') });
-check(/language: English/.test(await uk.evaluate(() => document.querySelector('[data-lang]').textContent)), 'menu offers the switch to English');
-await uk.evaluate(() => document.querySelector('[data-lang]').click());
+check(/language: English/.test(await uk.evaluate(() => document.querySelector('[data-item="lang"]').textContent)), 'menu offers the switch to English');
+await uk.evaluate(() => document.querySelector('[data-item="lang"]').click());
 await uk.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready && document.documentElement.lang === 'en', null, { timeout: 60000 });
 check((await uk.evaluate(() => document.querySelector('[data-invite]').textContent)) === 'invite', 'switch → English, remembered (localStorage)');
 await uk.evaluate(() => localStorage.removeItem('vqpaint.lang'));
@@ -56,7 +56,7 @@ const n3 = await P.evaluate(() => { const n = window.__vqpaint.strokes[2]; retur
 check(/snack/i.test(n3.en || '') && n3.lang === 'uk' && !n3.loaded, `phone note painted by the helper with translation "${n3.en}"; phone loaded no models`);
 // 4. PDF with Cyrillic text (embedded font)
 const dl = A.waitForEvent('download', { timeout: 180000 });
-await A.evaluate(() => { document.querySelector('#menu').click(); document.querySelector('[data-pdf]').click(); });
+await A.evaluate(() => { document.querySelector('#menu').click(); document.querySelector('[data-item="pdf"]').click(); });
 const d = await dl; const pdfPath = path.join(outDir, 'notes_uk.pdf'); await d.saveAs(pdfPath);
 const pdfBytes = fs.readFileSync(pdfPath);
 check(pdfBytes.length > 50000 && /NotoSans/.test(pdfBytes.toString('latin1')), `PDF embeds NotoSans for Cyrillic (${(pdfBytes.length / 1024).toFixed(0)} KB)`);

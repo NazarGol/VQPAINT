@@ -16,6 +16,13 @@
 6. **Replay** in the ⋯ menu (notes appear one by one) and **export replay video** (WebM in Chrome, MP4 in Safari untested).
 7. **Phones paint themselves**: packed int8 models (decoder 45 MB, CLIP 53 MB), decoder first, CLIP on first stroke; lasso capped at 14 tokens, 1.3× longer search; wake lock while painting; painter pauses in hidden tabs; CPU fallback with the int8 decoder finishes strokes; helpers off by default (⋯ menu). Realism slider (abstract ↔ realistic) in the note box replaces effort.
 
+## Round 8 (2026-10-02): quality — no home page, engine in a worker, sharp ink, no crashes
+- The site opens on a fresh canvas (room created on the first note), name inside the first note box, "my paintings" list, book / meeting / diary as ⋯ actions, no brand.
+- Engine in a worker: page frames p95 16.7 ms while a stroke searches (`app/test_flow.mjs`). Viewing downloads 116 KB; time to canvas 2.0 s (4G-ish) / 2.3 s (slow 3G) on the live site, Pixel 7 profile.
+- Ink at device resolution with an edge-band shader; adaptive sim detail; WebGL context restore (`tools/sharp_check.mjs`, `tools/context_loss_check.mjs`).
+- Weak phones never load the models: notes wait on the server for a capable device; Firefox no longer blocked by the WebGPU box (`tools/firefox_smoke.mjs`: canvas 0.7 s, stroke via helper 7.9 s, no errors).
+- Real phone: adb installed, phone not visible on USB yet — numbers above are emulation; see NEEDS_NAZAR.md.
+
 ## Round 7 (2026-10-02): procedural ink, merging, reactions, Telegram, book / meeting / diary, postcard
 - **Ink**: GPU fluid simulation per stroke, seeded lobes/tendrils/satellites/holes/twins/stretch/roughness, 70/25/5 weirdness; 50-stroke circularity mean 0.18 (none round); pre-simulated shape = the search region. Lab with a slider per parameter: https://nazargol.github.io/VQPAINT/app/effects.html . 30-grid `app/shots/ink/grid30.png`, moments `app/shots/ink/`, five strokes landing `app/shots/five_strokes_phone.mp4`.
 - **No laptop**: the phone paints itself (WebGPU or CPU) when no helper is online or the helper does not claim in 12 s (`test_phone.mjs --nohelper`).

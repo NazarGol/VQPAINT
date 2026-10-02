@@ -67,7 +67,8 @@ export function connectRoom(opts = {}) {
   };
   const setStatus = (s) => { if (s !== status) { status = s; emit(onStatus, s); } };
   const isOpen = () => !!ws && ws.readyState === WebSocket.OPEN;
-  const send = (obj) => { if (!isOpen()) return false; ws.send(JSON.stringify(obj)); return true; };
+  const outbox = [];              // messages sent before the socket is open (a fresh room's first note): delivered right after hello
+  const send = (obj) => { if (!isOpen()) { if (obj.t !== 'cursor') { outbox.push(obj); if (outbox.length > 64) outbox.shift(); } return false; } ws.send(JSON.stringify(obj)); return true; };
 
   function handle(raw) {
     let m;
@@ -132,6 +133,7 @@ export function connectRoom(opts = {}) {
       if (sock !== ws) return;
       setStatus('open');
       sock.send(JSON.stringify({ t: 'hello', name: String(name).slice(0, 24), color, caps: myCaps || undefined }));
+      while (outbox.length) sock.send(JSON.stringify(outbox.shift()));
       flushQueue();
     };
     sock.onmessage = (ev) => { if (sock === ws && typeof ev.data === 'string') handle(ev.data); };
