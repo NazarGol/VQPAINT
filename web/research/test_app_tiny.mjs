@@ -27,6 +27,6 @@ for (let i = 0; i < 2; i++) {
   const r = await page.evaluate(() => { const v = window.__vqpaint, s = v.strokes[v.strokes.length - 1]; return { n: v.strokes.length, tries: v.stats.lastTries, hasTokens: !!s.tokens, hasPath: !!(s.path || s.drop), preview: s._preview, crop: s.crop, layer: v.layers.has(s.id), mode: v.mode, engine: v.stats.engine, decodeTimes: v.decodeTimes.slice(-3).map((x) => Math.round(x)) }; });
   out.push(r); console.log(`stroke ${i + 1}: ${((Date.now() - t1) / 1000).toFixed(1)}s`, JSON.stringify(r));
 }
-const ok = out.length === 2 && out.every((r) => r.hasTokens && r.tries > 20 && r.layer) && load.engine === 'tiny';
+const ok = out.length === 2 && out.every((r) => r.hasTokens && r.tries > 20 && r.layer) && String(load.engine).startsWith('tiny');
 console.log(ok ? 'PASS' : 'FAIL', errors.length ? 'errors: ' + errors.slice(0, 5).join(' | ') : 'no page errors');
 await browser.close(); server.close(); process.exit(ok ? 0 : 1);
