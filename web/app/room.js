@@ -4,6 +4,7 @@ import { webgpuInfo, setModelMirror } from '../lib/models.js';
 import { F, expandRegion, readRegion } from '../lib/decoder.js';
 import { Engine } from '../lib/engine/client.js';
 import { LightEngine } from '../lib/engine/light.js';
+import { mountDebugLine, memoryInfo } from './debugline.js';
 import { maskCells, maskToString, maskFromString, maskFromCells, maskHas, maskTouches, noisyMask, discMask } from '../lib/mask.js';
 import { t, lang, setLang } from './i18n.js';
 import { lassoMask } from '../lib/lasso.js';
@@ -49,11 +50,15 @@ let helpersOn = params.get('helpers') ? params.get('helpers') === '1' : true;
 const caps = { paint: false, speed: null, gpu: false, lite, helper: false };
 // crash loop guard: if the last visit never reached 'ok' (Safari reloaded the tab), start in low-memory safe mode (viewing only)
 const lastBoot = sessionStorage.getItem('vqpaint.boot');
-let safeMode = params.get('safe') === '1' || (lastBoot === 'loading' || lastBoot === 'painting');
-if (safeMode) localStorage.setItem('vqpaint.crashes', String((+localStorage.getItem('vqpaint.crashes') || 0) + 1));
+const crashedLastTime = lastBoot === 'loading' || lastBoot === 'painting';
+if (crashedLastTime) localStorage.setItem('vqpaint.crashes', String((+localStorage.getItem('vqpaint.crashes') || 0) + 1));
+if (params.get('reset') === '1') localStorage.setItem('vqpaint.crashes', '0');
+const crashes = +localStorage.getItem('vqpaint.crashes') || 0;
+let safeMode = params.get('safe') === '1' || (crashedLastTime && crashes >= 2);   // light engine: one crash -> lightest mode, two -> the note waits for a computer
+const lightest = params.get('light') === '1' || (crashes >= 1 && !safeMode);
 sessionStorage.setItem('vqpaint.boot', 'loading');
 const lowMem = isPhone || safeMode || params.get('lowmem') === '1';
-let useTiny = params.get('engine') === 'tiny';   // the light engine (tiny decoder + MobileCLIP as WebGL2 shaders, no ONNX Runtime): default on phones and without WebGPU, ?engine=ort forces the ONNX worker   // release models after every stroke, small caches, 1 wasm thread
+let useTiny = params.get('engine') !== 'ort';   // the light engine (tiny decoder + MobileCLIP as WebGL2 shaders, no ONNX Runtime) is the default on every device; ?engine=ort forces the ONNX worker   // release models after every stroke, small caches, 1 wasm thread
 
 // ---------- state ----------
 let grid = null;                  // {w, h, tokens} from the room (256x256 by default), the search context
@@ -718,7 +723,7 @@ function ensureBrush() {
     loading.set(t('load.brush', { pct: 0 })); setStage('engine');
     const r = await engine.init({ modelBase: M, modelFallback: M === CONFIG.modelBase ? CONFIG.modelFallback : null, ortBase: params.get('ort') || CONFIG.ortBase, entry: params.get('entry') || null, lowMem, gpuWanted: caps.gpu, plain, clipCpu, textGpu: params.get('textgpu') === '1', opt: params.get('opt') || null, bankName: /^[a-z_]+$/.test(params.get('bank') || '') ? params.get('bank') : 'bank', blankToken },
       (p) => { if (p.stage === 'download') { stats.cached = p.cached; stats.modelBytes = p.loaded; loading.set(t(p.cached ? 'load.brush' : 'load.brushFirst', { pct: Math.min(99, Math.round(p.loaded / p.total * 100)) })); } else setStage(p.stage); });
-    decoder = engine.decoder; clip = engine.clip; painter = engine.painter; ep = r.ep; caps.speed = stats.fullDecodeMs = r.speed;
+    decoder = engine.decoder; clip = engine.clip; painter = engine.painter; ep = r.ep; caps.speed = stats.fullDecodeMs = r.speed; if (r.variant) stats.engineVariant = r.variant;
     layers.setDecoder(decoder); beacon('decoder-ready'); beacon('clip-ready');
     setStage('brush-ready');
     modelsLoaded = true; caps.paint = true; room?.setCaps(caps);
@@ -741,7 +746,7 @@ async function boot() {
   beacon('gpu', { gpu }); caps.gpu = !!gpu;
   if (!gpu && !lowMem && !forceNoPaint) setStatus(t('msg.noGpuShort'), 7000);   // a quiet line, never a box over the canvas
   ep = gpu ? 'webgpu' : 'wasm';
-  caps.helper = !!gpu && !lowMem && !forceNoPaint && helpersOn;   // a desktop with WebGPU can paint for phones (loads models when it claims)
+  caps.helper = (useTiny || !!gpu) && !lowMem && !forceNoPaint && helpersOn;   // a desktop with WebGPU can paint for phones (loads models when it claims)
   const t0 = performance.now();
   if (!fresh) loading.set(t('load.painting'));
   document.documentElement.style.setProperty('--color-bg', CONFIG.blankRgb);   // the exact decoded colour of blank canvas
