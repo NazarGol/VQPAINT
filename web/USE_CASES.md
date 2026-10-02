@@ -29,5 +29,8 @@ Four main uses. Each line says who, when, what they do, what they get, and what 
 - **What they get**: a painting of their year that grew day by day, with "my October" / "my year" as image + PDF.
 - **Needs**: private room kind (no invite link unless turned on), one-entry-a-day rhythm, placement that follows time (a path / rings), calendar view, month + year exports, optional Telegram reminder (off by default) feeding the queue.
 
+## Status (2026-10-02)
+Book, meeting, diary and group (Telegram) kinds exist with their imports, lists, exports and the postcard; the Telegram bot waits for a token (NEEDS_NAZAR.md); print-and-mail is research only (POSTCARDS.md).
+
 ## Common to all
 Auto-placement and the paint queue (anything can submit a note: a tap, an import, a bot); the organic ink reveal; overlap merging; reactions (🔥 🧊 🌱) as real edits; replies; photos; Ukrainian + English; exports (PNG, PDF, print sizes, postcard); rooms kept on Cloudflare; models in the browser.

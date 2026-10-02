@@ -16,6 +16,11 @@
 6. **Replay** in the ⋯ menu (notes appear one by one) and **export replay video** (WebM in Chrome, MP4 in Safari untested).
 7. **Phones paint themselves**: packed int8 models (decoder 45 MB, CLIP 53 MB), decoder first, CLIP on first stroke; lasso capped at 14 tokens, 1.3× longer search; wake lock while painting; painter pauses in hidden tabs; CPU fallback with the int8 decoder finishes strokes; helpers off by default (⋯ menu). Realism slider (abstract ↔ realistic) in the note box replaces effort.
 
+## Round 7 (2026-10-02): procedural ink, merging, reactions, Telegram, book / meeting / diary, postcard
+- **Ink**: GPU fluid simulation per stroke, seeded lobes/tendrils/satellites/holes/twins/stretch/roughness, 70/25/5 weirdness; 50-stroke circularity mean 0.18 (none round); pre-simulated shape = the search region. Lab with a slider per parameter: https://nazargol.github.io/VQPAINT/app/effects.html . 30-grid `app/shots/ink/grid30.png`, moments `app/shots/ink/`, five strokes landing `app/shots/five_strokes_phone.mp4`.
+- **No laptop**: the phone paints itself (WebGPU or CPU) when no helper is online or the helper does not claim in 12 s (`test_phone.mjs --nohelper`).
+- **STEP 0** `USE_CASES.md`. **STEP 1** overlap merge ("A × B") + reactions 🔥🧊🌱 as token edits, synced, helper path (`app/test_step1.mjs` 8/8). **STEP 2** Telegram bot on the rooms worker (`rooms/test_tg.mjs` 14/14 against wrangler dev; `app/test_queue.mjs` 9/9: queued notes auto-placed and painted, snapshot uploaded), Mini App mode, setup in NEEDS_NAZAR.md. **STEP 3–6** book / meeting / diary kinds, imports, grouped + anonymous PDFs, calendar, print sizes, A6 postcard PDF with QR (`app/test_kinds.mjs`), `POSTCARDS.md` research.
+
 ## Round 6 (2026-10-01): simple and pleasant, especially on phones
 1. **No modes**: tools removed; tap a stroke → note, tap empty space → writer, drag → pan with momentum, pinch/wheel → zoom, hold → bigger drop (`lib/view.js`, `app/components/canvas.js`).
 2. **Write first**: writer at the tap (bottom sheet on phones), "paint" → the shape is born from the tapped point, notes written while painting wait in a queue (`app/test_flow.mjs`, 16/16).

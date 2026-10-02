@@ -17,6 +17,8 @@ import { RevealManager } from '../lib/effects/reveal.js';
 import { haptic } from '../lib/haptics.js';
 import { blotPath } from '../lib/effects/contour.js';
 import { mountMenu } from './components/menu.js';
+import { mountSheets } from './components/sheets.js';
+import { parseKindleClippings, parseTextHighlights, splitPoints, detectImport } from '../lib/import.js';
 import { mountLoading } from './components/loading.js';
 import { mountToast } from './components/toast.js';
 import { mountNotes } from './components/notes.js';
@@ -75,8 +77,28 @@ const stage = $('stage');
 const toast = mountToast(stage);
 const roombar = mountRoombar($('roombar'), { roomId, onInvite: invite });
 const hint = $('hint'); hint.textContent = t('hint.empty');
-const menu = mountMenu($('menu-root'), { helpers: helpersOn, phone: lowMem, onUndo: undo, onExportPng: () => exportPng(), onExportPdf: () => exportPdf(), onReplay: () => replay(), onExportVideo: () => exportVideo(), onHelpers: (v) => (helpersOn = v),
-  onLang: () => { setLang(lang === 'uk' ? 'en' : 'uk'); const u = new URL(location.href); u.searchParams.delete('lang'); location.replace(u.href); } });   // the whole UI re-renders in the other language; the room state is on the server
+const menu = mountMenu($('menu-root'));
+const sheets = mountSheets(stage, { phone: isPhone });
+function menuItems() {
+  const k = roomSettings.kind || 'default', helpersLabel = () => t(lowMem ? 'menu.helpers.phone' : 'menu.helpers.desktop', { state: t(helpersOn ? 'on' : 'off') });
+  const items = [
+    { id: 'undo', label: t('menu.undo'), onClick: undo, disabled: !undoStack.length },
+    { id: 'notes', label: k === 'diary' ? t('menu.calendar') : t('menu.notes'), onClick: showList },
+  ];
+  if (k === 'book') items.push({ id: 'import', label: t('menu.import'), onClick: importHighlights });
+  if (k === 'meeting') items.push({ id: 'paste', label: t('menu.paste'), onClick: pasteNotes }, { id: 'finish', label: t('menu.finish'), onClick: finishMeeting });
+  if (k === 'diary') items.push({ id: 'invites', label: t('menu.invites', { state: t(roomSettings.private === false ? 'on' : 'off') }), onClick: toggleInvites });
+  items.push({ divider: true },
+    { id: 'png', label: t('menu.png'), onClick: () => exportPng() }, { id: 'pdf', label: t('menu.pdf'), onClick: () => exportPdf() },
+    { id: 'postcard', label: t('menu.postcard'), onClick: makePostcard },
+    { id: 'print', label: t('menu.print'), onClick: () => exportPrint('bookplate') }, { id: 'printA4', label: t('menu.printA4'), onClick: () => exportPrint('a4') }, { id: 'printA3', label: t('menu.printA3'), onClick: () => exportPrint('a3') },
+    { id: 'replay', label: t('menu.replay'), onClick: () => replay() }, { id: 'video', label: t('menu.video'), onClick: () => exportVideo() },
+    { divider: true },
+    { id: 'helpers', label: helpersLabel(), onClick: () => { helpersOn = !helpersOn; menu.render(menuItems()); } },
+    { id: 'lang', label: t('menu.lang'), onClick: () => { setLang(lang === 'uk' ? 'en' : 'uk'); const u = new URL(location.href); u.searchParams.delete('lang'); location.replace(u.href); } });
+  return items;
+}
+menu.render(menuItems());
 const loading = mountLoading($('loading'));
 const previewUrl = (id, v = 0) => `${CONFIG.roomsUrl}/room/${roomId}/preview/${id}${v ? '?v=' + v : ''}`;   // v busts the immutable cache after an edit
 async function fetchPreview(note) {
@@ -89,13 +111,13 @@ const briefText = (s, n = 40) => { s = String(s || '').replace(/\s+/g, ' ').trim
 const notes = mountNotes(stage, {
   anchorFor: () => null,
   phone: isPhone, threadOf,
-  onSubmit: (text, realism, extra = {}) => { const d = pendingDrop, parent = extra.replyTo; pendingDrop = null; replyTo = null; updateScene(); if (d) enqueueStroke({ drop: d, text, realism, parent: parent ? parent.id : null, photo: extra.photo || null }); },
+  onSubmit: (text, realism, extra = {}) => { const d = pendingDrop, parent = extra.replyTo; pendingDrop = null; replyTo = null; updateScene(); if (d) enqueueStroke({ drop: d, text, realism, parent: parent ? parent.id : null, photo: extra.photo || null, chapter: extra.chapter || null, anon: roomSettings.kind === 'meeting' && roomSettings.anon && !extra.signed ? true : undefined, day: roomSettings.kind === 'diary' ? today() : undefined }); },
   onCancel: () => { pendingDrop = null; replyTo = null; updateScene(); },
   onReply: (note) => startReply(note),
   onOpen: (id) => openNote(id),
   onPhoto: (file) => readPhoto(file),
   onReact: (note, kind) => react(note, kind),
-  me: () => myName,
+  me: () => myName, room: () => roomSettings,
 });
 /** "reply": the next tap must land on or next to this note's shape; its painting grows from the note's tokens */
 function startReply(noteOrId) { const note = typeof noteOrId === 'string' ? strokes.find((s) => s.id === noteOrId) : noteOrId; if (!note) return; replyTo = note; notes.close(); setStatus(t('note.reply.draw', { text: briefText(note.text) }), 6000); }
@@ -148,9 +170,10 @@ function beginWrite(w, hold = 0) {
   notes.edit(view.anchorFor(dropRect(d)), '', { replyTo });
 }
 /** paint now, or wait for the stroke in progress */
+let starting = false;   // a job is on its way to paintMask (models loading): the next one waits in the queue
 function enqueueStroke(job) {
-  if (painting || myRequests.size) { queue.push(job); setStatus(t('note.queued'), 3000); return; }
-  runJob(job);
+  if (painting || starting || myRequests.size) { queue.push(job); if (job.type !== 'react') setStatus(t('note.queued'), 3000); return; }
+  starting = true; Promise.resolve(runJob(job)).catch((e) => console.warn('job', e)).finally(() => { starting = false; processQueue(); });
 }
 /** the search region of a drop: the ink's own future shape (pre-simulated from its seed), one token wider, clipped to the grid */
 function inkMask(drop) {
@@ -186,9 +209,10 @@ function autoPlace(size, { kind = null, index = null } = {}) {
 }
 function runJob(job) {
   if (job.type === 'react') return startReaction(job);
-  const m = inkMask(job.drop); if (!m.count) return; startStroke(m, job.text, null, job.realism, { parent: job.parent, photo: job.photo, drop: job.drop, chapter: job.chapter, day: job.day, source: job.source, anon: job.anon });
+  if (!job.drop) { const size = lowMem ? 3 : BASE_R + 0.5, pos = autoPlace(size, { kind: roomSettings.kind, index: strokes.filter((s) => s.day).length }); job.drop = { x: pos.x, y: pos.y, size, seed: (Math.random() * 2 ** 31) | 0 }; }
+  const m = inkMask(job.drop); if (!m.count) return; startStroke(m, job.text, null, job.realism, { parent: job.parent, photo: job.photo, drop: job.drop, chapter: job.chapter, day: job.day, source: job.source, anon: job.anon, author: job.author });
 }
-function processQueue() { if (painting || myRequests.size || !queue.length) return; runJob(queue.shift()); }
+function processQueue() { if (painting || starting || myRequests.size || !queue.length) return; const job = queue.shift(); starting = true; Promise.resolve(runJob(job)).catch((e) => console.warn('job', e)).finally(() => { starting = false; processQueue(); }); }
 function strokeAt(gx, gy) {
   const x = Math.floor(gx), y = Math.floor(gy);
   for (let i = strokes.length - 1; i >= 0; i--) { const s = strokes[i]; s._mask ||= maskFromString(s.mask); if (maskHas(s._mask, x, y)) return s; }
@@ -258,7 +282,7 @@ async function startStroke(mask, text, points = null, realism = 0.6, extra = {})
   const photo = extra.photo || null;
   if (photo && lowMem) { try { await encodePhotoTokens(photo); } catch (e) { console.warn('photo', e); setStatus(t('status.paintFailed', { error: e.message }), 6000); return; } }
   await ensureBrush();
-  return paintMask(mask, text, { points, realism, parent, photo, lang: noteLang, drop, meta: { chapter: extra.chapter, day: extra.day, source: extra.source, anon: extra.anon } });
+  return paintMask(mask, text, { points, realism, parent, photo, lang: noteLang, drop, author: extra.author || myName, meta: { chapter: extra.chapter, day: extra.day, source: extra.source, anon: extra.anon } });
 }
 /** the tokens a reply grows from: the parent note's crop tokens (null when the parent is unknown or has no tokens) */
 function parentSeed(parentId) {
@@ -432,8 +456,9 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     } catch (e) { console.warn('merge', e); }
     const secs = (performance.now() - t0) / 1000;
     stats.strokes++; stats.strokeSeconds.push(secs); stats.lastTries = res.steps; stats.lastStatus = `${res.steps} tries in ${secs.toFixed(1)}s`;
-    const note = { id: Math.random().toString(36).slice(2, 10), text, author, color, time: Date.now(), mask: maskToString(finalMask), crop: res.crop, tokens: encodeTokens(res.tokens), path: path || undefined, realism, parent: parent || undefined, photo: photo ? (photo.thumb || thumbOf(await dataUrlToImage(photo.data))) : undefined,
-      lang: noteLang && noteLang !== 'en' ? noteLang : undefined, text_en: textEn || undefined, blot: blotRes ? blotRes.blot : undefined, merges: merges.length ? merges : undefined, chapter: meta.chapter || undefined, day: meta.day || undefined, source: meta.source || undefined, anon: meta.anon || undefined };
+    const anon = !!meta.anon;
+    const note = { id: Math.random().toString(36).slice(2, 10), text, author: anon ? '' : author, color, time: Date.now(), mask: maskToString(finalMask), crop: res.crop, tokens: encodeTokens(res.tokens), path: path || undefined, realism, parent: parent || undefined, photo: photo ? (photo.thumb || thumbOf(await dataUrlToImage(photo.data))) : undefined,
+      lang: noteLang && noteLang !== 'en' ? noteLang : undefined, text_en: textEn || undefined, blot: blotRes ? blotRes.blot : undefined, merges: merges.length ? merges : undefined, chapter: meta.chapter || undefined, day: meta.day || undefined, source: meta.source || undefined, anon: anon || undefined };
     strokes.push(note);
     await layers.fromImage(note, res.crop, res.image, alphaImg);
     undoStack.push({ cells, before, note }); menu.setUndoEnabled(true);
@@ -517,10 +542,54 @@ async function encodePhotoTokens(photo) {
 // ---------- export / replay (lib/export.js is loaded on demand) ----------
 const guard = (label, fn) => async () => { try { await fn(); } catch (e) { console.error(e); setStatus(t('status.failed', { what: label, error: e.message }), 6000); } };
 const exportPng = guard('PNG', async () => { setStatus(t('status.rendering'), 0); const m = await import('../lib/export.js'); await m.exportPng({ strokes, layers, grid, filename: `vqpaint-${roomId}.png`, blank: cssBg() }); setStatus(t('status.exportedPng')); });
-const exportPdf = guard('PDF', async () => { setStatus(t('status.pdf'), 0); const m = await import('../lib/export.js'); await m.exportPdf({ strokes, layers, grid, decoder, filename: `vqpaint-${roomId}.pdf`, blank: cssBg(), room: roomId, lang }); setStatus(t('status.exportedPdf')); });
+const exportPdf = () => exportPdfOf(strokes, `vqpaint-${roomId}.pdf`, roomSettings.title || '');
 const replay = guard(t('menu.replay'), async () => { notes.close(); const m = await import('../lib/export.js'); await m.replay({ strokes, layers, grid, view, stage, blank: cssBg() }); });
 const exportVideo = guard(t('menu.video'), async () => { setStatus(t('status.recording'), 0); const m = await import('../lib/export.js'); await m.exportVideo({ strokes, layers, grid, filename: `vqpaint-${roomId}-replay`, blank: cssBg() }); setStatus(t('status.exportedVideo')); });
 const cssBg = () => getComputedStyle(document.documentElement).getPropertyValue('--color-bg').trim();
+const exportPrint = (size) => guard(t('menu.print'), async () => { setStatus(t('status.rendering'), 0); const m = await import('../lib/export.js'); const r = await m.exportPrint({ strokes, layers, grid, size, filename: `vqpaint-${roomId}-${size}.png`, blank: cssBg() }); setStatus(t('status.exportedPrint', { w: r.width, h: r.height })); })();
+const groupByKind = () => (roomSettings.kind === 'book' ? 'chapter' : roomSettings.kind === 'diary' ? 'day' : null);
+const exportPdfOf = (list, name, title) => guard('PDF', async () => { setStatus(t('status.pdf'), 0); const m = await import('../lib/export.js'); await m.exportPdf({ strokes: list, layers, grid, decoder, filename: name, blank: cssBg(), room: roomId, lang, groupBy: groupByKind(), anon: !!roomSettings.anon, title: title || roomSettings.title || '' }); setStatus(t('status.exportedPdf')); })();
+const dayOf = (n) => n.day || (n.time ? new Date(n.time).toISOString().slice(0, 10) : '');
+function showList() {
+  notes.close();
+  sheets.list(strokes, { groupBy: groupByKind(), kind: roomSettings.kind, anon: !!roomSettings.anon,
+    onOpen: (id, { keep = false } = {}) => { const st = strokes.find((s) => s.id === id); if (!st) return; st._mask ||= maskFromString(st.mask); const c = st.crop || st._mask; view.view.fit({ x: c.x - 6, y: c.y - 6, w: c.w + 12, h: c.h + 12 }, 1.1, 20); userMoved = true; if (!keep) { sheets.close(); openNote(id); } scheduleVisibleLayers(); flashStroke(id); },
+    onExportMonth: (ym) => exportPdfOf(strokes.filter((n) => dayOf(n).startsWith(ym)), `vqpaint-${roomId}-${ym}.pdf`, new Date(ym + '-01T12:00:00').toLocaleString([], { month: 'long', year: 'numeric' })),
+    onExportYear: (y) => exportPdfOf(strokes.filter((n) => dayOf(n).startsWith(y)), `vqpaint-${roomId}-${y}.pdf`, y) });
+}
+let flashId = null, flashT = 0;
+function flashStroke(id) { flashId = id; flashT = performance.now(); const tick = () => { const k = (performance.now() - flashT) / 1200; view.setScene({ highlight: k < 1 ? { id: flashId, k } : null }); if (k < 1) requestAnimationFrame(tick); }; tick(); }
+async function importHighlights() {
+  const got = await sheets.importText({ title: t('import.title'), hint: t('import.hint') }); if (!got) return;
+  const kind = detectImport(got.text), entries = kind === 'kindle' ? parseKindleClippings(got.text, { title: roomSettings.title || null }) : parseTextHighlights(got.text);
+  const list = entries.length || kind !== 'kindle' ? entries : parseKindleClippings(got.text);   // no title match: take every highlight
+  if (!list.length) { setStatus(t('import.none'), 4000); return; }
+  const chapters = roomSettings.chapters || [];
+  for (const e of list.slice(0, 200)) enqueueStroke({ text: e.text, realism: 0.6, chapter: e.chapter && chapters.includes(e.chapter) ? e.chapter : (e.chapter || null), source: 'import', time: e.time || undefined });
+  setStatus(t('import.added', { n: Math.min(200, list.length) }), 5000);
+}
+async function pasteNotes() {
+  const got = await sheets.importText({ title: t('paste.title'), hint: t('paste.hint') }); if (!got) return;
+  const points = splitPoints(got.text); if (!points.length) { setStatus(t('import.none'), 4000); return; }
+  for (const p of points.slice(0, 200)) enqueueStroke({ text: p.text, realism: 0.6, author: p.author || undefined, anon: roomSettings.anon && !p.author ? true : undefined, source: 'paste' });
+  setStatus(t('import.added', { n: Math.min(200, points.length) }), 5000);
+}
+async function finishMeeting() {
+  await postSettings({ finished: Date.now() });
+  await exportPng(); await exportPdfOf(strokes, `vqpaint-${roomId}-meeting.pdf`, roomSettings.title || '');
+  const link = location.origin + location.pathname + '?r=' + roomId;
+  setStatus(t('finish.done'), 5000);
+  if (navigator.share) { try { await Promise.race([navigator.share({ title: roomSettings.title || 'vqpaint', text: t('finish.done'), url: link }), new Promise((r) => setTimeout(r, 15000))]); } catch (_) {} }   // the share sheet may never resolve (headless, dismissed)
+}
+async function toggleInvites() { await postSettings({ private: roomSettings.private === false }); roombar.setInviteVisible(roomSettings.private === false); menu.render(menuItems()); }
+async function makePostcard() {
+  const ym = today().slice(0, 7);
+  const got = await sheets.postcard(strokes, { defaultYm: ym, names: [...new Set(strokes.filter((n) => !n.anon && n.author).map((n) => n.author))].slice(0, 8).join(', ') }); if (!got) return;
+  const sel = got.ym === 'all' ? strokes : strokes.filter((n) => dayOf(n).startsWith(got.ym));
+  const picks = got.picks.map((id) => strokes.find((n) => n.id === id)).filter(Boolean);
+  const label = got.ym === 'all' ? (roomSettings.title || '') : new Date(got.ym + '-01T12:00:00').toLocaleString(lang === 'uk' ? 'uk' : [], { month: 'long', year: 'numeric' });
+  await guard(t('menu.postcard'), async () => { setStatus(t('status.pdf'), 0); const m = await import('../lib/export.js'); await m.exportPostcard({ strokes, layers, grid, period: { label, strokes: sel }, picks, names: got.names, roomUrl: location.origin + location.pathname + '?r=' + roomId + '&replay=1', lang, blank: cssBg(), filename: `vqpaint-${roomId}-postcard-${got.ym}.pdf`, title: roomSettings.title || '' }); setStatus(t('status.exportedPostcard'), 5000); })();
+}
 
 // ---------- helpers (optional) ----------
 function bestHelper() { let best = null; for (const p of peers.values()) { const c = p.caps; if (c && (c.paint || c.helper) && !p.busy && (!best || (c.speed || 1e9) < (best.caps.speed || 1e9))) best = p; } return best; }
@@ -650,6 +719,8 @@ async function boot() {
   loading.set(t('load.painting'));
   document.documentElement.style.setProperty('--color-bg', CONFIG.blankRgb);   // the exact decoded colour of blank canvas
   if (firstVisit && !params.get('auto') && !params.get('name') && !tgMode) await askName();
+  if (params.get('new') && ['book', 'meeting', 'diary'].includes(params.get('new'))) setTimeout(() => setupNewRoom(params.get('new')), 400);
+  if (params.get('replay') === '1') setTimeout(() => { if (strokes.length) replay(); }, 2500);
   if (params.get('name')) { myName = params.get('name').slice(0, 24); localStorage.setItem('vqpaint.name', myName); }
   palette = await Palette.load(M + 'palette/');                       // 4 MB (colour proposals); no model is loaded for viewing
   blankToken = CONFIG.blankToken;
@@ -666,8 +737,17 @@ async function boot() {
   claimNextRequest();
 }
 /** room settings arrived (state or a change): kind, title, chapters, anonymity, privacy */
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+async function postSettings(cfg) { try { const r = await fetch(`${CONFIG.roomsUrl}/room/${roomId}/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) }); const j = await r.json(); if (j.settings) applySettings(j.settings); } catch (e) { console.warn('settings', e); } }
+/** ?new=book|meeting|diary: a small setup sheet, then the settings go to the room */
+async function setupNewRoom(kind) {
+  const cfg = await sheets.setup(kind);
+  await postSettings(cfg || { kind, private: kind === 'diary', anon: kind === 'meeting' });
+  const u = new URL(location.href); u.searchParams.delete('new'); history.replaceState(null, '', u.href);
+}
 function applySettings(cfg) {
   roomSettings = cfg || {};
+  menu.render(menuItems());
   roombar.setTitle?.(roomSettings.title || '');
   document.title = roomSettings.title ? `${roomSettings.title} · vqpaint` : 'vqpaint';
   if (roomSettings.private) roombar.setInviteVisible?.(params.get('invite') === '1');
@@ -758,4 +838,4 @@ function tapPaint(x, y, text, realism = 0.6, hold = 0, extra = {}) { beginWrite(
   try { await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(stats) }); } catch (_) {}
 })();
 window.__vqpaint = { get grid() { return grid; }, stats, strokes, caps, get ready() { return ready; }, get mode() { return mode; }, get modelsLoaded() { return modelsLoaded; }, ensureBrush, releaseBrush, get safeMode() { return safeMode; }, get name() { return myName; }, get decodeTimes() { return decoder && decoder.times ? decoder.times : []; }, paintRegion, paintAt, lassoPaint, peers, get room() { return room; },
-  get painting() { return painting; }, othersPainting, myRequests, ensurePainter: ensureBrush, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, tapPaint, get queue() { return queue; }, reveal, beginWrite, strokeAt, react, mergeAt, autoPlace, get settings() { return roomSettings; }, scheduleSnapshot, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; }, startReply, openNote, get replyTo() { return replyTo; }, threadOf, maskTouches: (a, b) => maskTouches(a, b), lassoMask: (pts) => lassoMask(pts, grid.w, grid.h), readPhoto, get lang() { return lang; } };
+  get painting() { return painting; }, othersPainting, myRequests, ensurePainter: ensureBrush, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, tapPaint, get queue() { return queue; }, reveal, beginWrite, strokeAt, react, mergeAt, autoPlace, get settings() { return roomSettings; }, scheduleSnapshot, sheets, importHighlights, pasteNotes, finishMeeting, makePostcard, exportPrint, showList, postSettings, enqueueStroke, get menu() { return menu; }, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; }, startReply, openNote, get replyTo() { return replyTo; }, threadOf, maskTouches: (a, b) => maskTouches(a, b), lassoMask: (pts) => lassoMask(pts, grid.w, grid.h), readPhoto, get lang() { return lang; } };

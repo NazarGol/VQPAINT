@@ -3,7 +3,7 @@
 // a click elsewhere. An open note shows its thread: the note it replies to (click to open) and its replies, indented.
 import { escapeHtml } from './roombar.js';
 import { t } from '../i18n.js';
-export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = null, onOpen = null, onPhoto = null, onReact = null, threadOf = null, phone = false, me = () => '' }) {
+export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = null, onOpen = null, onPhoto = null, onReact = null, threadOf = null, phone = false, me = () => '', room = () => ({}) }) {
   const layer = document.createElement('div'); layer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:6'; stageEl.appendChild(layer);
   let editing = null, opened = null; // {el, note}
   function place(el, anchor) {
@@ -17,13 +17,17 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = n
   }
   const grow = (ta) => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, innerHeight * 0.4) + 'px'; };
   const brief = (s, n = 60) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s; };
-  const who = (n) => escapeHtml(n.author || t('someone'));
+  const who = (n) => escapeHtml((n.anon ? '' : n.author) || t('someone'));
   const api = {
     /** anchor in stage px; opts.replyTo: the parent note when this shape is a reply */
     edit(anchor, initial = '', { replyTo = null } = {}) {
       api.cancel(); api.close();
       const el = document.createElement('div'); el.className = 'note editing' + (phone ? ' sheet' : ''); el.style.pointerEvents = 'auto';
-      el.innerHTML = `${replyTo ? `<div class="meta" data-reply-head><span class="dot" style="background:${escapeHtml(replyTo.color || '#888')}"></span>${t('note.replyingTo', { name: who(replyTo) })} · <span class="quiet">${escapeHtml(brief(replyTo.text, 48))}</span></div>` : ''}
+      const cfg = room() || {}, chapters = cfg.kind === 'book' && Array.isArray(cfg.chapters) && cfg.chapters.length ? cfg.chapters : null;
+      const chapterSel = chapters ? `<select class="chapter" data-chapter><option value="">${t('note.noChapter')}</option>${chapters.map((c) => `<option value="${escapeHtml(c)}" ${c === api.lastChapter ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}</select>` : '';
+      const sign = cfg.kind === 'meeting' && cfg.anon ? `<label class="sign"><input type="checkbox" data-sign> ${t('note.sign')}</label>` : '';
+      const today = cfg.kind === 'diary' ? `<div class="meta">${t('note.today', { date: new Date().toLocaleDateString([], { day: 'numeric', month: 'long' }) })}</div>` : '';
+      el.innerHTML = `${today}${chapterSel}${sign}${replyTo ? `<div class="meta" data-reply-head><span class="dot" style="background:${escapeHtml(replyTo.color || '#888')}"></span>${t('note.replyingTo', { name: who(replyTo) })} · <span class="quiet">${escapeHtml(brief(replyTo.text, 48))}</span></div>` : ''}
         <div class="photo-row" data-photo-row hidden><img data-photo-thumb alt=""><button type="button" class="link" data-photo-remove>${t('note.photo.remove')}</button></div>
         <textarea data-note-input rows="1" placeholder="${escapeHtml(t(replyTo ? 'note.reply.placeholder' : 'note.placeholder'))}"></textarea>
         <div class="actions">${onPhoto ? `<button type="button" class="pill ghost" data-photo>${t('note.photo')}</button><input type="file" accept="image/*" data-photo-file hidden>` : ''}<span class="hint">${t(phone ? 'note.hint.phone' : 'note.hint')}</span><button type="button" class="pill go" data-paint>${t('note.paint')}</button></div>`;
@@ -43,7 +47,8 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = n
         el.querySelector('[data-photo-remove]').onclick = () => { if (!editing) return; editing.photo = null; row.hidden = true; place(el, editing.anchor); };
       }
     },
-    submit() { if (!editing) return; const text = editing.el.querySelector('textarea').value.trim(); if (!text) return; const { replyTo, photo } = editing; editing.el.remove(); editing = null; onSubmit(text, 0.6, { replyTo, photo }); },
+    submit() { if (!editing) return; const text = editing.el.querySelector('textarea').value.trim(); if (!text) return; const { replyTo, photo } = editing; const chapter = editing.el.querySelector('[data-chapter]')?.value || null; const signed = !!editing.el.querySelector('[data-sign]')?.checked; if (chapter) api.lastChapter = chapter; editing.el.remove(); editing = null; onSubmit(text, 0.6, { replyTo, photo, chapter, signed }); },
+    lastChapter: null,
     cancel(byUser = false) { if (!editing) return; editing.el.remove(); editing = null; if (byUser) onCancel?.(); },
     get isEditing() { return !!editing; },
     get editingText() { return editing ? editing.el.querySelector('textarea').value : ''; },
@@ -62,7 +67,8 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = n
       const merged = mergeWith ? `<div class="merge"><div class="meta">${t('note.merge', { a: who(note), b: who(mergeWith) })}</div><div class="text">${escapeHtml(note.text)}</div><div class="meta quiet">×</div><div class="text">${escapeHtml(mergeWith.text)}</div></div>` : '';
       const mine = me(), used = (k) => !!(note.reactions && note.reactions[k] && note.reactions[k].includes(mine));
       const reacts = onReact && !mergeWith ? `<div class="reacts">${[['fire', '🔥'], ['ice', '🧊'], ['grow', '🌱']].map(([k, e]) => `<button type="button" class="pill react" data-react="${k}" title="${t('react.' + k)}" ${used(k) ? 'disabled' : ''}>${e}</button>`).join('')}</div>` : '';
-      el.innerHTML = `${parentLine}<div class="meta"><span class="dot" style="background:${escapeHtml(note.color || '#888')}"></span>${who(note)} · ${when}${onReply && !mergeWith ? ` · <button type="button" class="link" data-reply>${t('note.reply')}</button>` : ''}</div>${photo}${mergeWith ? merged : `<div class="text">${escapeHtml(note.text)}</div>`}${translated}${replies}${reacts}`;
+      const where = note.chapter ? ` · ${escapeHtml(note.chapter)}` : note.day && (room() || {}).kind === 'diary' ? ` · ${escapeHtml(note.day)}` : '';
+      el.innerHTML = `${parentLine}<div class="meta"><span class="dot" style="background:${escapeHtml(note.color || '#888')}"></span>${who(note)} · ${when}${where}${onReply && !mergeWith ? ` · <button type="button" class="link" data-reply>${t('note.reply')}</button>` : ''}</div>${photo}${mergeWith ? merged : `<div class="text">${escapeHtml(note.text)}</div>`}${translated}${replies}${reacts}`;
       if (onReply && !mergeWith) el.querySelector('[data-reply]').onclick = (e) => { e.stopPropagation(); onReply(note); };
       for (const b of el.querySelectorAll('[data-react]')) b.onclick = (e) => { e.stopPropagation(); if (b.disabled) return; b.disabled = true; onReact(note, b.dataset.react); };
       for (const r of el.querySelectorAll('[data-open]')) r.onclick = (e) => { e.stopPropagation(); onOpen?.(r.dataset.open); };

@@ -62,6 +62,14 @@ prompt ──MobileCLIP text──► text embedding
 - **Metaphor bank** (`export/make_metaphors.py`, `lib/metaphors.js`): 225 short visual prompts with offline CLIP
   text embeddings; the 3 nearest are blended into every note's target (strongly for practical notes, weakly for
   visual ones). `?metaphors=0` disables it.
+- **Ink** (`lib/effects/ink.js`): each stroke is a small GPU fluid simulation seeded by the note (lobes, tendrils,
+  satellites, holes, twin bodies, stretch, roughness); its pre-simulated shape is what the engine paints, the settled dye
+  is the mask. Lab with sliders: `app/effects.html`. Merges (`merges` on a note) and reactions 🔥🧊🌱 are extra searches
+  on the stroke's cells. Room kinds (book / meeting / diary / group) live in the room's settings; imports in
+  `lib/import.js`; print sizes and the A6 postcard in `lib/export.js`.
+- **Telegram** (`rooms/src/worker.js`, `rooms/tg_setup.sh`): the bot only receives commands; `/paint` as a reply queues
+  that message for the room; `/show` and a weekly cron post the snapshot browsers upload; `/diary` + `/remind` for one
+  person. One `TgDirectory` Durable Object maps chats to rooms. Research on print-and-mail: `POSTCARDS.md`.
 - **Models are served from Hugging Face** (`noi3noi3/vqpaint-web`, CORS ok) with the same files on the gh-pages
   branch as an automatic fallback (`lib/models.js` `setModelMirror`; `?models=pages` forces it), and kept in Cache
   Storage after the first visit.
@@ -141,7 +149,7 @@ Weight-only int8 packs rebuilt to fp16 in the browser (`lib/pack.js`, `export/pa
 
 ## Layout
 
-- `app/` — the app: `index.html` (home), `room.html` + `room.js` (orchestrator), `components/`, `tokens.css`, `style.css`, `config.js`, tests `test_app.mjs` / `test_phone.mjs` / `test_replies.mjs` / `test_photo.mjs` / `test_lang.mjs`, `i18n.js`, `shots/` (screenshots, before/after).
+- `app/` — the app: `index.html` (home), `room.html` + `room.js` (orchestrator), `components/`, `tokens.css`, `style.css`, `config.js`, tests `test_app.mjs` / `test_phone.mjs` / `test_flow.mjs` / `test_step1.mjs` / `test_queue.mjs` / `test_kinds.mjs` / `test_replies.mjs` / `test_photo.mjs` / `test_lang.mjs`, `i18n.js`, `effects.html` (ink lab), `shots/` (screenshots, before/after).
 - `lib/` — `decoder.js`, `clip.js`, `clip_tokenizer.js`, `palette.js`, `bank.js`, `search.js` (the painter), `mask.js` (blob masks, alpha maps), `text.js` (chunking + blending), `room.js` (room client), `models.js` (loading + cache + ORT queue), `image.js`.
 - `rooms/` — Cloudflare Worker + Durable Object, protocol test.
 - `export/` — Python scripts that build the ONNX decoder (fp16 + int8), palette and bank; `paintings/` = the painting generator notebook.

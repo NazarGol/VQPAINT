@@ -16,22 +16,13 @@ Check: `curl https://vqpaint-rooms.vqpaint-rooms.workers.dev/tg/health` → `con
 ## Pick the reveal effect
 Ink is in (procedural fluid ink, 30-blob grid and circularity numbers in the report). Tune it on https://nazargol.github.io/VQPAINT/app/effects.html → "copy settings" → paste me the line; it goes into `app/config.js` (`CONFIG.ink`).
 
-## Test on the phones (round 6), laptop open in the same room
-Live: https://nazargol.github.io/VQPAINT/ . Minimum phones now: iPhone XR / 11 / SE 2 (iOS 15+) and a 3 GB 2020 Android.
-1. **No modes**: one finger drags the canvas (it should glide a little after you let go), pinch zooms, a tap on a stroke opens its note, a tap on empty space opens the writer as a sheet above the keyboard. Nothing should feel ignored; every pill should press in.
-2. **Write and paint**: write a note, tap "paint". Expected at once: a tiny ripple and a small buzz (Android, or iPhone on iOS 17.4+), then a lilac fog spreading from the tap that turns into the painting while the laptop paints (≈10 s); the edge settles with a second, softer buzz. Hold your finger down before lifting it to make a bigger drop. Touch the spreading drop and drag to stir it.
-3. **Queue**: write a second note while the first is still painting. Expected: "painting after the current one…", then it paints by itself.
-4. **First visit**: open the link in a private tab: it should ask your name once. "invite" should open the share sheet.
-5. **Reduce motion** (iOS: Settings → Accessibility → Motion; Android: Remove animations): strokes should appear with a quick soft fade, no spreading.
-6. **Frame rate**: does the spreading ever stutter? (It should drop detail, not frames.) Tell me the phone model and iOS/Android version.
-7. The previous round's checks (reply, photo, Ukrainian, practical notes) still apply; see the end of PROGRESS.md.
+## Test on the phones (round 7), laptop open in the same room
+Live: https://nazargol.github.io/VQPAINT/ (same links as before). Minimum phones: iPhone XR / 11 / SE 2 (iOS 15+), 3 GB 2020 Android.
+1. **Ink**: tap → write → paint. Every stroke should be a clearly different, non-round blot (lobes, filaments, droplets, sometimes a hole or two bodies). Hold the finger before lifting it for more ink; drag across the spreading ink to stir it. The lab for tuning: https://nazargol.github.io/VQPAINT/app/effects.html ("copy settings" → send me the line).
+2. **Alone**: close the laptop's tab, write a note. Expected: "preparing the brush… N%", then the stroke paints on the phone (slower; an iOS 15 phone without WebGPU takes minutes per stroke).
+3. **Overlap**: write a note on top of an existing stroke. Expected: the overlap paints toward both; tapping it shows "A × B".
+4. **Reactions**: open a note → 🔥 🧊 🌱. Expected: the stroke actually changes (warmer / colder / grows a little into its neighbours) for everyone in the room; a second tap of the same reaction is refused.
+5. **Book / meeting / diary**: from the home page create each kind. Book: chapter picker, ⋯ → import highlights (paste a Kindle "My Clippings.txt"), ⋯ → all notes (grouped), ⋯ → print: bookplate. Meeting: notes anonymous unless signed, ⋯ → paste notes, ⋯ → finish meeting (PNG + PDF + share sheet). Diary: no invite pill, ⋯ → calendar, tap a day, export this month.
+6. **Postcard**: ⋯ → make a postcard → pick notes → PDF (2 pages, A6 with bleed). Open it on the phone: Ukrainian text must render.
+7. Tell me the phone model, OS version, and whether anything stuttered or reloaded.
 
-## Kaggle painting bank
-Done: 1500 paintings generated (8.2 h on 2× T4), bank rebuilt and live. Rotate the Kaggle token now if you want (it was pasted into the chat once).
-
-## Tokens
-- Kaggle token: `~/.kaggle/access_token` (mode 600). It was pasted into the chat once — rotate it on kaggle.com after the painting run.
-- Hugging Face token: `~/.config/vqpaint/hf_token` works (write, account `noi3noi3`); repo https://huggingface.co/noi3noi3/vqpaint-web.
-
-## Still open
-- PR #2 (web-spikes → main) is open for you to merge when you are happy with the phone tests.

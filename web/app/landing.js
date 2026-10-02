@@ -11,7 +11,9 @@ const go = (id) => {
   if (nameEl.value.trim()) localStorage.setItem('vqpaint.name', nameEl.value.trim());
   location.href = `room.html?r=${encodeURIComponent(id)}`;
 };
-document.getElementById('create').onclick = () => go(newRoomId());
+let kind = 'default';
+for (const b of document.querySelectorAll('[data-kind]')) b.onclick = () => { kind = b.dataset.kind; for (const x of document.querySelectorAll('[data-kind]')) x.classList.toggle('active', x === b); };
+document.getElementById('create').onclick = () => { if (nameEl.value.trim()) localStorage.setItem('vqpaint.name', nameEl.value.trim()); location.href = `room.html?r=${encodeURIComponent((kind === 'default' ? '' : kind + '-') + newRoomId())}${kind === 'default' ? '' : '&new=' + kind}`; };
 document.getElementById('join').onclick = () => {
   const v = document.getElementById('join-id').value.trim();
   const m = v.match(/[?&]r=([a-z0-9-]+)/i) || v.match(/^([a-z0-9-]{4,32})$/i);
