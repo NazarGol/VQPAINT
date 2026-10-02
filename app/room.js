@@ -3,6 +3,8 @@ import { CONFIG } from './config.js';
 import { webgpuInfo, setModelMirror } from '../lib/models.js';
 import { F, expandRegion, readRegion } from '../lib/decoder.js';
 import { Engine } from '../lib/engine/client.js';
+import { LightEngine } from '../lib/engine/light.js';
+import { mountDebugLine, memoryInfo } from './debugline.js';
 import { maskCells, maskToString, maskFromString, maskFromCells, maskHas, maskTouches, noisyMask, discMask } from '../lib/mask.js';
 import { t, lang, setLang } from './i18n.js';
 import { lassoMask } from '../lib/lasso.js';
@@ -48,19 +50,24 @@ let helpersOn = params.get('helpers') ? params.get('helpers') === '1' : true;
 const caps = { paint: false, speed: null, gpu: false, lite, helper: false };
 // crash loop guard: if the last visit never reached 'ok' (Safari reloaded the tab), start in low-memory safe mode (viewing only)
 const lastBoot = sessionStorage.getItem('vqpaint.boot');
-let safeMode = params.get('safe') === '1' || (lastBoot === 'loading' || lastBoot === 'painting');
-if (safeMode) localStorage.setItem('vqpaint.crashes', String((+localStorage.getItem('vqpaint.crashes') || 0) + 1));
+const crashedLastTime = lastBoot === 'loading' || lastBoot === 'painting';
+if (crashedLastTime) localStorage.setItem('vqpaint.crashes', String((+localStorage.getItem('vqpaint.crashes') || 0) + 1));
+if (params.get('reset') === '1') localStorage.setItem('vqpaint.crashes', '0');
+const crashes = +localStorage.getItem('vqpaint.crashes') || 0;
+let safeMode = params.get('safe') === '1' || (crashedLastTime && crashes >= 2);   // light engine: one crash -> lightest mode, two -> the note waits for a computer
+const lightest = params.get('light') === '1' || (crashes >= 1 && !safeMode);
 sessionStorage.setItem('vqpaint.boot', 'loading');
-const lowMem = isPhone || safeMode || params.get('lowmem') === '1';   // release models after every stroke, small caches, 1 wasm thread
+const lowMem = isPhone || safeMode || params.get('lowmem') === '1';
+let useTiny = params.get('engine') !== 'ort';   // the light engine (tiny decoder + MobileCLIP as WebGL2 shaders, no ONNX Runtime) is the default on every device; ?engine=ort forces the ONNX worker   // release models after every stroke, small caches, 1 wasm thread
 
 // ---------- state ----------
 let grid = null;                  // {w, h, tokens} from the room (256x256 by default), the search context
 let roomBlank = 0;                // the room's blank token (set by its creator)
 let ready = false, room = null, ep = 'webgpu', decoder = null, clip = null, painter = null, blankToken = 0, layers = null, modelsLoaded = false, mode = 'view';
-const engine = new Engine();                              // the models and the search live in a worker; the page only animates
+let engine = new Engine();                              // the models and the search live in a worker; the page only animates
 const deviceMemory = navigator.deviceMemory || 0;         // Chrome/Android: 0.25…8 (power of 2, rounded down); Safari: undefined
 /** can this device paint on its own without risking its memory? phones only with ≥ 8 GB reported (Android) or on iOS in non-safe mode */
-function canPaintHere() { if (forceNoPaint || safeMode || engine.broken) return false; if (!lowMem) return true; if (!caps.gpu) return false; if (deviceMemory) return deviceMemory >= 8; return isIOS; }
+function canPaintHere() { if (forceNoPaint || safeMode || engine.broken) return false; if (useTiny) return true; if (!lowMem) return true; if (!caps.gpu) return false; if (deviceMemory) return deviceMemory >= 8; return isIOS; }
 const isIOS = /iP(hone|ad|od)/.test(navigator.platform) || (navigator.userAgent.includes('Mac') && navigator.maxTouchPoints > 1);
 let roomSettings = {};                                   // kind (book / meeting / diary / group), title, author, chapters, anon, private
 const tgMode = params.get('tg') === '1';                 // opened inside Telegram's Mini App webview
@@ -308,7 +315,7 @@ async function startStroke(mask, text, points = null, realism = 0.6, extra = {})
   const parent = extra.parent && strokes.some((s) => s.id === extra.parent) ? extra.parent : null;
   const noteLang = detectLanguage(text);
   const drop = extra.drop || { x: mask.x + mask.w / 2, y: mask.y + mask.h / 2, size: Math.max(mask.w, mask.h) / 2, seed: (Math.random() * 2 ** 31) | 0 };   // lasso-era callers: a drop at the mask's centre
-  if (helpersOn && (forceNoPaint || lowMem || !caps.gpu) && (bestHelper() || (room && room.status !== 'open'))) return requestHelp(mask, text, points, realism, { parent, photo: extra.photo || null, lang: noteLang, drop });   // phones, no-WebGPU and forced devices ask (also while the fresh room is still connecting: whoever is there claims it); desktops paint themselves
+  if (helpersOn && (forceNoPaint || (!useTiny && (lowMem || !caps.gpu))) && (bestHelper() || (room && room.status !== 'open'))) return requestHelp(mask, text, points, realism, { parent, photo: extra.photo || null, lang: noteLang, drop });   // phones, no-WebGPU and forced devices ask (also while the fresh room is still connecting: whoever is there claims it); desktops paint themselves
   if (!canPaintHere()) return requestHelp(mask, text, points, realism, { parent, photo: extra.photo || null, lang: noteLang, drop, wait: true });   // a weak phone: the note waits on the server until a device that can paint opens the room
   const photo = extra.photo || null;
   if (photo && lowMem) { try { await encodePhotoTokens(photo); } catch (e) { console.warn('photo', e); setStatus(t('status.paintFailed', { error: e.message }), 6000); return; } }
@@ -341,7 +348,7 @@ function react(note, kind) {
 }
 function startReaction(job) {
   const note = strokes.find((s) => s.id === job.noteId); if (!note) { processQueue(); return; }
-  if (helpersOn) { const h = bestHelper(); if (h && (forceNoPaint || lowMem || !caps.gpu)) return requestReaction(note, job.kind); }
+  if (helpersOn) { const h = bestHelper(); if (h && (forceNoPaint || (!useTiny && (lowMem || !caps.gpu)))) return requestReaction(note, job.kind); }
   if (forceNoPaint) { setStatus(t('status.noPaint'), 6000); processQueue(); return; }
   ensureBrush().then(() => applyReaction(note, job.kind, { author: myName })).catch((e) => { setStatus(t('status.brushFailed', { error: e.message }), 8000); processQueue(); });
 }
@@ -389,12 +396,12 @@ async function applyReaction(note, kind, { author = myName, reqId = null } = {})
       if (ring.length < 2) { for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) { const gx = Math.round(b.x) + dx, gy = Math.round(b.y) + dy; if (!maskHas(mask, gx, gy) && gx >= 0 && gy >= 0 && gx < grid.w && gy < grid.h) ring.push([gx, gy]); } }
       const rmask = maskFromCells(ring, grid.w);
       grown = rmask;
-      await painter.paint({ grid, mask: rmask, target: base, seconds: secs, margin: MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, seeds: 3, sources: 1, patch: 3, growEdge: 0.95, temperature: 0.03, mutation: 0.08, anneal: 0.002, bankPatch: 0.15, parent: cur, parentMix: 0.7, onProgress });
+      await painter.paint({ grid, mask: rmask, target: base, seconds: secs, margin: useTiny ? 2 : MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, seeds: 3, sources: 1, patch: 3, growEdge: 0.95, temperature: 0.03, mutation: 0.08, anneal: 0.002, bankPatch: 0.15, parent: cur, parentMix: 0.7, onProgress });
       mask = unionMasks(mask, rmask); crop = expandRegion(grid, { x: mask.x, y: mask.y, w: mask.w, h: mask.h }, MARGIN);
     } else {
       const mood = await clip.embedText(kind === 'fire' ? 'warm glowing orange and red light, sunlit, fire' : 'cold icy blue and white light, frost, winter');
       target = mixEmb(base, mood, 0.45);
-      await painter.paint({ grid, mask, target, seconds: secs, margin: MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, seeds: 2, sources: 0, patch: 4, growEdge: 0.3, temperature: 0.02, mutation: 0.06, anneal: 0.002, bankPatch: 0, parent: cur, parentMix: 1.0, onProgress });
+      await painter.paint({ grid, mask, target, seconds: secs, margin: useTiny ? 2 : MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, seeds: 2, sources: 0, patch: 4, growEdge: 0.3, temperature: 0.02, mutation: 0.06, anneal: 0.002, bankPatch: 0, parent: cur, parentMix: 1.0, onProgress });
     }
     const tokens = readRegion(grid, crop), img = await decoder.decode(tokens, crop.h, crop.w);
     note.v = (note.v || 0) + 1; note.reactions = { ...(note.reactions || {}) }; note.reactions[kind] = [...(note.reactions[kind] || []), author];
@@ -409,7 +416,7 @@ async function applyReaction(note, kind, { author = myName, reqId = null } = {})
     stats.reactions = (stats.reactions || 0) + 1; ok = true; haptic('settle'); scheduleSnapshot();
     if (kind === 'grow') setStatus(t('react.grew'), 3000);
   } catch (e) { console.error(e); setStatus(t('status.paintFailed', { error: e.message })); if (rv) reveal.cancel(jobId); hiddenLayers.delete(note.id); }
-  finally { room?.paintEnd(jobId); if (reqId) room?.paintDone(reqId, ok); painting = null; updateScene(); renderPeers(); if (lowMem) await releaseBrush(); setTimeout(claimNextRequest, 300); processQueue(); }
+  finally { room?.paintEnd(jobId); if (reqId) room?.paintDone(reqId, ok); painting = null; updateScene(); renderPeers(); if (lowMem && !useTiny) await releaseBrush(); setTimeout(claimNextRequest, 300); processQueue(); }
 }
 /** cells of `mask` that older strokes own, grouped by stroke (biggest first): {note, mask} per zone */
 function overlapZones(mask, exclude) {
@@ -455,7 +462,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     setStage('search');
     if (chunks > 1) setStatus(t('status.chunks', { n: chunks }) + (hardSplits ? t('status.chunksSplit', { n: hardSplits }) : ''));
     const res = await painter.paint({
-      grid, mask, target, seconds: rp.seconds, margin: MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, parent: parentSeed(parent),
+      grid, mask, target, seconds: rp.seconds, margin: useTiny ? 2 : MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, parent: parentSeed(parent),
       photo: photo && photo.tokens ? { w: photo.side, h: photo.side, tokens: photo.tokens } : null, photoMix: 0.45 + 0.4 * realism,
       seeds: rp.seeds, sources: rp.sources, patch: rp.patch, growEdge: rp.growEdge, temperature: rp.temperature, mutation: rp.mutation, anneal: rp.anneal, bankPatch: rp.bankPatch,
       onProgress: (p) => {   // the engine's preview: shown through the spreading blot, fog -> clear
@@ -484,7 +491,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
         const ot = (await engine.embedLong(otherText)).target, mixed = new Float32Array(target.length); let n = 0;
         for (let k = 0; k < mixed.length; k++) { mixed[k] = 0.5 * target[k] + 0.5 * ot[k]; n += mixed[k] * mixed[k]; } n = Math.sqrt(n) + 1e-8; for (let k = 0; k < mixed.length; k++) mixed[k] /= n;
         setStatus(t('note.mergeHint'), 4000);
-        await painter.paint({ grid, mask: z.mask, target: mixed, seconds: Math.min(4, Math.max(2, rp.seconds * 0.4)), margin: MARGIN, blankToken: roomBlank, signal: abort.signal, seeds: 3, sources: 1, patch: 3, growEdge: 0.6, mutation: 0.08, anneal: 0.002, bankPatch: 0.2, parent: { crop: res.crop, tokens: res.tokens }, parentMix: 0.5 });
+        await painter.paint({ grid, mask: z.mask, target: mixed, seconds: Math.min(4, Math.max(2, rp.seconds * 0.4)), margin: useTiny ? 2 : MARGIN, blankToken: roomBlank, signal: abort.signal, seeds: 3, sources: 1, patch: 3, growEdge: 0.6, mutation: 0.08, anneal: 0.002, bankPatch: 0.2, parent: { crop: res.crop, tokens: res.tokens }, parentMix: 0.5 });
         merges.push({ with: z.note.id, cells: maskToString(z.mask) });
       }
       if (merges.length) { res.tokens = readRegion(grid, res.crop); res.image = await decoder.decode(res.tokens, res.crop.h, res.crop.w); reveal.setImage(jobId, res.image); }
@@ -517,7 +524,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     if (reqId) room?.paintDone(reqId, ok);
     painting = null; updateScene(); renderPeers();
     sessionStorage.setItem('vqpaint.boot', 'ok');
-    if (lowMem) await releaseBrush();
+    if (lowMem && !useTiny) await releaseBrush();
     setTimeout(claimNextRequest, 300);
     processQueue();
   }
@@ -716,7 +723,7 @@ function ensureBrush() {
     loading.set(t('load.brush', { pct: 0 })); setStage('engine');
     const r = await engine.init({ modelBase: M, modelFallback: M === CONFIG.modelBase ? CONFIG.modelFallback : null, ortBase: params.get('ort') || CONFIG.ortBase, entry: params.get('entry') || null, lowMem, gpuWanted: caps.gpu, plain, clipCpu, textGpu: params.get('textgpu') === '1', opt: params.get('opt') || null, bankName: /^[a-z_]+$/.test(params.get('bank') || '') ? params.get('bank') : 'bank', blankToken },
       (p) => { if (p.stage === 'download') { stats.cached = p.cached; stats.modelBytes = p.loaded; loading.set(t(p.cached ? 'load.brush' : 'load.brushFirst', { pct: Math.min(99, Math.round(p.loaded / p.total * 100)) })); } else setStage(p.stage); });
-    decoder = engine.decoder; clip = engine.clip; painter = engine.painter; ep = r.ep; caps.speed = stats.fullDecodeMs = r.speed;
+    decoder = engine.decoder; clip = engine.clip; painter = engine.painter; ep = r.ep; caps.speed = stats.fullDecodeMs = r.speed; if (r.variant) stats.engineVariant = r.variant;
     layers.setDecoder(decoder); beacon('decoder-ready'); beacon('clip-ready');
     setStage('brush-ready');
     modelsLoaded = true; caps.paint = true; room?.setCaps(caps);
@@ -737,9 +744,11 @@ async function boot() {
   if (tgMode) { try { const sc = document.createElement('script'); sc.src = 'https://telegram.org/js/telegram-web-app.js'; sc.onload = () => { try { const wa = window.Telegram?.WebApp; wa?.ready(); wa?.expand(); if (wa?.initDataUnsafe?.user && !localStorage.getItem('vqpaint.name')) { const u = wa.initDataUnsafe.user; myName = (u.first_name || u.username || myName).slice(0, 24); localStorage.setItem('vqpaint.name', myName); } } catch (_) {} }; document.head.appendChild(sc); } catch (_) {} }
   const gpu = params.get('nogpu') === '1' ? null : await webgpuInfo();
   beacon('gpu', { gpu }); caps.gpu = !!gpu;
+  if (useTiny) { engine = new LightEngine(lightest ? { mode: 'clip', clip: 'clip_vision_i8', scorer: null, text: 'S' } : { mode: params.get('mode') || 'prefilter' }); stats.engine = 'tiny'; stats.engineMode = lightest ? 'lightest (int8 CLIP, no scorer)' : (params.get('mode') || 'prefilter'); stats.crashes = crashes; }
+  mountDebugLine($('roombar'), () => { const secs = stats.strokeSeconds[stats.strokeSeconds.length - 1]; return { engine: (stats.engine || 'ort') + (stats.engineVariant ? ' ' + stats.engineVariant : ''), mode: stats.engineMode || ep || '-', crashes: stats.crashes ?? 0, 'last stroke': secs ? `${stats.lastTries} tries in ${secs.toFixed(1)} s (${(stats.lastTries / secs).toFixed(1)}/s)` : '-', 'decode ms': stats.fullDecodeMs ?? '-', memory: memoryInfo() }; });
   if (!gpu && !lowMem && !forceNoPaint) setStatus(t('msg.noGpuShort'), 7000);   // a quiet line, never a box over the canvas
   ep = gpu ? 'webgpu' : 'wasm';
-  caps.helper = !!gpu && !lowMem && !forceNoPaint && helpersOn;   // a desktop with WebGPU can paint for phones (loads models when it claims)
+  caps.helper = (useTiny || !!gpu) && !lowMem && !forceNoPaint && helpersOn;   // a desktop with WebGPU can paint for phones (loads models when it claims)
   const t0 = performance.now();
   if (!fresh) loading.set(t('load.painting'));
   document.documentElement.style.setProperty('--color-bg', CONFIG.blankRgb);   // the exact decoded colour of blank canvas
