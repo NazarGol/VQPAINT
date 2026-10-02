@@ -166,15 +166,17 @@ Weight-only int8 packs rebuilt to fp16 in the browser (`lib/pack.js`, `export/pa
 - The bank reproduces (lossy) versions of COCO/CelebA photos as seeds. Research use.
 - GitHub Pages bandwidth is a soft 100 GB/month: roughly 500 first visits.
 
-## Light engine (phones, no ONNX Runtime)
+## Light engine (default on every device, no ONNX Runtime)
 
-Phones and devices without WebGPU paint with the light engine (`lib/engine/light.js`, same facade as the ORT engine worker; `?engine=tiny` opts a desktop in, `?engine=ort` opts out).
-Three models distilled or converted on Kaggle run as WebGL2 shader passes or plain JS (`web/research/` has the training code, notebooks and tests):
+Every device paints with the light engine (`lib/engine/light.js`, same facade as the ORT engine worker; `?engine=ort` forces the old ONNX path).
+Three models converted or distilled on Kaggle run as WebGL2 shader passes or plain JS (`web/research/` has the training code, notebooks and tests;
+the engine itself lives in https://github.com/NazarGol/tiny-vqgan and is vendored here, see `engine/VENDOR.md`):
 
-- `lib/tinydec.js` — tiny VQGAN decoder (`models/tiny/tiny_decoder_A.bin`, 3.1 MB; variant B 3.0 MB for slow GPUs): tokens → RGB, 256 px in ~10 ms on an M1.
-- `lib/clipvision.js` — the real MobileCLIP-S0 image tower as shader passes (21.7 MB fp16, cosine 0.9995+ vs ONNX Runtime, 13 ms per image on an M1): real CLIP scores the tiny decoder's output, no readback.
-- `lib/tinyscorer.js` — token scorer (5.2 MB): ranks 32 mutations per generation so real CLIP judges only the best few (pre-filter).
-- `engine/text.js` — distilled MobileCLIP text tower (9.3 MB) in a Worker, once per note.
+- `lib/tinydec.js` — tiny VQGAN decoder (3.1 MB; variant B for slow GPUs): tokens → RGB, 256 px in ~10 ms on an M1;
+- `lib/clipvision.js` — the real MobileCLIP-S0 image tower as 118 shader ops (21.7 MB fp16, cosine 0.9995+ vs ONNX Runtime, 13 ms per image): real CLIP scores the tiny decoder's output;
+- `lib/tinyscorer.js` — token scorer (5.2 MB) as a pre-filter: ranks 32 mutations, real CLIP judges the best 4;
+- `engine/text.js` — distilled MobileCLIP text tower (9.3 MB) in a Worker.
 
-`engine/engine.js` is the standalone interface (`load`, `encodeTexts`, `paintStroke`, `decode`, `release`); `lib/engine/light.js` adapts it to room.js. Everything needed to paint is ~38 MB; the emulated painting peak on an iPhone 11 profile is ~280 MB above an empty tab (was 1.8 GB). Licence note: the CLIP image tower and the text/token models derive from Apple MobileCLIP-S0 (research use only, see `research/LICENSES.md`).
-Minimum devices and the real-phone checklist: `DEVICES.md`. Tests: `node research/test_app_tiny.mjs [--browser webkit --device "iPhone 11" | --nogpu]`, `node research/test_tinydec.mjs --page test_clipvision.html --browser all`, `research/test_matrix.sh`.
+Fallbacks: a tab that crashed once starts in the lightest mode (int8 CLIP, no scorer); twice, the note waits for a computer. Debug line: tap the room bar 5 times
+(engine, mode, crashes, last stroke tries and seconds, decode ms, memory). Everything needed to paint is ~42 MB (lightest: 33 MB). Licence note: the CLIP
+tower and the text/token models derive from Apple MobileCLIP-S0 (research use only, see `research/LICENSES.md`). Minimum devices and checks: `DEVICES.md`.
