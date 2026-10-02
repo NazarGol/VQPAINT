@@ -26,3 +26,10 @@ Live: https://nazargol.github.io/VQPAINT/ (same links as before). Minimum phones
 6. **Postcard**: ⋯ → make a postcard → pick notes → PDF (2 pages, A6 with bleed). Open it on the phone: Ukrainian text must render.
 7. Tell me the phone model, OS version, and whether anything stuttered or reloaded.
 
+
+## Connect the Android phone for real-device testing (nothing is visible on USB right now)
+1. Plug the phone into the Mac with a data cable (a charge-only cable shows nothing; `system_profiler SPUSBDataType` lists zero USB devices at the moment).
+2. On the phone: Settings → Developer options → USB debugging ON; when the "Allow USB debugging?" prompt appears, tick "Always allow from this computer" and accept.
+3. Pull down the USB notification and set the mode to "File transfer" (some phones hide the device in "Charging only").
+4. Check from a terminal: `adb devices` (platform-tools are installed now) should list the phone as `device`, not `unauthorized`.
+5. If USB stays dead, use Wireless debugging: Developer options → Wireless debugging → "Pair device with pairing code" and send me the IP:port and the code; I run `adb pair`.

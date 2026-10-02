@@ -28,11 +28,14 @@ import { readPhotoFile, encodePhoto, dataUrlToImage, thumbOf } from '../lib/phot
 import { imageToCHW } from '../lib/encoder.js';
 import { detectLanguage, translateToEnglish, releaseTranslator, translatorLoaded } from '../lib/translate.js';
 import { Metaphors } from '../lib/metaphors.js';
+import { listRecent, rememberRoom, thumbOf as roomThumb } from '../lib/recent.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const roomId = (params.get('r') || '').toLowerCase();
 if (!/^[a-z0-9-]{4,32}$/.test(roomId)) location.replace('index.html');
+const known = listRecent().some((r) => r.id === roomId);
+let fresh = params.get('fresh') === '1' && !known;       // a new painting: the room is created on the server only when the first note is written
 
 // ---------- identity & device ----------
 const ADJ = ['quick', 'calm', 'bright', 'quiet', 'wild', 'soft', 'bold', 'warm'], ANI = ['fox', 'owl', 'otter', 'hare', 'wren', 'moth', 'seal', 'lynx'];
@@ -75,7 +78,7 @@ const metaphorsOn = params.get('metaphors') !== '0';   // ?metaphors=0 paints th
 // ---------- UI ----------
 const stage = $('stage');
 const toast = mountToast(stage);
-const roombar = mountRoombar($('roombar'), { roomId, onInvite: invite });
+const roombar = mountRoombar($('roombar'), { roomId, onInvite: invite, onMine: () => showMine() });
 const hint = $('hint'); hint.textContent = t('hint.empty');
 const menu = mountMenu($('menu-root'));
 const sheets = mountSheets(stage, { phone: isPhone });
@@ -84,9 +87,14 @@ function menuItems() {
   const items = [
     { id: 'undo', label: t('menu.undo'), onClick: undo, disabled: !undoStack.length },
     { id: 'notes', label: k === 'diary' ? t('menu.calendar') : t('menu.notes'), onClick: showList },
+    { divider: true },
+    { id: 'chapters', label: t('menu.chapters'), onClick: addChapters },
+    { id: 'anon', label: t('menu.anon', { state: t(roomSettings.anon ? 'on' : 'off') }), onClick: () => postSettings({ kind: roomSettings.anon ? (roomSettings.chapters && roomSettings.chapters.length ? 'book' : 'default') : 'meeting', anon: !roomSettings.anon }) },
+    { id: 'daily', label: t('menu.daily', { state: t(k === 'diary' ? 'on' : 'off') }), onClick: () => postSettings({ kind: k === 'diary' ? 'default' : 'diary', private: k !== 'diary' }) },
+    { id: 'import', label: t('menu.import'), onClick: importHighlights },
+    { id: 'paste', label: t('menu.paste'), onClick: pasteNotes },
   ];
-  if (k === 'book') items.push({ id: 'import', label: t('menu.import'), onClick: importHighlights });
-  if (k === 'meeting') items.push({ id: 'paste', label: t('menu.paste'), onClick: pasteNotes }, { id: 'finish', label: t('menu.finish'), onClick: finishMeeting });
+  if (k === 'meeting' || roomSettings.anon) items.push({ id: 'finish', label: t('menu.finish'), onClick: finishMeeting });
   if (k === 'diary') items.push({ id: 'invites', label: t('menu.invites', { state: t(roomSettings.private === false ? 'on' : 'off') }), onClick: toggleInvites });
   items.push({ divider: true },
     { id: 'png', label: t('menu.png'), onClick: () => exportPng() }, { id: 'pdf', label: t('menu.pdf'), onClick: () => exportPdf() },
@@ -95,7 +103,8 @@ function menuItems() {
     { id: 'replay', label: t('menu.replay'), onClick: () => replay() }, { id: 'video', label: t('menu.video'), onClick: () => exportVideo() },
     { divider: true },
     { id: 'helpers', label: helpersLabel(), onClick: () => { helpersOn = !helpersOn; menu.render(menuItems()); } },
-    { id: 'lang', label: t('menu.lang'), onClick: () => { setLang(lang === 'uk' ? 'en' : 'uk'); const u = new URL(location.href); u.searchParams.delete('lang'); location.replace(u.href); } });
+    { id: 'lang', label: t('menu.lang'), onClick: () => { setLang(lang === 'uk' ? 'en' : 'uk'); const u = new URL(location.href); u.searchParams.delete('lang'); location.replace(u.href); } },
+    { id: 'source', label: t('menu.source'), onClick: () => window.open('https://github.com/NazarGol/VQPAINT/tree/web-spikes/web', '_blank') });
   return items;
 }
 menu.render(menuItems());
@@ -111,7 +120,8 @@ const briefText = (s, n = 40) => { s = String(s || '').replace(/\s+/g, ' ').trim
 const notes = mountNotes(stage, {
   anchorFor: () => null,
   phone: isPhone, threadOf,
-  onSubmit: (text, realism, extra = {}) => { const d = pendingDrop, parent = extra.replyTo; pendingDrop = null; replyTo = null; updateScene(); if (d) enqueueStroke({ drop: d, text, realism, parent: parent ? parent.id : null, photo: extra.photo || null, chapter: extra.chapter || null, anon: roomSettings.kind === 'meeting' && roomSettings.anon && !extra.signed ? true : undefined, day: roomSettings.kind === 'diary' ? today() : undefined }); },
+  onSubmit: (text, realism, extra = {}) => { if (extra.name) { myName = extra.name.slice(0, 24); localStorage.setItem('vqpaint.name', myName); }
+    const d = pendingDrop, parent = extra.replyTo; pendingDrop = null; replyTo = null; updateScene(); ensureRoom(); if (d) enqueueStroke({ drop: d, text, realism, parent: parent ? parent.id : null, photo: extra.photo || null, chapter: extra.chapter || null, anon: roomSettings.kind === 'meeting' && roomSettings.anon && !extra.signed ? true : undefined, day: roomSettings.kind === 'diary' ? today() : undefined }); },
   onCancel: () => { dissolveDrop(pendingDrop); pendingDrop = null; replyTo = null; updateScene(); },
   onInput: (text) => { if (pendingDrop) reveal.nudge(pendingDrop.pendingId, text); },
   onReply: (note) => startReply(note),
@@ -183,7 +193,7 @@ function beginWrite(w, hold = 0, existing = null) {
   const d = existing || liveDrop(w[0], w[1], Math.min(MAX_R, BASE_R + hold * 2.6));   // the drop that landed under the finger, or a new one now
   if (replyTo && !maskTouches(discMask(d.x, d.y, d.size, grid.w, grid.h), replyTo._mask ||= maskFromString(replyTo.mask))) { dissolveDrop(d); setStatus(t('note.reply.mustTouch'), 5000); return; }
   pendingDrop = d; window.__vqpaintPending = d; updateScene(); hint.hidden = true;
-  notes.edit(view.anchorFor(dropRect(d)), '', { replyTo });
+  notes.edit(view.anchorFor(dropRect(d)), '', { replyTo, askName: !localStorage.getItem('vqpaint.name') && !tgMode });
 }
 /** paint now, or wait for the stroke in progress */
 let starting = false;   // a job is on its way to paintMask (models loading): the next one waits in the queue
@@ -493,7 +503,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
       note._preview = up.ok; stats.lastPreviewBytes = blob.size;
     } catch (e) { console.warn('preview upload', e); }
     room?.sendNote(note);
-    ok = true; scheduleSnapshot();
+    ok = true; scheduleSnapshot(); rememberThis();
   } catch (e) {
     console.error(e); setStatus(t('status.paintFailed', { error: e.message }));
     cells.forEach(([x, y], i) => (grid.tokens[y * grid.w + x] = before[i]));
@@ -547,9 +557,10 @@ function undo() {
   layers.drop(u.note.id); notes.close(); updateScene(); sendCells(u.cells); room?.deleteNote(u.note.id);
 }
 async function invite() {
+  ensureRoom();
   const link = location.origin + location.pathname + '?r=' + roomId;
   haptic('tap');
-  if (navigator.share) { try { await navigator.share({ title: 'vqpaint', url: link }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
+  if (navigator.share) { try { await navigator.share({ title: roomSettings.title || t('untitled'), url: link }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
   try { await navigator.clipboard.writeText(link); roombar.setInviteLabel(t('bar.copied')); setTimeout(() => roombar.setInviteLabel(t('bar.invite')), 2000); } catch { prompt(t('bar.copyPrompt'), link); }
 }
 
@@ -571,12 +582,12 @@ async function encodePhotoTokens(photo) {
 
 // ---------- export / replay (lib/export.js is loaded on demand) ----------
 const guard = (label, fn) => async () => { try { await fn(); } catch (e) { console.error(e); setStatus(t('status.failed', { what: label, error: e.message }), 6000); } };
-const exportPng = guard('PNG', async () => { setStatus(t('status.rendering'), 0); const m = await import('../lib/export.js'); await m.exportPng({ strokes, layers, grid, filename: `vqpaint-${roomId}.png`, blank: cssBg() }); setStatus(t('status.exportedPng')); });
-const exportPdf = () => exportPdfOf(strokes, `vqpaint-${roomId}.pdf`, roomSettings.title || '');
+const exportPng = guard('PNG', async () => { setStatus(t('status.rendering'), 0); const m = await import('../lib/export.js'); await m.exportPng({ strokes, layers, grid, filename: `painting-${roomId}.png`, blank: cssBg() }); setStatus(t('status.exportedPng')); });
+const exportPdf = () => exportPdfOf(strokes, `painting-${roomId}.pdf`, roomSettings.title || '');
 const replay = guard(t('menu.replay'), async () => { notes.close(); const m = await import('../lib/export.js'); await m.replay({ strokes, layers, grid, view, stage, blank: cssBg() }); });
-const exportVideo = guard(t('menu.video'), async () => { setStatus(t('status.recording'), 0); const m = await import('../lib/export.js'); await m.exportVideo({ strokes, layers, grid, filename: `vqpaint-${roomId}-replay`, blank: cssBg() }); setStatus(t('status.exportedVideo')); });
+const exportVideo = guard(t('menu.video'), async () => { setStatus(t('status.recording'), 0); const m = await import('../lib/export.js'); await m.exportVideo({ strokes, layers, grid, filename: `painting-${roomId}-replay`, blank: cssBg() }); setStatus(t('status.exportedVideo')); });
 const cssBg = () => getComputedStyle(document.documentElement).getPropertyValue('--color-bg').trim();
-const exportPrint = (size) => guard(t('menu.print'), async () => { setStatus(t('status.rendering'), 0); const m = await import('../lib/export.js'); const r = await m.exportPrint({ strokes, layers, grid, size, filename: `vqpaint-${roomId}-${size}.png`, blank: cssBg() }); setStatus(t('status.exportedPrint', { w: r.width, h: r.height })); })();
+const exportPrint = (size) => guard(t('menu.print'), async () => { setStatus(t('status.rendering'), 0); const m = await import('../lib/export.js'); const r = await m.exportPrint({ strokes, layers, grid, size, filename: `painting-${roomId}-${size}.png`, blank: cssBg() }); setStatus(t('status.exportedPrint', { w: r.width, h: r.height })); })();
 const groupByKind = () => (roomSettings.kind === 'book' ? 'chapter' : roomSettings.kind === 'diary' ? 'day' : null);
 const exportPdfOf = (list, name, title) => guard('PDF', async () => { setStatus(t('status.pdf'), 0); const m = await import('../lib/export.js'); await m.exportPdf({ strokes: list, layers, grid, decoder, filename: name, blank: cssBg(), room: roomId, lang, groupBy: groupByKind(), anon: !!roomSettings.anon, title: title || roomSettings.title || '' }); setStatus(t('status.exportedPdf')); })();
 const dayOf = (n) => n.day || (n.time ? new Date(n.time).toISOString().slice(0, 10) : '');
@@ -584,11 +595,16 @@ function showList() {
   notes.close();
   sheets.list(strokes, { groupBy: groupByKind(), kind: roomSettings.kind, anon: !!roomSettings.anon,
     onOpen: (id, { keep = false } = {}) => { const st = strokes.find((s) => s.id === id); if (!st) return; st._mask ||= maskFromString(st.mask); const c = st.crop || st._mask; view.view.fit({ x: c.x - 6, y: c.y - 6, w: c.w + 12, h: c.h + 12 }, 1.1, 20); userMoved = true; if (!keep) { sheets.close(); openNote(id); } scheduleVisibleLayers(); flashStroke(id); },
-    onExportMonth: (ym) => exportPdfOf(strokes.filter((n) => dayOf(n).startsWith(ym)), `vqpaint-${roomId}-${ym}.pdf`, new Date(ym + '-01T12:00:00').toLocaleString([], { month: 'long', year: 'numeric' })),
-    onExportYear: (y) => exportPdfOf(strokes.filter((n) => dayOf(n).startsWith(y)), `vqpaint-${roomId}-${y}.pdf`, y) });
+    onExportMonth: (ym) => exportPdfOf(strokes.filter((n) => dayOf(n).startsWith(ym)), `painting-${roomId}-${ym}.pdf`, new Date(ym + '-01T12:00:00').toLocaleString([], { month: 'long', year: 'numeric' })),
+    onExportYear: (y) => exportPdfOf(strokes.filter((n) => dayOf(n).startsWith(y)), `painting-${roomId}-${y}.pdf`, y) });
 }
 let flashId = null, flashT = 0;
 function flashStroke(id) { flashId = id; flashT = performance.now(); const tick = () => { const k = (performance.now() - flashT) / 1200; view.setScene({ highlight: k < 1 ? { id: flashId, k } : null }); if (k < 1) requestAnimationFrame(tick); }; tick(); }
+async function addChapters() {
+  const got = await sheets.importText({ title: t('chapters.title'), hint: t('chapters.hint'), accept: '.txt,.md' }); if (!got) return;
+  const chapters = got.text.split('\n').map((c) => c.replace(/^(?:[-*+•]|\d+[.)])\s+/, '').trim()).filter(Boolean).slice(0, 200);
+  await postSettings({ kind: 'book', chapters });
+}
 async function importHighlights() {
   const got = await sheets.importText({ title: t('import.title'), hint: t('import.hint') }); if (!got) return;
   const kind = detectImport(got.text), entries = kind === 'kindle' ? parseKindleClippings(got.text, { title: roomSettings.title || null }) : parseTextHighlights(got.text);
@@ -606,10 +622,10 @@ async function pasteNotes() {
 }
 async function finishMeeting() {
   await postSettings({ finished: Date.now() });
-  await exportPng(); await exportPdfOf(strokes, `vqpaint-${roomId}-meeting.pdf`, roomSettings.title || '');
+  await exportPng(); await exportPdfOf(strokes, `painting-${roomId}-meeting.pdf`, roomSettings.title || '');
   const link = location.origin + location.pathname + '?r=' + roomId;
   setStatus(t('finish.done'), 5000);
-  if (navigator.share) { try { await Promise.race([navigator.share({ title: roomSettings.title || 'vqpaint', text: t('finish.done'), url: link }), new Promise((r) => setTimeout(r, 15000))]); } catch (_) {} }   // the share sheet may never resolve (headless, dismissed)
+  if (navigator.share) { try { await Promise.race([navigator.share({ title: roomSettings.title || t('untitled'), text: t('finish.done'), url: link }), new Promise((r) => setTimeout(r, 15000))]); } catch (_) {} }   // the share sheet may never resolve (headless, dismissed)
 }
 async function toggleInvites() { await postSettings({ private: roomSettings.private === false }); roombar.setInviteVisible(roomSettings.private === false); menu.render(menuItems()); }
 async function makePostcard() {
@@ -618,7 +634,7 @@ async function makePostcard() {
   const sel = got.ym === 'all' ? strokes : strokes.filter((n) => dayOf(n).startsWith(got.ym));
   const picks = got.picks.map((id) => strokes.find((n) => n.id === id)).filter(Boolean);
   const label = got.ym === 'all' ? (roomSettings.title || '') : new Date(got.ym + '-01T12:00:00').toLocaleString(lang === 'uk' ? 'uk' : [], { month: 'long', year: 'numeric' });
-  await guard(t('menu.postcard'), async () => { setStatus(t('status.pdf'), 0); const m = await import('../lib/export.js'); await m.exportPostcard({ strokes, layers, grid, period: { label, strokes: sel }, picks, names: got.names, roomUrl: location.origin + location.pathname + '?r=' + roomId + '&replay=1', lang, blank: cssBg(), filename: `vqpaint-${roomId}-postcard-${got.ym}.pdf`, title: roomSettings.title || '' }); setStatus(t('status.exportedPostcard'), 5000); })();
+  await guard(t('menu.postcard'), async () => { setStatus(t('status.pdf'), 0); const m = await import('../lib/export.js'); await m.exportPostcard({ strokes, layers, grid, period: { label, strokes: sel }, picks, names: got.names, roomUrl: location.origin + location.pathname + '?r=' + roomId + '&replay=1', lang, blank: cssBg(), filename: `painting-${roomId}-postcard-${got.ym}.pdf`, title: roomSettings.title || '' }); setStatus(t('status.exportedPostcard'), 5000); })();
 }
 
 // ---------- helpers (optional) ----------
@@ -693,8 +709,9 @@ function ensureBrush() {
     mode = 'brush'; sessionStorage.setItem('vqpaint.boot', 'painting');
     const total = 105 * 2 ** 20, seen = {};
     const cachedSeen = {};
-    const onP = (p) => { seen[p.url] = p.loaded; cachedSeen[p.url] = !!p.cached; const loaded = Object.values(seen).reduce((a, b) => a + b, 0); loading.set(t('load.brush', { pct: Math.min(99, Math.round(loaded / total * 100)) })); stats.cached = Object.values(cachedSeen).every(Boolean); stats.modelBytes = loaded; };
+    const onP = (p) => { seen[p.url] = p.loaded; cachedSeen[p.url] = !!p.cached; const loaded = Object.values(seen).reduce((a, b) => a + b, 0); stats.cached = Object.values(cachedSeen).every(Boolean); loading.set(t(stats.cached ? 'load.brush' : 'load.brushFirst', { pct: Math.min(99, Math.round(loaded / total * 100)) })); stats.modelBytes = loaded; };
     loading.set(t('load.brush', { pct: 0 }));
+    if (!palette) palette = await Palette.load(M + 'palette/');
     setStage('ort'); if (!ort) { ort = await loadOrt(params.get('ort') || CONFIG.ortBase, params.get('entry') || (lowMem ? 'ort.all.min.mjs' : 'ort.webgpu.min.mjs')); ort.env.wasm.numThreads = 1; ort.env.wasm.proxy = false; }   // JSEP build on low-memory devices: it gives memory back on release
     if (!decoder) {
       setStage('decoder-fetch');
@@ -748,15 +765,14 @@ async function boot() {
   ep = gpu ? 'webgpu' : 'wasm';
   caps.helper = !!gpu && !lowMem && !forceNoPaint && helpersOn;   // a desktop with WebGPU can paint for phones (loads models when it claims)
   const t0 = performance.now();
-  loading.set(t('load.painting'));
+  if (!fresh) loading.set(t('load.painting'));
   document.documentElement.style.setProperty('--color-bg', CONFIG.blankRgb);   // the exact decoded colour of blank canvas
-  if (firstVisit && !params.get('auto') && !params.get('name') && !tgMode) await askName();
   if (params.get('new') && ['book', 'meeting', 'diary'].includes(params.get('new'))) setTimeout(() => setupNewRoom(params.get('new')), 400);
   if (params.get('replay') === '1') setTimeout(() => { if (strokes.length) replay(); }, 2500);
   if (params.get('name')) { myName = params.get('name').slice(0, 24); localStorage.setItem('vqpaint.name', myName); }
-  palette = await Palette.load(M + 'palette/');                       // 4 MB (colour proposals); no model is loaded for viewing
-  blankToken = CONFIG.blankToken;
-  connect();
+  blankToken = CONFIG.blankToken;                                     // nothing is downloaded for viewing; the palette (4 MB) comes with the brush
+  if (fresh) { grid = { w: CONFIG.gridW, h: CONFIG.gridH, tokens: new Int32Array(CONFIG.gridW * CONFIG.gridH).fill(blankToken) }; roomBlank = blankToken; roombar.setConnected?.(false); }
+  else connect();
   layers = new LayerCache(null, { max: lowMem ? 24 : 80 });
   stats.loadMs = Math.round(performance.now() - t0);
   ready = true; updateScene();
@@ -764,24 +780,39 @@ async function boot() {
   if (!viewFitted && grid) fitToPainting();
   scheduleVisibleLayers();
   if (grid && !strokes.length) loading.hide();
+  if (!fresh) rememberRoom(roomId, { title: roomSettings.title || '' });
   beacon('view-ready', { ms: stats.loadMs });
   if (!lowMem && !forceNoPaint && params.get('preload') === '1') await ensureBrush();
   claimNextRequest();
 }
 /** room settings arrived (state or a change): kind, title, chapters, anonymity, privacy */
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
-async function postSettings(cfg) { try { const r = await fetch(`${CONFIG.roomsUrl}/room/${roomId}/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) }); const j = await r.json(); if (j.settings) applySettings(j.settings); } catch (e) { console.warn('settings', e); } }
-/** ?new=book|meeting|diary: a small setup sheet, then the settings go to the room */
+async function postSettings(cfg) { ensureRoom(); try { const r = await fetch(`${CONFIG.roomsUrl}/room/${roomId}/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) }); const j = await r.json(); if (j.settings) applySettings(j.settings); } catch (e) { console.warn('settings', e); } }
+/** ?new=book|meeting|diary (old links): a small setup sheet, then the settings go to the room */
 async function setupNewRoom(kind) {
   const cfg = await sheets.setup(kind);
-  await postSettings(cfg || { kind, private: kind === 'diary', anon: kind === 'meeting' });
+  ensureRoom(); await postSettings(cfg || { kind, private: kind === 'diary', anon: kind === 'meeting' });
   const u = new URL(location.href); u.searchParams.delete('new'); history.replaceState(null, '', u.href);
 }
+/** a fresh painting touches the server for the first time (first note, invite, a setting) */
+function ensureRoom() { if (!fresh) return; fresh = false; const u = new URL(location.href); u.searchParams.delete('fresh'); history.replaceState(null, '', u.href); roombar.setConnected?.(true); connect(); rememberRoom(roomId, {}); }
+// ---------- my paintings: the rooms this browser has visited ----------
+let thumbTimer = null;
+function rememberThis() { clearTimeout(thumbTimer); thumbTimer = setTimeout(() => { try { const last = strokes[strokes.length - 1]; rememberRoom(roomId, { title: roomSettings.title || '', notes: strokes.length, last: last ? String(last.text).slice(0, 80) : '', thumb: roomThumb(layers, strokes, paintedBounds(strokes), cssBg()) || undefined }); } catch (e) { console.warn('recent', e); } }, 1500); }
+function showMine() {
+  notes.close();
+  const rooms = listRecent().filter((r) => r.id !== roomId || strokes.length);
+  const item = (r) => `<div class="item mine" data-go="${escapeHtmlAttr(r.id)}">${r.thumb ? `<img src="${r.thumb}" alt="">` : '<span class="nothumb"></span>'}<div><div>${escapeHtmlAttr(r.title || t('untitled'))}</div><div class="meta">${new Date(r.at || r.first || Date.now()).toLocaleDateString([], { day: 'numeric', month: 'short' })}${r.notes ? ' · ' + t('mine.notes', { n: r.notes }) : ''}${r.last ? ' · ' + escapeHtmlAttr(r.last) : ''}</div></div></div>`;
+  const el = sheets.open(`<button type="button" class="pill go" data-new>${t('mine.new')}</button><div class="mine-list">${rooms.length ? rooms.map(item).join('') : `<div class="meta">${t('mine.empty')}</div>`}</div>`, { title: t('mine.title') });
+  el.querySelector('[data-new]').onclick = () => { location.href = 'index.html'; };
+  for (const i of el.querySelectorAll('[data-go]')) i.onclick = () => { location.href = `room.html?r=${encodeURIComponent(i.dataset.go)}`; };
+}
+const escapeHtmlAttr = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function applySettings(cfg) {
   roomSettings = cfg || {};
   menu.render(menuItems());
   roombar.setTitle?.(roomSettings.title || '');
-  document.title = roomSettings.title ? `${roomSettings.title} · vqpaint` : 'vqpaint';
+  document.title = roomSettings.title || t('untitled');
   if (roomSettings.private) roombar.setInviteVisible?.(params.get('invite') === '1');
   updateScene();
 }
@@ -799,16 +830,6 @@ function scheduleSnapshot() {
       if (blob && blob.size < 1400 * 1024) await fetch(`${CONFIG.roomsUrl}/room/${roomId}/snapshot`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
     } catch (e) { console.warn('snapshot', e); }
   }, 8000);
-}
-/** first visit: ask for a name once (a small sheet), remember it */
-function askName() {
-  return new Promise((res) => {
-    toast.message(`<div class="ask">${t('name.ask')}</div><input type="text" maxlength="24" placeholder="${t('name.placeholder')}" data-name autocomplete="nickname" enterkeyhint="done"><button class="pill go" data-go>${t('name.go')}</button>`);
-    const m = document.querySelector('[data-message]'), inp = m.querySelector('[data-name]');
-    const done = () => { const v = inp.value.trim(); if (v) { myName = v; localStorage.setItem('vqpaint.name', v); } m.hidden = true; res(); };
-    m.querySelector('[data-go]').onclick = done; inp.onkeydown = (e) => { if (e.key === 'Enter') done(); };
-    setTimeout(() => inp.focus({ preventScroll: true }), 50);
-  });
 }
 function matchBackgroundUnused(img) {
   const plane = img.w * img.h; let r = 0, g = 0, b = 0, n = 0;
@@ -841,7 +862,7 @@ function connect() {
       const mine = [...myRequests.values()].find((e) => e.assigned && n.author === myName && n.blot && e.drop && Math.hypot(n.blot.x - e.drop.x, n.blot.y - e.drop.y) < 2);
       if (mine && mine.fogId && n.crop && reveal.adopt(mine.fogId, n.id, { texCrop: n.crop, burst: false })) { mine.fogId = null; hiddenLayers.add(n.id); }   // my own ink, painted by a helper: keep it and let the painting appear inside it
       else { if (mine) dropFog(mine); if (ready && n.by !== room.id) revealIncoming(n); }
-      updateScene(); scheduleVisibleLayers(); },
+      updateScene(); scheduleVisibleLayers(); rememberThis(); },
     onNoteDelete: (id) => { const i = strokes.findIndex((s) => s.id === id); if (i >= 0) { strokes.splice(i, 1); layers?.drop(id); if (notes.openedId === id) notes.close(); updateScene(); } },
     onPaintRequest, onPaintAssigned, onPaintDone,
     onSettings: (cfg) => applySettings(cfg),
@@ -875,4 +896,4 @@ function tapPaint(x, y, text, realism = 0.6, hold = 0, extra = {}) { beginWrite(
   try { await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(stats) }); } catch (_) {}
 })();
 window.__vqpaint = { get grid() { return grid; }, stats, strokes, caps, get ready() { return ready; }, get mode() { return mode; }, get modelsLoaded() { return modelsLoaded; }, ensureBrush, releaseBrush, get safeMode() { return safeMode; }, get name() { return myName; }, get decodeTimes() { return decoder && decoder.times ? decoder.times : []; }, paintRegion, paintAt, lassoPaint, peers, get room() { return room; },
-  get painting() { return painting; }, othersPainting, myRequests, ensurePainter: ensureBrush, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, tapPaint, get queue() { return queue; }, reveal, beginWrite, strokeAt, react, mergeAt, autoPlace, get settings() { return roomSettings; }, scheduleSnapshot, sheets, importHighlights, pasteNotes, finishMeeting, makePostcard, exportPrint, showList, postSettings, enqueueStroke, get menu() { return menu; }, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; }, startReply, openNote, get replyTo() { return replyTo; }, threadOf, maskTouches: (a, b) => maskTouches(a, b), lassoMask: (pts) => lassoMask(pts, grid.w, grid.h), readPhoto, get lang() { return lang; } };
+  get painting() { return painting; }, othersPainting, myRequests, ensurePainter: ensureBrush, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, tapPaint, get queue() { return queue; }, reveal, beginWrite, strokeAt, react, mergeAt, autoPlace, get fresh() { return fresh; }, showMine, listRecent, get settings() { return roomSettings; }, scheduleSnapshot, sheets, importHighlights, pasteNotes, finishMeeting, makePostcard, exportPrint, showList, postSettings, enqueueStroke, get menu() { return menu; }, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; }, startReply, openNote, get replyTo() { return replyTo; }, threadOf, maskTouches: (a, b) => maskTouches(a, b), lassoMask: (pts) => lassoMask(pts, grid.w, grid.h), readPhoto, get lang() { return lang; } };

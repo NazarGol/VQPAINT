@@ -16,8 +16,8 @@ const browser = await chromium.launch({ channel: 'chromium', headless: true, arg
 const fails = []; const check = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails.push(m); };
 // 1. UI language follows the browser language
 const uk = await (await browser.newContext({ locale: 'uk-UA', viewport: { width: 1100, height: 760 } })).newPage();
-await uk.goto(`${base}/app/index.html`);
-check((await uk.evaluate(() => document.getElementById('create').textContent)) === 'створити кімнату', 'landing page in Ukrainian for a uk-UA browser');
+await uk.goto(`${base}/app/index.html`); await uk.waitForFunction(() => /room\.html\?r=/.test(location.href) && window.__vqpaint && window.__vqpaint.ready, null, { timeout: 60000 });
+check((await uk.evaluate(() => document.getElementById('hint').textContent)) === 'торкніться будь-де і напишіть думку' && (await uk.evaluate(() => window.__vqpaint.fresh)), 'the site opens straight onto a fresh canvas, hint in Ukrainian for a uk-UA browser');
 await uk.goto(url + '&nopaint=1'); await uk.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready, null, { timeout: 120000 });
 check((await uk.evaluate(() => document.querySelector('[data-invite]').textContent)) === 'запросити' && (await uk.evaluate(() => document.documentElement.lang)) === 'uk', 'room UI in Ukrainian (invite pill, html lang)');
 await uk.evaluate(() => { document.querySelector('#menu').click(); });

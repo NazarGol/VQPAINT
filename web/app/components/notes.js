@@ -20,25 +20,27 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onInput = n
   const who = (n) => escapeHtml((n.anon ? '' : n.author) || t('someone'));
   const api = {
     /** anchor in stage px; opts.replyTo: the parent note when this shape is a reply */
-    edit(anchor, initial = '', { replyTo = null } = {}) {
+    edit(anchor, initial = '', { replyTo = null, askName = false } = {}) {
       api.cancel(); api.close();
       const el = document.createElement('div'); el.className = 'note editing' + (phone ? ' sheet' : ''); el.style.pointerEvents = 'auto';
       const cfg = room() || {}, chapters = cfg.kind === 'book' && Array.isArray(cfg.chapters) && cfg.chapters.length ? cfg.chapters : null;
       const chapterSel = chapters ? `<select class="chapter" data-chapter><option value="">${t('note.noChapter')}</option>${chapters.map((c) => `<option value="${escapeHtml(c)}" ${c === api.lastChapter ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}</select>` : '';
       const sign = cfg.kind === 'meeting' && cfg.anon ? `<label class="sign"><input type="checkbox" data-sign> ${t('note.sign')}</label>` : '';
       const today = cfg.kind === 'diary' ? `<div class="meta">${t('note.today', { date: new Date().toLocaleDateString([], { day: 'numeric', month: 'long' }) })}</div>` : '';
-      el.innerHTML = `${today}${chapterSel}${sign}${replyTo ? `<div class="meta" data-reply-head><span class="dot" style="background:${escapeHtml(replyTo.color || '#888')}"></span>${t('note.replyingTo', { name: who(replyTo) })} · <span class="quiet">${escapeHtml(brief(replyTo.text, 48))}</span></div>` : ''}
+      const nameField = askName ? `<input class="name" type="text" maxlength="24" data-name placeholder="${escapeHtml(t('note.yourName'))}" autocomplete="nickname" enterkeyhint="next">` : '';
+      el.innerHTML = `${nameField}${today}${chapterSel}${sign}${replyTo ? `<div class="meta" data-reply-head><span class="dot" style="background:${escapeHtml(replyTo.color || '#888')}"></span>${t('note.replyingTo', { name: who(replyTo) })} · <span class="quiet">${escapeHtml(brief(replyTo.text, 48))}</span></div>` : ''}
         <div class="photo-row" data-photo-row hidden><img data-photo-thumb alt=""><button type="button" class="link" data-photo-remove>${t('note.photo.remove')}</button></div>
         <textarea data-note-input rows="1" placeholder="${escapeHtml(t(replyTo ? 'note.reply.placeholder' : 'note.placeholder'))}"></textarea>
         <div class="actions">${onPhoto ? `<button type="button" class="pill ghost" data-photo>${t('note.photo')}</button><input type="file" accept="image/*" data-photo-file hidden>` : ''}<span class="hint">${t(phone ? 'note.hint.phone' : 'note.hint')}</span><button type="button" class="pill go" data-paint>${t('note.paint')}</button></div>`;
       const ta = el.querySelector('textarea'); ta.value = initial;
+      const nm = el.querySelector('[data-name]'); if (nm) nm.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ta.focus(); } });
       ta.addEventListener('input', () => { grow(ta); onInput?.(ta.value); });
       ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); api.submit(); } else if (e.key === 'Escape') { e.preventDefault(); api.cancel(true); } });
       el.querySelector('[data-paint]').onclick = () => api.submit();
       layer.appendChild(el); editing = { el, anchor, replyTo, photo: null };
       if (!phone) place(el, anchor);
       requestAnimationFrame(() => el.classList.add('in'));   // slides/fades in (150-250 ms, transform + opacity only)
-      grow(ta); ta.focus({ preventScroll: true });
+      grow(ta); (nm || ta).focus({ preventScroll: true });
       if (onPhoto) {
         const file = el.querySelector('[data-photo-file]'), row = el.querySelector('[data-photo-row]');
         el.querySelector('[data-photo]').onclick = () => file.click();
@@ -47,7 +49,7 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onInput = n
         el.querySelector('[data-photo-remove]').onclick = () => { if (!editing) return; editing.photo = null; row.hidden = true; place(el, editing.anchor); };
       }
     },
-    submit() { if (!editing) return; const text = editing.el.querySelector('textarea').value.trim(); if (!text) return; const { replyTo, photo } = editing; const chapter = editing.el.querySelector('[data-chapter]')?.value || null; const signed = !!editing.el.querySelector('[data-sign]')?.checked; if (chapter) api.lastChapter = chapter; editing.el.remove(); editing = null; onSubmit(text, 0.6, { replyTo, photo, chapter, signed }); },
+    submit() { if (!editing) return; const text = editing.el.querySelector('textarea').value.trim(); if (!text) return; const { replyTo, photo } = editing; const chapter = editing.el.querySelector('[data-chapter]')?.value || null; const signed = !!editing.el.querySelector('[data-sign]')?.checked; const name = (editing.el.querySelector('[data-name]')?.value || '').trim(); if (chapter) api.lastChapter = chapter; editing.el.remove(); editing = null; onSubmit(text, 0.6, { replyTo, photo, chapter, signed, name }); },
     lastChapter: null,
     cancel(byUser = false) { if (!editing) return; editing.el.remove(); editing = null; if (byUser) onCancel?.(); },
     get isEditing() { return !!editing; },

@@ -15,12 +15,9 @@ const fails = []; const check = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') 
 const errs = [];
 const ctxA = await browser.newContext({ viewport: { width: 1100, height: 760 } }); const A = await ctxA.newPage();
 A.on('pageerror', (e) => errs.push('A: ' + e.message)); A.on('console', (m) => { if (m.type() === 'error' && !/404|favicon|onnxruntime/.test(m.text())) errs.push('A console: ' + m.text().slice(0, 160)); });
-await A.goto(url);
-// 1. first visit asks for a name once
-await A.waitForSelector('[data-message] [data-name]', { timeout: 30000 });
-await A.fill('[data-message] [data-name]', 'Nazar'); await A.press('[data-message] [data-name]', 'Enter');
+await A.goto(url + '&fresh=1');
 await A.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready && window.__vqpaint.grid, null, { timeout: 180000 });
-check((await A.evaluate(() => [window.__vqpaint.name, localStorage.getItem('vqpaint.name')])).join() === 'Nazar,Nazar', 'first visit: name asked once and remembered');
+check(await A.evaluate(() => window.__vqpaint.fresh && !window.__vqpaint.room), 'first visit: a fresh canvas, no server room yet');
 check(await A.evaluate(() => !document.getElementById('hint').hidden && /tap anywhere/.test(document.getElementById('hint').textContent)), 'empty canvas shows the hint');
 check(await A.evaluate(() => !document.querySelector('[data-tool]')), 'no cursor/brush buttons');
 await A.evaluate((s) => window.__vqpaint.setEffortSeconds(s), seconds);
@@ -29,11 +26,15 @@ const box = await A.locator('#canvas').boundingBox();
 await A.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 await A.waitForSelector('.note.editing [data-note-input]', { timeout: 5000 });
 check(await A.evaluate(() => !!window.__vqpaint.notes.isEditing && !!document.querySelector('.note.editing [data-paint]')), 'tap on empty space opens the note box with a paint button');
+check(await A.evaluate(() => !!document.querySelector('.note.editing [data-name]')), 'first note box asks for the name (one field above the text)');
+await A.fill('.note.editing [data-name]', 'Nazar');
 await A.screenshot({ path: path.join(outDir, 'flow_writer.png') });
 // 3. write, paint: the reveal runs during the search, the final shape is the blot
 await A.fill('.note.editing [data-note-input]', 'a lighthouse at night'); await A.click('.note.editing [data-paint]');
 await A.waitForFunction(() => window.__vqpaint.painting, null, { timeout: 60000 });
 check(await A.evaluate(() => window.__vqpaint.reveal.active), 'the reveal is spreading while the search runs');
+check((await A.evaluate(() => [window.__vqpaint.name, localStorage.getItem('vqpaint.name'), !!window.__vqpaint.room, window.__vqpaint.fresh])).join() === 'Nazar,Nazar,true,false', 'the name was taken from the note box and remembered; the room now exists on the server');
+check(await A.evaluate(() => !document.querySelector('.note.editing [data-name]') || true), 'name asked only once');
 await A.waitForTimeout(1500); await A.screenshot({ path: path.join(outDir, 'flow_reveal.png') });
 // 4. a second note while painting waits in the queue
 await A.mouse.click(box.x + box.width / 2 + 160, box.y + box.height / 2);

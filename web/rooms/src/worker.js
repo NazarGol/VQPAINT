@@ -530,7 +530,7 @@ const roomKeyboard = (roomId) => ({ inline_keyboard: [[{ text: 'open the paintin
 const newRoomId = (prefix) => prefix + '-' + Math.random().toString(36).slice(2, 8);
 async function roomCall(env, roomId, path, init) { const stub = env.ROOMS.get(env.ROOMS.idFromName(roomId)); return stub.fetch(new Request(`https://rooms/room/${roomId}/${path}`, init)); }
 
-const START_TEXT = `<b>vqpaint</b> turns what a group writes into one shared painting.
+const START_TEXT = `This bot turns what a group writes into one shared painting.
 
 <b>Privacy:</b> this bot only receives commands. It never reads, stores or paints your ordinary messages. To send a message to the painting, reply to it with /paint. Nothing else leaves the chat.
 
