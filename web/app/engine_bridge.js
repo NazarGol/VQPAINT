@@ -8,8 +8,8 @@ const toCHW = (img) => {   // {rgba,w,h} -> {data: Float32Array CHW 0..1, w, h, 
   return { data, w: img.w, h: img.h, rgba: img.rgba };
 };
 
-export async function loadEngineBridge({ base, onProgress = null, bank = 'bank', variant = 'auto', scorer = 'S', text = 'S', batch = 32 } = {}) {
-  const engine = await Engine.load({ base, onProgress, bank, variant, scorer, text, fetchBuf: (u) => fetchCached(u, { onProgress }) });
+export async function loadEngineBridge({ base, onProgress = null, bank = 'bank', variant = 'auto', scorer = 'S', text = 'S', clip = 'clip_vision', mode = 'clip', batch = 32 } = {}) {
+  const engine = await Engine.load({ base, onProgress, bank, variant, scorer, text, clip, fetchBuf: (u) => fetchCached(u, { onProgress }) });
   const times = [];
   const decoder = {
     decode: async (tokens, h, w) => { const out = toCHW(engine.decode(tokens, h, w)); times.push(engine.decoder.stats.lastMs); if (times.length > 50) times.shift(); return out; },
@@ -21,11 +21,15 @@ export async function loadEngineBridge({ base, onProgress = null, bank = 'bank',
   const tok = { tokenize: (s) => { const out = []; for (const m of s.toLowerCase().matchAll(PRE)) { const n = Math.max(1, Math.ceil(m[0].length / 4)); for (let i = 0; i < n; i++) out.push(m[0]); } return out; } };
   const clip = {
     size: 256, tok, embedText: (text) => engine.encodeText(text), release: async () => {}, tiny: true,
-    embedImages: async () => { throw new Error('photo embedding needs the full CLIP image model (a helper device)'); },
-    embedTokens: (tokens, side) => engine.scorer.embedOne(tokens, side),   // a photo's VQGAN tokens -> CLIP-space embedding (the scorer's estimate)
+    embedImages: async (chw, n = 1) => {   // CHW float 0..1 (n = 1) -> unit embedding by the real MobileCLIP image tower
+      const side = Math.round(Math.sqrt(chw.length / 3)), rgba = new Uint8ClampedArray(side * side * 4), plane = side * side;
+      for (let i = 0; i < plane; i++) { rgba[i * 4] = chw[i] * 255; rgba[i * 4 + 1] = chw[plane + i] * 255; rgba[i * 4 + 2] = chw[2 * plane + i] * 255; rgba[i * 4 + 3] = 255; }
+      return [engine.embedImage(rgba, side, side)];
+    },
+    embedTokens: (tokens, side) => engine.scorer ? engine.scorer.embedOne(tokens, side) : null,
   };
   const painter = {
-    paint: (opts) => engine.paintStroke({ batch, ...opts, onPreview: opts.onProgress ? (p) => opts.onProgress({ ...p, image: toCHW(p.image) }) : null }).then((r) => ({ ...r, image: toCHW(r.image) })),
+    paint: (opts) => engine.paintStroke({ batch, mode, ...opts, onPreview: opts.onProgress ? (p) => opts.onProgress({ ...p, image: toCHW(p.image) }) : null }).then((r) => ({ ...r, image: toCHW(r.image) })),
     tiny: true,
   };
   decoder.variant = engine.decoder.variant || variant; decoder.probeMs = engine.decoder.probeMs;
