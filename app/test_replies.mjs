@@ -61,7 +61,7 @@ const order = await A.evaluate(async () => { const m = await import('../lib/expo
 check(JSON.stringify(order) === '[0,1,2]', `PDF thread depths ${JSON.stringify(order)}`);
 const dl = A.waitForEvent('download', { timeout: 120000 });
 await A.evaluate(() => document.querySelector('#menu').click());
-await A.evaluate(() => document.querySelector('[data-pdf]').click());
+await A.evaluate(() => document.querySelector('[data-item="pdf"]').click());
 const d = await dl; const pdfPath = path.join(outDir, 'replies.pdf'); await d.saveAs(pdfPath);
 check(fs.statSync(pdfPath).size > 20000, `PDF exported (${(fs.statSync(pdfPath).size / 1024).toFixed(0)} KB)`);
 await browser.close(); server.close();
