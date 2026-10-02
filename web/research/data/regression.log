@@ -1,0 +1,25 @@
+=== app memory, iPhone 11 WebKit, tiny engine (phone paints itself) ===
+desktop painted 3 strokes
+view: ready in 3.1s, 3/3 strokes shown, models downloaded 0 MB, mode view
+PEAK RSS viewing: 108 MB above the empty browser (309 MB)
+  stage search: total 276 MB, WebContent 295 MB
+paint: 7.6s incl. model load, 6629 tries in 4.1s, models released after: false
+PEAK RSS painting: 280 MB above the empty browser
+  top processes at peak: 298 MB com.apple.WebKit.WebContent.Development | 109 MB Playwright | 94 MB com.apple.WebKit.GPU.Development | 84 MB com.apple.WebKit.Networking.Development |
+after painting (settled): 279 MB
+=== ORT path regression: app/test_app.mjs ===
+PASS lite joiner loaded only 0 MB to view
+PASS D reports it cannot paint
+PASS A claimed D's request and is painting for D
+PASS the other desktop sees who paints what: "calm wren is painting “golden light on old books” for calm moth"
+PASS D got its stroke painted by a helper, note author = calm moth
+PASS D's canvas region changed (27 cells)
+[A console] [0;93m2026-10-01 20:17:38.077198 [W:onnxruntime:, session_state.cc:1397 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an 
+[A console] [0;93m2026-10-01 20:17:38.078099 [W:onnxruntime:, session_state.cc:1399 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.[m
+[A console] [0;93m2026-10-01 20:17:38.761098 [W:onnxruntime:, session_state.cc:1397 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an 
+[A console] [0;93m2026-10-01 20:17:38.761499 [W:onnxruntime:, session_state.cc:1399 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.[m
+[A console] [0;93m2026-10-01 20:17:38.818798 [W:onnxruntime:, session_state.cc:1397 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an 
+[A console] [0;93m2026-10-01 20:17:38.818999 [W:onnxruntime:, session_state.cc:1399 VerifyEachNodeIsAssignedToAnEp] Rerunning with verbose output on a non-minimal build will show node assignments.[m
+second load (reload): view ready in 0.1s (no models), brush ready in 1.3s, models from cache: true
+PASS models came from Cache Storage when the brush was prepared again
+ALL PASS
