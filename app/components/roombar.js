@@ -17,5 +17,7 @@ export function mountRoombar(el, { roomId, onInvite }) {
       for (const q of peers) { const d = document.createElement('span'); d.className = 'dot'; d.style.background = q.color; d.title = q.name + (q.me ? ` (${t('me')})` : '') + (q.busy ? ' · 🖌' : ''); if (q.busy) d.style.outline = '2px solid ' + q.color; p.appendChild(d); }
     },
     setInviteLabel(t) { el.querySelector('[data-invite]').textContent = t; },
+    setTitle(title) { const r = el.querySelector('[data-room]'); r.lastChild.textContent = title || roomId; r.title = roomId; },
+    setInviteVisible(v) { el.querySelector('[data-invite]').hidden = !v; },
   };
 }
