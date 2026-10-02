@@ -3,7 +3,7 @@
 // a click elsewhere. An open note shows its thread: the note it replies to (click to open) and its replies, indented.
 import { escapeHtml } from './roombar.js';
 import { t } from '../i18n.js';
-export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = null, onOpen = null, onPhoto = null, onReact = null, threadOf = null, phone = false, me = () => '', room = () => ({}) }) {
+export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onInput = null, onReply = null, onOpen = null, onPhoto = null, onReact = null, threadOf = null, phone = false, me = () => '', room = () => ({}) }) {
   const layer = document.createElement('div'); layer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:6'; stageEl.appendChild(layer);
   let editing = null, opened = null; // {el, note}
   function place(el, anchor) {
@@ -32,7 +32,7 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onReply = n
         <textarea data-note-input rows="1" placeholder="${escapeHtml(t(replyTo ? 'note.reply.placeholder' : 'note.placeholder'))}"></textarea>
         <div class="actions">${onPhoto ? `<button type="button" class="pill ghost" data-photo>${t('note.photo')}</button><input type="file" accept="image/*" data-photo-file hidden>` : ''}<span class="hint">${t(phone ? 'note.hint.phone' : 'note.hint')}</span><button type="button" class="pill go" data-paint>${t('note.paint')}</button></div>`;
       const ta = el.querySelector('textarea'); ta.value = initial;
-      ta.addEventListener('input', () => grow(ta));
+      ta.addEventListener('input', () => { grow(ta); onInput?.(ta.value); });
       ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); api.submit(); } else if (e.key === 'Escape') { e.preventDefault(); api.cancel(true); } });
       el.querySelector('[data-paint]').onclick = () => api.submit();
       layer.appendChild(el); editing = { el, anchor, replyTo, photo: null };

@@ -6,8 +6,8 @@ export function mountSheets(stageEl, { phone = false } = {}) {
   let cur = null;
   function open(html, { title = '', wide = false } = {}) {
     close();
-    const el = document.createElement('div'); el.className = 'sheet' + (phone ? ' bottom' : '') + (wide ? ' wide' : '');
-    el.innerHTML = `<div class="sheet-head"><span class="sheet-title">${escapeHtml(title)}</span><button type="button" class="pill ghost" data-close>${t('sheet.close')}</button></div><div class="sheet-body">${html}</div>`;
+    const el = document.createElement('div'); el.className = 'panel' + (phone ? ' bottom' : '') + (wide ? ' wide' : '');
+    el.innerHTML = `<div class="panel-head"><span class="panel-title">${escapeHtml(title)}</span><button type="button" class="pill ghost" data-close>${t('sheet.close')}</button></div><div class="panel-body">${html}</div>`;
     el.querySelector('[data-close]').onclick = close;
     stageEl.appendChild(el); cur = el; requestAnimationFrame(() => el.classList.add('in'));
     return el;

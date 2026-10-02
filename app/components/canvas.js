@@ -8,6 +8,7 @@ const css = (name) => getComputedStyle(document.documentElement).getPropertyValu
 const rrect = (g, x, y, w, h, r) => { g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };   // iOS 15 has no roundRect
 
 export function mountCanvas(stageEl, { onTap, onHoldStart, onHold, onHoldEnd, onPointer, onCursor, onViewChange, onResize, onUserMove, reveal = null }) {
+  let lastHoldT = 0;
   const canvas = document.createElement('canvas'); canvas.className = 'world';
   stageEl.prepend(canvas);
   const ctx = canvas.getContext('2d');
@@ -24,12 +25,11 @@ export function mountCanvas(stageEl, { onTap, onHoldStart, onHold, onHoldEnd, on
   const toWorldXY = (sx, sy) => view.toWorld(sx, sy);
   const toWorld = (ev) => { const r = canvas.getBoundingClientRect(); return view.toWorld(ev.clientX - r.left, ev.clientY - r.top); };
   const toStage = (ev) => { const r = stageEl.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
-  let press = null;   // {x, y (stage px), t0, r}
   const gestures = attachGestures(canvas, view, {
-    onTap: (ev, hold) => { press = null; requestRender(); onTap?.(toWorld(ev), toStage(ev), hold); },
-    onHoldStart: (ev, [sx, sy]) => { press = { x: sx, y: sy, t: 0, r: 0 }; onHoldStart?.(toWorld(ev), { x: sx, y: sy }); requestRender(); },
-    onHold: (ev, t) => { if (press) { press.t = t; press.r = 18 + 110 * (1 - Math.exp(-t / 1.1)); } onHold?.(t); requestRender(); },
-    onHoldEnd: () => { press = null; onHoldEnd?.(); requestRender(); },
+    onTap: (ev, hold) => { requestRender(); onTap?.(toWorld(ev), toStage(ev), hold); },
+    onHoldStart: (ev, [sx, sy]) => { lastHoldT = 0; onHoldStart?.(toWorld(ev), { x: sx, y: sy }); requestRender(); },
+    onHold: (ev, t) => { onHold?.(t, Math.max(0, Math.min(0.05, t - lastHoldT))); lastHoldT = t; requestRender(); },
+    onHoldEnd: () => { onHoldEnd?.(); requestRender(); },
     onPointer: onPointer ? (ev, phase, [sx, sy], delta) => onPointer(phase, toWorldXY(sx, sy), { x: sx, y: sy }, delta) : null,
     onPanStart: () => onUserMove?.(),
   });
@@ -37,7 +37,7 @@ export function mountCanvas(stageEl, { onTap, onHoldStart, onHold, onHoldEnd, on
   canvas.addEventListener('pointermove', (ev) => onCursor?.(toWorld(ev)));
   view.onChange(() => { requestRender(); onViewChange?.(view); });
   // ---- rendering
-  let state = { layers: [], peers: [], labels: [], pending: null }, raf = 0, lastFrame = 0;
+  let state = { layers: [], peers: [], labels: [] }, raf = 0, lastFrame = 0;
   function requestRender() { if (!raf) raf = requestAnimationFrame((now) => { raf = 0; render(now); }); }
   /** layers: [{crop, bitmap}] in order; peers: [{x, y, t, color}]; labels: [{x, y (world), text}] */
   function setScene(s) { state = { ...state, ...s }; requestRender(); }
@@ -51,16 +51,6 @@ export function mountCanvas(stageEl, { onTap, onHoldStart, onHold, onHoldEnd, on
     if (state.highlight) { const l = state.layers.find((x) => x.id === state.highlight.id); if (l) { const [sx, sy] = view.toScreen(l.crop.x, l.crop.y); ctx.globalAlpha = 0.35 * (1 - state.highlight.k) * (0.5 + 0.5 * Math.sin(state.highlight.k * Math.PI * 4)); ctx.globalCompositeOperation = 'lighter'; ctx.drawImage(l.bitmap, sx, sy, l.crop.w * z, l.crop.h * z); ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; } }
     let animating = false;
     if (reveal && reveal.active) { reveal.draw(ctx, view, now); animating = true; }
-    if (state.pending) {   // where the note being written will land
-      const [px, py] = view.toScreen(state.pending.x, state.pending.y), pr = state.pending.r * z;
-      const g = ctx.createRadialGradient(px, py, 0, px, py, pr); g.addColorStop(0, 'rgba(214,165,220,0.45)'); g.addColorStop(0.7, 'rgba(214,165,220,0.22)'); g.addColorStop(1, 'rgba(214,165,220,0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
-    }
-    if (press) {   // the growing drop under a held finger
-      const g = ctx.createRadialGradient(press.x, press.y, 0, press.x, press.y, press.r);
-      g.addColorStop(0, 'rgba(214,165,220,0.55)'); g.addColorStop(0.75, 'rgba(214,165,220,0.25)'); g.addColorStop(1, 'rgba(214,165,220,0)');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(press.x, press.y, press.r, 0, Math.PI * 2); ctx.fill(); animating = true;
-    }
     for (const lb of state.labels) { const [sx, sy] = view.toScreen(lb.x, lb.y); ctx.font = `${css('--font-size-small') || '12px'} ${css('--font-family') || 'sans-serif'}`; const w = ctx.measureText(lb.text).width + 12; ctx.fillStyle = 'rgba(227,208,230,0.85)'; ctx.beginPath(); rrect(ctx, sx - w / 2, sy - 24, w, 20, 8); ctx.fill(); ctx.fillStyle = css('--color-text') || '#1A1A1A'; ctx.fillText(lb.text, sx - w / 2 + 6, sy - 10); }
     const rr = parseFloat(css('--cursor-dot')) || 5, t = Date.now();
     for (const p of state.peers) { if (p.x == null || t - p.t > 15000) continue; const [sx, sy] = view.toScreen(p.x, p.y); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(sx, sy, rr, 0, Math.PI * 2); ctx.fill(); }

@@ -20,8 +20,8 @@ const download = async (P, fn) => { const dl = P.waitForEvent('download', { time
 // ---- BOOK
 if (only.includes('book')) {
   const [P, id] = await openRoom('book');
-  await P.waitForSelector('.sheet [data-f="title"]', { timeout: 10000 });
-  await P.fill('.sheet [data-f="title"]', 'The Left Hand of Darkness'); await P.fill('.sheet [data-f="author"]', 'Ursula K. Le Guin'); await P.fill('.sheet [data-f="chapters"]', 'Chapter 1\nChapter 2\nChapter 3'); await P.click('.sheet [data-go]');
+  await P.waitForSelector('.panel [data-f="title"]', { timeout: 10000 });
+  await P.fill('.panel [data-f="title"]', 'The Left Hand of Darkness'); await P.fill('.panel [data-f="author"]', 'Ursula K. Le Guin'); await P.fill('.panel [data-f="chapters"]', 'Chapter 1\nChapter 2\nChapter 3'); await P.click('.panel [data-go]');
   await P.waitForFunction(() => window.__vqpaint.settings.kind === 'book' && window.__vqpaint.settings.chapters && window.__vqpaint.settings.chapters.length === 3, null, { timeout: 20000 });
   check(await P.evaluate(() => document.title.startsWith('The Left Hand')), 'book: setup sheet → settings (title, author, 3 chapters) on the room');
   await P.evaluate(() => { window.__vqpaint.notes.lastChapter = 'Chapter 2'; }); await P.waitForTimeout(500);
@@ -37,8 +37,8 @@ if (only.includes('book')) {
   await P.waitForFunction(() => window.__vqpaint.strokes.length === 5 && !window.__vqpaint.painting && window.__vqpaint.queue.length === 0, null, { timeout: 300000 });
   const imp = await P.evaluate(() => window.__vqpaint.strokes.slice(1).map((s) => [s.source, s.chapter || '']));
   check(imp.every((x) => x[0] === 'import') && imp.some((x) => x[1] === 'Chapter 3'), `book: 4 imported notes painted and auto-placed (${JSON.stringify(imp)})`);
-  await P.evaluate(() => window.__vqpaint.showList()); await P.waitForSelector('.sheet .group', { timeout: 5000 });
-  check((await P.evaluate(() => [...document.querySelectorAll('.sheet .group')].map((g) => g.textContent))).join('|').includes('Chapter 2'), 'book: notes list grouped by chapter');
+  await P.evaluate(() => window.__vqpaint.showList()); await P.waitForSelector('.panel .group', { timeout: 5000 });
+  check((await P.evaluate(() => [...document.querySelectorAll('.panel .group')].map((g) => g.textContent))).join('|').includes('Chapter 2'), 'book: notes list grouped by chapter');
   await P.screenshot({ path: path.join(outDir, 'kinds_book_list.png') }); await P.evaluate(() => window.__vqpaint.sheets.close());
   const pdf = await download(P, () => P.evaluate(() => window.__vqpaint.menu.items.find((i) => i.id === 'pdf').onClick()));
   check(fs.statSync(pdf).size > 20000 && /Chapter 2/.test(fs.readFileSync(pdf, 'latin1').replace(/[^\x20-\x7E]/g, '')) === false || fs.statSync(pdf).size > 20000, `book: grouped PDF exported (${(fs.statSync(pdf).size / 1024).toFixed(0)} KB)`);
@@ -51,7 +51,7 @@ if (only.includes('book')) {
 // ---- MEETING
 if (only.includes('meeting')) {
   const [P, id] = await openRoom('meeting');
-  await P.waitForSelector('.sheet [data-f="title"]', { timeout: 10000 }); await P.fill('.sheet [data-f="title"]', 'Q4 planning'); await P.click('.sheet [data-go]');
+  await P.waitForSelector('.panel [data-f="title"]', { timeout: 10000 }); await P.fill('.panel [data-f="title"]', 'Q4 planning'); await P.click('.panel [data-go]');
   await P.waitForFunction(() => window.__vqpaint.settings.kind === 'meeting' && window.__vqpaint.settings.anon === true, null, { timeout: 20000 });
   await P.waitForTimeout(500); await P.mouse.click(550, 380); await P.waitForSelector('.note.editing [data-sign]', { timeout: 5000 });
   check(true, 'meeting: writer offers "sign with my name" (anonymous by default)');
@@ -71,7 +71,7 @@ if (only.includes('meeting')) {
 // ---- DIARY + POSTCARD
 if (only.includes('diary')) {
   const [P, id] = await openRoom('diary');
-  await P.waitForSelector('.sheet [data-f="title"]', { timeout: 10000 }); await P.fill('.sheet [data-f="title"]', 'my year'); await P.click('.sheet [data-go]');
+  await P.waitForSelector('.panel [data-f="title"]', { timeout: 10000 }); await P.fill('.panel [data-f="title"]', 'my year'); await P.click('.panel [data-go]');
   await P.waitForFunction(() => window.__vqpaint.settings.kind === 'diary' && window.__vqpaint.settings.private === true, null, { timeout: 20000 });
   check(await P.evaluate(() => document.querySelector('[data-invite]').hidden), 'diary: private → no invite pill');
   await P.evaluate(() => window.__vqpaint.tapPaint(128, 128, 'walked by the river, thought about mum', 0.6, 0.3));
@@ -80,16 +80,16 @@ if (only.includes('diary')) {
   check(await P.evaluate((k) => window.__vqpaint.strokes[0].day === k, key), `diary: the entry carries today (${key})`);
   await P.evaluate(() => window.__vqpaint.enqueueStroke({ text: 'rain all day, finished the book', realism: 0.6, day: '2026-09-28', source: 'telegram' }));
   await P.waitForFunction(() => window.__vqpaint.strokes.length === 2 && !window.__vqpaint.painting, null, { timeout: 240000 });
-  await P.evaluate(() => window.__vqpaint.showList()); await P.waitForSelector('.sheet .cal', { timeout: 5000 });
-  const cal = await P.evaluate(() => ({ has: document.querySelectorAll('.sheet .day.has').length, days: document.querySelectorAll('.sheet .day').length }));
+  await P.evaluate(() => window.__vqpaint.showList()); await P.waitForSelector('.panel .cal', { timeout: 5000 });
+  const cal = await P.evaluate(() => ({ has: document.querySelectorAll('.panel .day.has').length, days: document.querySelectorAll('.panel .day').length }));
   check(cal.has >= 1 && cal.days >= 28, `diary: calendar shows ${cal.has} day(s) with entries`);
-  await P.click('.sheet .day.has'); await P.waitForTimeout(400);
-  check(await P.evaluate(() => document.querySelectorAll('.sheet [data-daylist] .item').length >= 1), 'diary: tapping a day lists its entry and lights its stroke');
+  await P.click('.panel .day.has'); await P.waitForTimeout(400);
+  check(await P.evaluate(() => document.querySelectorAll('.panel [data-daylist] .item').length >= 1), 'diary: tapping a day lists its entry and lights its stroke');
   await P.screenshot({ path: path.join(outDir, 'kinds_diary_calendar.png') });
-  const month = await download(P, () => P.click('.sheet [data-month]')); check(/\d{4}-\d{2}\.pdf$/.test(month), `diary: month PDF exported (${path.basename(month)})`);
+  const month = await download(P, () => P.click('.panel [data-month]')); check(/\d{4}-\d{2}\.pdf$/.test(month), `diary: month PDF exported (${path.basename(month)})`);
   await P.evaluate(() => window.__vqpaint.sheets.close());
   // postcard
-  const pc = download(P, async () => { P.evaluate(() => { window.__vqpaint.makePostcard(); }).catch(() => {}); await P.waitForSelector('.sheet [data-f="ym"]', { timeout: 5000 }); await P.screenshot({ path: path.join(outDir, 'kinds_postcard_sheet.png') }); await P.fill('.sheet [data-f="names"]', 'Ann, Olena'); await P.click('.sheet [data-go]'); });
+  const pc = download(P, async () => { P.evaluate(() => { window.__vqpaint.makePostcard(); }).catch(() => {}); await P.waitForSelector('.panel [data-f="ym"]', { timeout: 5000 }); await P.screenshot({ path: path.join(outDir, 'kinds_postcard_sheet.png') }); await P.fill('.panel [data-f="names"]', 'Ann, Olena'); await P.click('.panel [data-go]'); });
   const pcPath = await pc; const pdfTxt = fs.readFileSync(pcPath, 'latin1'); const pages = (pdfTxt.match(/\/Type\s*\/Page[^s]/g) || []).length;
   check(fs.statSync(pcPath).size > 30000 && pages === 2 && /NotoSans/.test(pdfTxt), `diary: postcard PDF with ${pages} pages, NotoSans embedded (${(fs.statSync(pcPath).size / 1024).toFixed(0)} KB) → ${path.basename(pcPath)}`);
   fs.copyFileSync(pcPath, path.join(outDir, 'postcard.pdf'));
