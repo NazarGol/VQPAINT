@@ -9,5 +9,5 @@ The light engine is developed in https://github.com/NazarGol/tiny-vqgan and vend
 | `web/lib/engine/light.js` | `lib/engine/light.js` (the VQPAINT facade; app-specific) |
 | `web/research/*` | `research/*` (training, notebooks, tests, notes) |
 
-Pinned: tiny-vqgan `main` @ 098c042 (2026-10-02).
+Pinned: tiny-vqgan `main` @ 06c8521 (2026-10-02).
 then run `node web/research/test_app_tiny.mjs` and `node web/app/test_app.mjs`.
