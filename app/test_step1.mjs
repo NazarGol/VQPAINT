@@ -21,11 +21,12 @@ await B.goto(url + '&nopaint=1&name=Bo'); await B.waitForFunction(() => window._
 // 1. two overlapping strokes -> the second carries a merge zone
 await A.evaluate(() => window.__vqpaint.tapPaint(128, 128, 'a red brick wall', 0.6, 0.8));
 await A.waitForFunction(() => window.__vqpaint.strokes.length === 1 && !window.__vqpaint.painting, null, { timeout: 240000 });
-const c1 = await A.evaluate(() => { const v = window.__vqpaint, n = v.strokes[0]; v.strokeAt(-100, -100); return [n.blot.x, n.blot.y, n._mask.count]; });
-await A.evaluate(([x, y]) => window.__vqpaint.tapPaint(x + 2, y + 1, 'ivy and moss', 0.6, 0.8), c1);
+const c1 = await A.evaluate(() => { const v = window.__vqpaint, n = v.strokes[0]; v.strokeAt(-100, -100); const m = n._mask; let sx = 0, sy = 0, k = 0; for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) if (m.cells[y * m.w + x]) { sx += m.x + x + 0.5; sy += m.y + y + 0.5; k++; } return [sx / k, sy / k, m.count]; });
+await A.evaluate(([x, y]) => window.__vqpaint.tapPaint(x + 1, y, 'ivy and moss', 0.6, 1.2), c1);   // on top of the first stroke's body: the overlap gets painted toward both
 await A.waitForFunction(() => window.__vqpaint.strokes.length === 2 && !window.__vqpaint.painting, null, { timeout: 240000 });
-const m = await A.evaluate(() => { const v = window.__vqpaint, n = v.strokes[1]; const z = n.merges && n.merges[0]; if (!z) return null; const mm = v.notes ? null : null; void mm; const { maskFromString } = { maskFromString: null }; void maskFromString; return { with: z.with, cells: z.cells.length, id0: v.strokes[0].id }; });
+const m = await A.evaluate(() => { const v = window.__vqpaint, n = v.strokes[1]; const z = n.merges && n.merges[0]; if (!z) return null; return { with: z.with, cells: z.cells.length, id0: v.strokes[0].id }; });
 check(m && m.with === m.id0 && m.cells > 0, `second stroke has a merge zone with the first (${m ? m.cells : 0} chars of cells)`);
+if (!m) { console.log('no merge zone: stopping here'); await browser.close(); server.close(); process.exit(1); }
 const mergeTap = await A.evaluate(() => { const v = window.__vqpaint, n = v.strokes[1]; v.mergeAt(n, [0, 0]); const z = n.merges[0]; const mk = z._mask; let cell = null; for (let y = 0; y < mk.h && !cell; y++) for (let x = 0; x < mk.w; x++) if (mk.cells[y * mk.w + x]) { cell = [mk.x + x + 0.5, mk.y + y + 0.5]; break; }
   const st = v.strokeAt(cell[0], cell[1]); const other = v.mergeAt(st, cell); if (!other) return { ok: false }; v.notes.open(st, { left: 300, top: 300, right: 340, bottom: 340 }, { mergeWith: other }); return { ok: true, html: document.querySelector('.note.done.open').textContent }; });
 check(mergeTap.ok && /×/.test(mergeTap.html) && /brick/.test(mergeTap.html) && /ivy/.test(mergeTap.html), 'tapping the overlap shows "note A × note B"');
