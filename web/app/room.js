@@ -1,15 +1,11 @@
 // Room page orchestrator: models, room connection, shapes → notes → stroke layers, view, export hooks. UI lives in components/.
 import { CONFIG } from './config.js';
-import { loadOrt, fetchCached, fetchJsonCached, webgpuInfo, setModelMirror } from '../lib/models.js';
-import { Decoder, F, expandRegion, readRegion } from '../lib/decoder.js';
-import { Clip } from '../lib/clip.js';
-import { Palette } from '../lib/palette.js';
-import { Bank } from '../lib/bank.js';
-import { Painter } from '../lib/search.js';
+import { webgpuInfo } from '../lib/models.js';
+import { F, expandRegion, readRegion } from '../lib/decoder.js';
+import { Engine } from '../lib/engine/client.js';
 import { maskCells, maskToString, maskFromString, maskFromCells, maskHas, maskTouches, noisyMask, discMask } from '../lib/mask.js';
 import { t, lang, setLang } from './i18n.js';
 import { lassoMask } from '../lib/lasso.js';
-import { embedLongText } from '../lib/text.js';
 import { connectRoom } from '../lib/room.js';
 import { LayerCache, encodeTokens, decodeTokens, paintedBounds, polygonAlpha, maskAlpha, composeLayer, intersects, makePreviewBlob } from '../lib/layers.js';
 import { mountRoombar } from './components/roombar.js';
@@ -23,8 +19,7 @@ import { mountLoading } from './components/loading.js';
 import { mountToast } from './components/toast.js';
 import { mountNotes } from './components/notes.js';
 import { mountCanvas } from './components/canvas.js';
-import { loadPacked } from '../lib/pack.js';
-import { readPhotoFile, encodePhoto, dataUrlToImage, thumbOf } from '../lib/photo.js';
+import { readPhotoFile, dataUrlToImage, thumbOf } from '../lib/photo.js';
 import { imageToCHW } from '../lib/encoder.js';
 import { detectLanguage, translateToEnglish, releaseTranslator, translatorLoaded } from '../lib/translate.js';
 import { Metaphors } from '../lib/metaphors.js';
@@ -61,7 +56,12 @@ const lowMem = isPhone || safeMode || params.get('lowmem') === '1';   // release
 // ---------- state ----------
 let grid = null;                  // {w, h, tokens} from the room (256x256 by default), the search context
 let roomBlank = 0;                // the room's blank token (set by its creator)
-let ready = false, room = null, ort = null, ep = 'webgpu', decoder = null, clip = null, palette = null, bank = null, painter = null, blankToken = 0, layers = null, modelsLoaded = false, mode = 'view';
+let ready = false, room = null, ep = 'webgpu', decoder = null, clip = null, painter = null, blankToken = 0, layers = null, modelsLoaded = false, mode = 'view';
+const engine = new Engine();                              // the models and the search live in a worker; the page only animates
+const deviceMemory = navigator.deviceMemory || 0;         // Chrome/Android: 0.25…8 (power of 2, rounded down); Safari: undefined
+/** can this device paint on its own without risking its memory? phones only with ≥ 8 GB reported (Android) or on iOS in non-safe mode */
+function canPaintHere() { if (forceNoPaint || safeMode || engine.broken) return false; if (!lowMem) return true; if (!caps.gpu) return false; if (deviceMemory) return deviceMemory >= 8; return isIOS; }
+const isIOS = /iP(hone|ad|od)/.test(navigator.platform) || (navigator.userAgent.includes('Mac') && navigator.maxTouchPoints > 1);
 let roomSettings = {};                                   // kind (book / meeting / diary / group), title, author, chapters, anon, private
 const tgMode = params.get('tg') === '1';                 // opened inside Telegram's Mini App webview
 let painting = null, pendingDrop = null, viewFitted = false, userMoved = false, replyTo = null;   // pendingDrop: where the next note lands; replyTo: the note it answers
@@ -307,7 +307,7 @@ async function startStroke(mask, text, points = null, realism = 0.6, extra = {})
   const noteLang = detectLanguage(text);
   const drop = extra.drop || { x: mask.x + mask.w / 2, y: mask.y + mask.h / 2, size: Math.max(mask.w, mask.h) / 2, seed: (Math.random() * 2 ** 31) | 0 };   // lasso-era callers: a drop at the mask's centre
   if (helpersOn) { const h = bestHelper(); if (h && (forceNoPaint || lowMem || !caps.gpu)) return requestHelp(mask, text, points, realism, { parent, photo: extra.photo || null, lang: noteLang, drop }); }   // phones, no-WebGPU and forced devices ask; desktops paint themselves
-  if (forceNoPaint) { setStatus(t('status.noPaint')); return; }
+  if (!canPaintHere()) return requestHelp(mask, text, points, realism, { parent, photo: extra.photo || null, lang: noteLang, drop, wait: true });   // a weak phone: the note waits on the server until a device that can paint opens the room
   const photo = extra.photo || null;
   if (photo && lowMem) { try { await encodePhotoTokens(photo); } catch (e) { console.warn('photo', e); setStatus(t('status.paintFailed', { error: e.message }), 6000); return; } }
   await ensureBrush();
@@ -373,7 +373,7 @@ async function applyReaction(note, kind, { author = myName, reqId = null } = {})
   let ok = false, rv = null;
   try {
     const secs = testSeconds ?? Math.round(4 * (isPhone ? 1.3 : 1));
-    const base = (await embedLongText(clip, note.text_en || note.text)).target;
+    const base = (await engine.embedLong(note.text_en || note.text)).target;
     const cur = { crop: note.crop, tokens: decodeTokens(note.tokens) };
     let mask = note._mask, crop = note.crop, target = base, grown = null;
     if (note.blot && !reveal.reduceMotion) { hiddenLayers.add(note.id); rv = startReveal({ id: jobId, crop, blot: { ...note.blot, size: note.blot.size * (kind === 'grow' ? 1.15 : 1) }, duration: secs, holdOpen: true }); reveal.setImage(jobId, await decoder.decode(cur.tokens, crop.h, crop.w)); reveal.setClarity(jobId, 0.3); }
@@ -439,7 +439,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
     const textEn = await textForClip(text, noteLang);
     if (textEn) setStatus(t('note.translated', { text: briefText(textEn, 80) }), 5000);
     setStage('embed-text');
-    let { target, chunks, hardSplits } = await embedLongText(clip, textEn || text);
+    let { target, chunks, hardSplits } = await engine.embedLong(textEn || text);
     if (metaphorsOn) {   // practical notes borrow imagery from the nearest metaphors
       if (!metaphors) { try { metaphors = await Metaphors.load(M + 'metaphors/'); } catch (e) { console.warn('metaphors', e); } }
       if (metaphors) { const b = metaphors.blend(target); target = b.target; stats.lastMetaphors = b.used; stats.lastMetaphorWeight = b.weight; }
@@ -451,7 +451,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
       n = Math.sqrt(n) + 1e-8; for (let k = 0; k < mixed.length; k++) mixed[k] /= n; target = mixed;
     }
     setStage('search');
-    if (chunks.length > 1) setStatus(t('status.chunks', { n: chunks.length }) + (hardSplits ? t('status.chunksSplit', { n: hardSplits }) : ''));
+    if (chunks > 1) setStatus(t('status.chunks', { n: chunks }) + (hardSplits ? t('status.chunksSplit', { n: hardSplits }) : ''));
     const res = await painter.paint({
       grid, mask, target, seconds: rp.seconds, margin: MARGIN, blankToken: roomBlank, signal: abort.signal, progressEvery: 500, parent: parentSeed(parent),
       photo: photo && photo.tokens ? { w: photo.side, h: photo.side, tokens: photo.tokens } : null, photoMix: 0.45 + 0.4 * realism,
@@ -479,7 +479,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
       const zones = overlapZones(finalMask, null);
       for (const z of zones.slice(0, 2)) {
         const otherText = z.note.text_en || z.note.text;
-        const ot = (await embedLongText(clip, otherText)).target, mixed = new Float32Array(target.length); let n = 0;
+        const ot = (await engine.embedLong(otherText)).target, mixed = new Float32Array(target.length); let n = 0;
         for (let k = 0; k < mixed.length; k++) { mixed[k] = 0.5 * target[k] + 0.5 * ot[k]; n += mixed[k] * mixed[k]; } n = Math.sqrt(n) + 1e-8; for (let k = 0; k < mixed.length; k++) mixed[k] /= n;
         setStatus(t('note.mergeHint'), 4000);
         await painter.paint({ grid, mask: z.mask, target: mixed, seconds: Math.min(4, Math.max(2, rp.seconds * 0.4)), margin: MARGIN, blankToken: roomBlank, signal: abort.signal, seeds: 3, sources: 1, patch: 3, growEdge: 0.6, mutation: 0.08, anneal: 0.002, bankPatch: 0.2, parent: { crop: res.crop, tokens: res.tokens }, parentMix: 0.5 });
@@ -572,9 +572,11 @@ async function encodePhotoTokens(photo) {
   if (photo.tokens) return photo;
   setStage('photo-encode');
   const onP = (p) => loading.set(t('load.photoModel', { pct: Math.min(99, Math.round(p.loaded / (33 * 2 ** 20) * 100)) }));
-  if (!ort) { ort = await loadOrt(params.get('ort') || CONFIG.ortBase, params.get('entry') || (lowMem ? 'ort.all.min.mjs' : 'ort.webgpu.min.mjs')); ort.env.wasm.numThreads = 1; ort.env.wasm.proxy = false; }
-  const r = await encodePhoto(ort, M, photo.data, { ep: caps.gpu ? epFor(ep) : 'wasm', onProgress: onP, sessionOpts: sessionOpts() });
-  photo.tokens = r.tokens; photo.side = r.side; photo.chw = r.chw; stats.lastPhotoEncodeMs = r.ms;
+  void onP;
+  const chw = imageToCHW(await dataUrlToImage(photo.data), 256, 256);
+  loading.set(t('load.photoModel', { pct: 50 }));
+  const r = await engine.encode(chw, 256, { modelBase: M, modelFallback: M === CONFIG.modelBase ? CONFIG.modelFallback : null, ortBase: params.get('ort') || CONFIG.ortBase, entry: params.get('entry') || null, lowMem, gpuWanted: caps.gpu });
+  photo.tokens = r.tokens; photo.side = r.side; photo.chw = chw; stats.lastPhotoEncodeMs = r.ms;
   if (!painter) loading.hide();
   setStage('photo-encoded');
   return photo;
@@ -639,7 +641,7 @@ async function makePostcard() {
 
 // ---------- helpers (optional) ----------
 function bestHelper() { let best = null; for (const p of peers.values()) { const c = p.caps; if (c && (c.paint || c.helper) && !p.busy && (!best || (c.speed || 1e9) < (best.caps.speed || 1e9))) best = p; } return best; }
-function requestHelp(mask, text, points, realism, { parent = null, photo = null, lang: noteLang = null, drop = null } = {}) {
+function requestHelp(mask, text, points, realism, { parent = null, photo = null, lang: noteLang = null, drop = null, wait = false } = {}) {
   const cropRect = expandRegion(grid, { x: mask.x, y: mask.y, w: mask.w, h: mask.h }, 2);
   const fogId = 'req-' + Date.now();
   const rv = drop ? ((drop.pendingId && reveal.adopt(drop.pendingId, fogId, { duration: 6 })) || startReveal({ id: fogId, crop: drop.crop || dropCrop(drop.x, drop.y, drop.size), cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed: drop.seed, duration: 6, holdOpen: true })) : null;   // the live ink bursts while the helper paints
@@ -650,12 +652,15 @@ function requestHelp(mask, text, points, realism, { parent = null, photo = null,
   room.paintRequest(req);
   const entry = { req, mask, text, points, realism, parent, photo, lang: noteLang, drop: drop ? { ...drop, blot } : null, fogId: rv ? fogId : null, timer: null, assigned: null };
   myRequests.set(req.id, entry);
-  setStatus(t('status.helperWill', { name: peerName(bestHelper().id) }), 6000);
-  entry.timer = setTimeout(() => { if (!myRequests.has(req.id) || entry.assigned) return; myRequests.delete(req.id); room.paintDone(req.id, false); paintHere(entry); }, 12000);   // nobody claimed: paint here if this device can
+  const h = bestHelper();
+  setStatus(h ? t('status.helperWill', { name: peerName(h.id) }) : t(isPhone ? 'status.waitingDevice' : 'status.cannotPaint'), h ? 6000 : 8000);
+  if (!wait && canPaintHere()) entry.timer = setTimeout(() => { if (!myRequests.has(req.id) || entry.assigned) return; myRequests.delete(req.id); room.paintDone(req.id, false); paintHere(entry); }, 12000);   // nobody claimed: paint here if this device can
+  else if (wait) entry.timer = setTimeout(() => { if (myRequests.has(req.id) && !entry.assigned) setStatus(t('status.waitingDevice'), 6000); }, 15000);   // otherwise the request stays open on the server (a helper claims it when it joins)
 }
 const dropFog = (e) => { if (e && e.fogId) { reveal.cancel(e.fogId); e.fogId = null; } };
 /** the fallback when no helper takes (or finishes) a request: paint on this device, or say why not */
 async function paintHere(e) {
+  if (!canPaintHere()) { setStatus(t(isPhone ? 'status.waitingDevice' : 'status.cannotPaint'), 8000); if (e && e.req && room) { myRequests.set(e.req.id, e); room.paintRequest(e.req); } processQueue(); return; }   // put it back for a device that can
   dropFog(e);
   if (forceNoPaint) { setStatus(t('status.noPaint'), 6000); processQueue(); return; }
   if (e.react) { try { await ensureBrush(); } catch (err) { setStatus(t('status.brushFailed', { error: err.message }), 8000); processQueue(); return; } return applyReaction(e.note, e.kind, { author: myName }); }
@@ -693,8 +698,6 @@ const onProgress = (p) => {
   stats.modelBytes = total;
 };
 let ensuring = null;
-const sessionOpts = () => (lowMem ? { enableCpuMemArena: false, enableMemPattern: false, graphOptimizationLevel: params.get('opt') || 'basic' } : {});
-const epFor = (name) => (name === 'webgpu' && params.get('bufcache') ? { name: 'webgpu', storageBufferCacheMode: params.get('bufcache'), defaultBufferCacheMode: params.get('bufcache'), uniformBufferCacheMode: params.get('bufcache') } : name);
 const plain = params.get('plain') === '1', clipCpu = params.get('clipcpu') === '1';
 const setStage = (s) => { stats.stage = s; beacon('stage', { s }); };
 /** Load the models for painting, one at a time, with "preparing the brush… N%". Nothing is loaded for viewing. */
@@ -707,40 +710,11 @@ function ensureBrush() {
   }
   ensuring ||= (async () => {
     mode = 'brush'; sessionStorage.setItem('vqpaint.boot', 'painting');
-    const total = 105 * 2 ** 20, seen = {};
-    const cachedSeen = {};
-    const onP = (p) => { seen[p.url] = p.loaded; cachedSeen[p.url] = !!p.cached; const loaded = Object.values(seen).reduce((a, b) => a + b, 0); stats.cached = Object.values(cachedSeen).every(Boolean); loading.set(t(stats.cached ? 'load.brush' : 'load.brushFirst', { pct: Math.min(99, Math.round(loaded / total * 100)) })); stats.modelBytes = loaded; };
-    loading.set(t('load.brush', { pct: 0 }));
-    if (!palette) palette = await Palette.load(M + 'palette/');
-    setStage('ort'); if (!ort) { ort = await loadOrt(params.get('ort') || CONFIG.ortBase, params.get('entry') || (lowMem ? 'ort.all.min.mjs' : 'ort.webgpu.min.mjs')); ort.env.wasm.numThreads = 1; ort.env.wasm.proxy = false; }   // JSEP build on low-memory devices: it gives memory back on release
-    if (!decoder) {
-      setStage('decoder-fetch');
-      if (caps.gpu && plain) { let buf = await fetchCached(M + 'decoder_fp16.onnx', { onProgress: onP }); setStage('decoder-session'); decoder = await Decoder.create(ort, buf, { ep: epFor(ep), ...sessionOpts() }); buf = null; setStage('decoder-ready'); }
-      else if (caps.gpu) { let pk = await loadPacked(M + 'pack/', 'decoder', { onProgress: onP }); stats.dequantMs = pk.stats && pk.stats.dequantMs; setStage('decoder-session'); decoder = await Decoder.create(ort, pk.model, { ep: epFor(ep), externalData: pk.externalData, ...sessionOpts() }); pk = null; setStage('decoder-ready'); }
-      else { let buf = await fetchCached(M + 'decoder_int8.onnx', { onProgress: onP }); decoder = await Decoder.create(ort, buf, { ep, ...sessionOpts() }); buf = null; }
-      layers.setDecoder(decoder);
-      beacon('decoder-ready');
-      if (!caps.speed) { await decoder.decode(new Int32Array(256).fill(blankToken), 16, 16); caps.speed = stats.fullDecodeMs = Math.round(decoder.lastMs); }
-    }
-    if (!clip) {
-      const tokJson = await fetchJsonCached(M + 'mobileclip_s0/tokenizer.json');
-      setStage('clip-fetch');
-      const cep = clipCpu ? 'wasm' : epFor(ep);
-      const textCpu = lowMem && params.get('textgpu') !== '1';   // phones: int8 text tower on the CPU (43 MB) instead of 81 MB fp16 on the GPU
-      if (plain) { let vb = await fetchCached(M + 'mobileclip_s0/onnx/vision_model_fp16.onnx', { onProgress: onP }); let tb = await fetchCached(M + 'mobileclip_s0/onnx/text_model_fp16.onnx', { onProgress: onP }); setStage('clip-session'); clip = await Clip.create(ort, { visionBuf: vb, textBuf: tb, tokenizerJson: tokJson, visionEp: cep, textEp: cep, ...sessionOpts() }); vb = tb = null; }
-      else if (textCpu) { let vis = await loadPacked(M + 'pack/', 'clip_vision', { onProgress: onP }); let tb = await fetchCached(M + 'mobileclip_s0/onnx/text_model_quantized.onnx', { onProgress: onP });
-      setStage('clip-session');
-      clip = await Clip.create(ort, { visionBuf: vis.model, textBuf: tb, tokenizerJson: tokJson, visionEp: cep, textEp: 'wasm', visionExternal: vis.externalData, ...sessionOpts() });
-      vis = tb = null; }
-      else { let vis = await loadPacked(M + 'pack/', 'clip_vision', { onProgress: onP });
-      let txt = await loadPacked(M + 'pack/', 'clip_text', { onProgress: onP });
-      setStage('clip-session');
-      clip = await Clip.create(ort, { visionBuf: vis.model, textBuf: txt.model, tokenizerJson: tokJson, visionEp: cep, textEp: cep, visionExternal: vis.externalData, textExternal: txt.externalData, ...sessionOpts() });
-      vis = txt = null; }
-      setStage('clip-ready'); beacon('clip-ready');
-    }
-    if (!bank) { try { bank = await Bank.load(M + (/^[a-z_]+$/.test(params.get('bank') || '') ? params.get('bank') : 'bank') + '/'); } catch (e) { console.warn('bank not available', e); bank = null; } }   // ?bank=bank_photos keeps the old photo bank for comparisons
-    painter = new Painter({ decoder, clip, palette, bank });
+    loading.set(t('load.brush', { pct: 0 })); setStage('engine');
+    const r = await engine.init({ modelBase: M, modelFallback: M === CONFIG.modelBase ? CONFIG.modelFallback : null, ortBase: params.get('ort') || CONFIG.ortBase, entry: params.get('entry') || null, lowMem, gpuWanted: caps.gpu, plain, clipCpu, textGpu: params.get('textgpu') === '1', opt: params.get('opt') || null, bankName: /^[a-z_]+$/.test(params.get('bank') || '') ? params.get('bank') : 'bank', blankToken },
+      (p) => { if (p.stage === 'download') { stats.cached = p.cached; stats.modelBytes = p.loaded; loading.set(t(p.cached ? 'load.brush' : 'load.brushFirst', { pct: Math.min(99, Math.round(p.loaded / p.total * 100)) })); } else setStage(p.stage); });
+    decoder = engine.decoder; clip = engine.clip; painter = engine.painter; ep = r.ep; caps.speed = stats.fullDecodeMs = r.speed;
+    layers.setDecoder(decoder); beacon('decoder-ready'); beacon('clip-ready');
     setStage('brush-ready');
     modelsLoaded = true; caps.paint = true; room?.setCaps(caps);
     loading.hide(); sessionStorage.setItem('vqpaint.boot', 'ok');
@@ -749,9 +723,8 @@ function ensureBrush() {
 }
 /** Free the sessions and GPU buffers (phones do this after every stroke; Cache Storage keeps the downloads). */
 async function releaseBrush() {
-  painter = null; modelsLoaded = false; mode = 'view'; setStage('releasing');
-  if (clip) { await clip.release(); clip = null; }
-  if (decoder) { await decoder.release(); decoder = null; layers.setDecoder(null); }
+  painter = null; clip = null; decoder = null; modelsLoaded = false; mode = 'view'; setStage('releasing'); layers.setDecoder(null);
+  await engine.release();
   caps.paint = false; room?.setCaps(caps); setStage('released');
 }
 const beacon = (phase, extra = {}) => { if (!params.get('auto')) return; try { fetch('/__progress', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phase, t: Math.round(performance.now()), ...extra }) }).catch(() => {}); } catch (_) {} };
@@ -895,5 +868,5 @@ function tapPaint(x, y, text, realism = 0.6, hold = 0, extra = {}) { beginWrite(
   stats.autoStrokeMs = Math.round(performance.now() - t); stats.ua = navigator.userAgent; stats.caps = caps;
   try { await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(stats) }); } catch (_) {}
 })();
-window.__vqpaint = { get grid() { return grid; }, stats, strokes, caps, get ready() { return ready; }, get mode() { return mode; }, get modelsLoaded() { return modelsLoaded; }, ensureBrush, releaseBrush, get safeMode() { return safeMode; }, get name() { return myName; }, get decodeTimes() { return decoder && decoder.times ? decoder.times : []; }, paintRegion, paintAt, lassoPaint, peers, get room() { return room; },
+window.__vqpaint = { get grid() { return grid; }, stats, strokes, caps, get ready() { return ready; }, get mode() { return mode; }, get modelsLoaded() { return modelsLoaded; }, ensureBrush, releaseBrush, get safeMode() { return safeMode; }, get name() { return myName; }, get decodeTimes() { return []; }, engine, canPaintHere, paintRegion, paintAt, lassoPaint, peers, get room() { return room; },
   get painting() { return painting; }, othersPainting, myRequests, ensurePainter: ensureBrush, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, tapPaint, get queue() { return queue; }, reveal, beginWrite, strokeAt, react, mergeAt, autoPlace, get fresh() { return fresh; }, showMine, listRecent, get settings() { return roomSettings; }, scheduleSnapshot, sheets, importHighlights, pasteNotes, finishMeeting, makePostcard, exportPrint, showList, postSettings, enqueueStroke, get menu() { return menu; }, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; }, startReply, openNote, get replyTo() { return replyTo; }, threadOf, maskTouches: (a, b) => maskTouches(a, b), lassoMask: (pts) => lassoMask(pts, grid.w, grid.h), readPhoto, get lang() { return lang; } };
