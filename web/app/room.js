@@ -168,7 +168,7 @@ document.addEventListener('pointerdown', (e) => { if (performance.now() - noteOp
 const setStatus = (s, ms) => toast.status(s, ms);
 const peerName = (id) => (id === room?.id ? myName : peers.get(id)?.name || t('someone'));
 // ---------- write first: a tap on empty space is where the next note lands; the ink is alive from that moment ----------
-const MAX_R = useTiny ? 8 : lowMem ? 4 : 12, BASE_R = useTiny ? 4 : lowMem ? 3 : 4.5;           // radius in tokens; phones keep strokes small enough to decode fast
+const MAX_R = lowMem ? 4 : 12, BASE_R = lowMem ? 3 : 4.5;           // radius in tokens; phones keep strokes small enough to decode fast
 const dropRect = (d) => ({ x: d.x - d.size, y: d.y - d.size, w: d.size * 2, h: d.size * 2 });
 let held = null;                                                      // the drop growing under a held finger, before the tap completes
 /** the sim rect of a drop: ~5× its size (the ink's dynamics depend on the drop-to-rect ratio, so this follows the size), plus the search margin */
