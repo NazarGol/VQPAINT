@@ -48,6 +48,8 @@ const s0 = await A.evaluate((insideSrc) => { const inside = eval(insideSrc); con
 check(s0.blot && s0.path > 8 && s0.cells, `stroke carries its blot (seed ${s0.seed}, size ${s0.size} tokens, ${s0.lobes} lobes, tier ${s0.tier}) and an outline of ${s0.path} points; the ink is the hit shape`);
 check(s0.settledFx, 'queue painted the second note; reveals ended');
 const fr = await A.evaluate(() => window.__vqpaint.frameStats());
+const stripes = await A.evaluate(() => window.__vqpaint.strokes.map((s) => { const l = window.__vqpaint.layers.get(s.id); return l && l.stripes ? l.stripes.rows : 0; }));
+check(stripes.every((r) => r < 2), `no rows of white dashes in any painted layer (dash rows per stroke: ${stripes.join(',')}; the stripe bug shows dozens)`);
 check(fr && fr.p95 <= 34, `page frames while the ink animated and the engine searched (worker): p50 ${fr && fr.p50} ms, p95 ${fr && fr.p95} ms, max ${fr && fr.max} ms over ${fr && fr.n} frames`);
 await A.evaluate(() => window.__vqpaint.view.fit({ x: 118, y: 118, w: 24, h: 24 }, 1.2, 24)); await A.waitForTimeout(400);
 await A.screenshot({ path: path.join(outDir, 'flow_two_strokes.png') });

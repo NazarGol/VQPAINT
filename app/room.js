@@ -67,7 +67,7 @@ let grid = null;                  // {w, h, tokens} from the room (256x256 by de
 let roomBlank = 0;                // the room's blank token (set by its creator)
 let ready = false, room = null, ep = 'webgpu', decoder = null, clip = null, painter = null, blankToken = 0, layers = null, modelsLoaded = false, mode = 'view';
 const logUrl = params.get('log') === '0' ? null : `${CONFIG.roomsUrl}/room/${roomId}/log`;
-installRemoteLog({ url: logUrl, tag: 'page' }); rlog({ t: 'boot', crashes, lastBoot, lightest, safeMode, lowMem, isPhone });
+installRemoteLog({ url: logUrl, tag: 'page' }); rlog({ t: 'boot', crashes, lastBoot, lightest, safeMode, lowMem, isPhone, dpr: +(devicePixelRatio || 1).toFixed(2), screen: [innerWidth, innerHeight], touch: matchMedia('(pointer: coarse)').matches });
 let engine = new Engine(), lightCfg = null, brushFailed = false;                              // the models and the search live in a worker; the page only animates
 const deviceMemory = navigator.deviceMemory || 0;         // Chrome/Android: 0.25…8 (power of 2, rounded down); Safari: undefined
 /** can this device paint on its own without risking its memory? phones only with ≥ 8 GB reported (Android) or on iOS in non-safe mode */
@@ -148,7 +148,17 @@ const notes = mountNotes(stage, {
 });
 /** "reply": the next tap must land on or next to this note's shape; its painting grows from the note's tokens */
 function startReply(noteOrId) { const note = typeof noteOrId === 'string' ? strokes.find((s) => s.id === noteOrId) : noteOrId; if (!note) return; replyTo = note; notes.close(); setStatus(t('note.reply.draw', { text: briefText(note.text) }), 6000); }
-function openNote(id) { const st = strokes.find((s) => s.id === id); if (!st) return; st._mask ||= maskFromString(st.mask); notes.open(st, view.anchorFor(st.crop || st._mask)); noteOpenedAt = performance.now(); }
+/** frame times while anything animated (ink, pans, zooms, fades): the page canvas's own record, the reveal's as a fallback */
+function frameStats(reset = true) { if (!view.frameStats) return reveal.frameStats(); return view.frameStats(reset) || { n: 0, p50: 0, p95: 0, max: 0, over16: 0, work50: 0, work95: 0 }; }
+function openNote(id) { const st = strokes.find((s) => s.id === id); if (!st) return; showNote(st); }
+/** open a note's card: beside the stroke on desktop, a bottom sheet on phones — and the stroke is scrolled above the sheet, never under it */
+function showNote(st, { mergeWith = null } = {}) {
+  st._mask ||= maskFromString(st.mask);
+  const crop = st.crop || st._mask;
+  notes.open(st, view.anchorFor(crop), { mergeWith }); noteOpenedAt = performance.now(); view.setHover(st.id);
+  if (isPhone) { const sheet = document.querySelector('.note.done.open'); const sheetH = sheet ? Math.min(sheet.offsetHeight || 0, innerHeight * 0.42) : innerHeight * 0.4; const a = view.anchorFor(crop), limit = view.size.h - sheetH - 12, top = 70;
+    if (a.bottom > limit) view.view.panBy(0, Math.max(limit - a.bottom, top - a.top)); userMoved = true; }   // the card must not cover the stroke
+}
 /** the other note when the tap landed on an overlap zone of `st` (painted toward both), else null */
 function mergeAt(st, w) { if (!st.merges) return null; const x = Math.floor(w[0]), y = Math.floor(w[1]); for (const m of st.merges) { m._mask ||= maskFromString(m.cells); if (maskHas(m._mask, x, y)) return strokes.find((o) => o.id === m.with) || null; } return null; }
 const view = mountCanvas(stage, {
@@ -165,7 +175,7 @@ const view = mountCanvas(stage, {
       if (i >= 0 && hits.length > 1) { openNote(hits[(i + 1) % hits.length].id); return; }   // the same spot again: the next overlapping note
       notes.close(); if (i >= 0 || !hits.length) { hoverAt(null); return; } }
     const st = hits[0];
-    if (st) { dropHeld(); haptic('tap'); const other = mergeAt(st, w); notes.open(st, view.anchorFor(st.crop || st._mask), { mergeWith: other }); noteOpenedAt = performance.now(); view.setHover(st.id); return; }
+    if (st) { dropHeld(); haptic('tap'); showNote(st, { mergeWith: mergeAt(st, w) }); return; }
     beginWrite(w, hold, takeHeld());
   },
   onHoldStart: (w) => { if (!ready || !grid || notes.isEditing || notes.openedId) return;
@@ -200,14 +210,17 @@ document.addEventListener('pointerdown', (e) => { if (performance.now() - noteOp
 const setStatus = (s, ms) => toast.status(s, ms);
 const peerName = (id) => (id === room?.id ? myName : peers.get(id)?.name || t('someone'));
 // ---------- write first: a tap on empty space is where the next note lands; the ink is alive from that moment ----------
-const MAX_R = lowMem ? 4 : 12, BASE_R = lowMem ? 3 : 4.5;           // radius in tokens; phones keep strokes small enough to decode fast
+const MAX_R = lowMem ? 10 : 12;                                     // radius in tokens (hold grows up to this)
+/** the default drop radius in tokens: on a phone the settled stroke should span ~40 % of the screen width (a settled stroke is ≈ 4.5 radii wide), on desktop 4.5 tokens as before */
+function baseR() { if (!isPhone) return 4.5; const pct = (CONFIG.ink && CONFIG.ink.strokePct) || 0.4, z = view.view.zoom || 16, w = view.size.w || 400; return Math.max(2.2, Math.min(8, (pct * w) / z / 4.5)); }
+const BASE_R = 4.5;   // kept for callers that place notes without a tap
 const dropRect = (d) => ({ x: d.x - d.size, y: d.y - d.size, w: d.size * 2, h: d.size * 2 });
 let held = null;                                                      // the drop growing under a held finger, before the tap completes
 /** the sim rect of a drop: ~5× its size (the ink's dynamics depend on the drop-to-rect ratio, so this follows the size), plus the search margin */
-function dropCrop(x, y, size = BASE_R) { const reach = Math.ceil(size * INK_K * 2.4) + 2 + MARGIN; const x0 = Math.max(0, Math.floor(x) - reach), y0 = Math.max(0, Math.floor(y) - reach); return { x: x0, y: y0, w: Math.min(grid.w, Math.floor(x) + reach + 1) - x0, h: Math.min(grid.h, Math.floor(y) + reach + 1) - y0 }; }
-const GROW_MAX = 1.6;   // hold-to-grow stays within the rect the drop was born in
+function dropCrop(x, y, size = baseR()) { const reach = Math.ceil(size * INK_K * 2.4) + 2 + MARGIN; const x0 = Math.max(0, Math.floor(x) - reach), y0 = Math.max(0, Math.floor(y) - reach); return { x: x0, y: y0, w: Math.min(grid.w, Math.floor(x) + reach + 1) - x0, h: Math.min(grid.h, Math.floor(y) + reach + 1) - y0 }; }
+const GROW_MAX = 2.2;   // hold-to-grow stays within the rect the drop was born in
 /** a live ink drop at a world point: impact + ripple now, then a small breathing body that waits for the note */
-function liveDrop(x, y, size = BASE_R) {
+function liveDrop(x, y, size = baseR()) {
   const d = { x, y, size, seed: (Math.random() * 2 ** 31) | 0, pendingId: 'pending-' + Math.random().toString(36).slice(2, 8), crop: dropCrop(x, y, size) };
   startReveal({ id: d.pendingId, crop: d.crop, cx: x, cy: y, size: size * INK_K, seed: d.seed, pending: true });
   return d;
@@ -224,7 +237,7 @@ function beginWrite(w, hold = 0, existing = null) {
     const m = document.querySelector('[data-message]'); m.querySelector('[data-open]').onclick = () => { try { window.Telegram?.WebApp?.openLink(link); } catch (_) { window.open(link, '_blank'); } m.hidden = true; }; m.querySelector('[data-close]').onclick = () => { m.hidden = true; };
     return;
   }
-  const d = existing || liveDrop(w[0], w[1], Math.min(MAX_R, BASE_R + hold * 2.6));   // the drop that landed under the finger, or a new one now
+  const d = existing || liveDrop(w[0], w[1], Math.min(MAX_R, baseR() + hold * 2.6));   // the drop that landed under the finger, or a new one now
   if (replyTo && !maskTouches(discMask(d.x, d.y, d.size, grid.w, grid.h), replyTo._mask ||= maskFromString(replyTo.mask))) { dissolveDrop(d); setStatus(t('note.reply.mustTouch'), 5000); return; }
   pendingDrop = d; window.__vqpaintPending = d; updateScene(); hint.hidden = true;
   notes.edit(view.anchorFor(dropRect(d)), '', { replyTo, askName: !localStorage.getItem('vqpaint.name') && !tgMode });
@@ -293,8 +306,9 @@ function strokesAt(gx, gy) {
 function strokeAt(gx, gy) {
   const x = Math.floor(gx), y = Math.floor(gy);
   for (let i = strokes.length - 1; i >= 0; i--) { const s = strokes[i]; s._mask ||= maskFromString(s.mask); if (maskHas(s._mask, x, y)) return s; }
-  for (let i = strokes.length - 1; i >= 0; i--) { const s = strokes[i], m = s._mask; if (x < m.x - 1 || y < m.y - 1 || x > m.x + m.w || y > m.y + m.h) continue;   // a hole or a gap inside the ink still counts
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (maskHas(m, x + dx, y + dy)) return s; }
+  const k = Math.max(1, Math.round(14 / (view.view.zoom || 16)));   // a finger is forgiven ~14 px around the cells (a hole or a gap inside the ink still counts)
+  for (let i = strokes.length - 1; i >= 0; i--) { const s = strokes[i], m = s._mask; if (x < m.x - k || y < m.y - k || x > m.x + m.w + k - 1 || y > m.y + m.h + k - 1) continue;
+    for (let dy = -k; dy <= k; dy++) for (let dx = -k; dx <= k; dx++) if (maskHas(m, x + dx, y + dy)) return s; }
   let best = null, bd = Infinity;   // where the note was written (the ink may have left a hole there): the nearest drop centre within its size
   for (const s of strokes) { const b = s.blot; if (!b) continue; const d = Math.hypot(gx - b.x, gy - b.y); if (d <= (b.size || 3) * 1.3 && d < bd) { bd = d; best = s; } }
   return best;
@@ -550,10 +564,12 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
       lang: noteLang && noteLang !== 'en' ? noteLang : undefined, text_en: textEn || undefined, blot: blotRes ? blotRes.blot : undefined, merges: merges.length ? merges : undefined, cells: blotRes && blotRes.cellBits ? packCells(blotRes.cellBits) : undefined, cpt: blotRes && blotRes.cellBits ? blotRes.cpt : undefined, chapter: meta.chapter || undefined, day: meta.day || undefined, source: meta.source || undefined, anon: anon || undefined };
     strokes.push(note);
     if (note.cells) alphaImg = noteCellAlpha(note, res.crop);   // the cells are the mask (already re-cut to the painting's crop above); shared cells with older strokes get the dither
-    await layers.fromImage(note, res.crop, res.image, alphaImg);
+    const myLayer = await layers.fromImage(note, res.crop, res.image, alphaImg);
+    if (myLayer && myLayer.stripes && myLayer.stripes.rows) { stats.stripeRows = (stats.stripeRows || 0) + myLayer.stripes.rows; rlog({ t: 'stripes', rows: myLayer.stripes.rows, dashes: myLayer.stripes.dashes, crop: `${res.crop.w}x${res.crop.h}` }); }
     undoStack.push({ cells, before, note }); menu.setUndoEnabled(true);
     sendCells(cells);
     updateScene(); reveal.fadeOut(jobId);                                       // the cached layer is underneath now: crossfade
+    setTimeout(() => { const f = frameStats(); if (f) rlog({ t: 'frames', when: 'stroke', ...f, dpr: view.dpr, engine: stats.engine }); }, 600);
     try {   // small JPEG of the stroke so viewers need no model; uploaded before the note so they find it
       const blob = await makePreviewBlob(res.image, lowMem ? 320 : 384);
       const up = await fetch(previewUrl(note.id), { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
@@ -886,7 +902,7 @@ function matchBackgroundUnused(img) {
   for (let y = 8; y < img.h - 8; y++) for (let x = 8; x < img.w - 8; x++) { const i = y * img.w + x; r += img.data[i]; g += img.data[plane + i]; b += img.data[2 * plane + i]; n++; }
   document.documentElement.style.setProperty('--color-bg', `rgb(${Math.round(255 * r / n)}, ${Math.round(255 * g / n)}, ${Math.round(255 * b / n)})`);
 }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { updateScene(); scheduleVisibleLayers(); } });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { const f = frameStats(); if (f) rlog({ t: 'frames', when: 'hide', ...f }); } if (document.visibilityState === 'visible') { updateScene(); scheduleVisibleLayers(); } });
 
 // ---------- room ----------
 function connect() {
@@ -946,5 +962,5 @@ function tapPaint(x, y, text, realism = 0.6, hold = 0, extra = {}) { beginWrite(
   stats.autoStrokeMs = Math.round(performance.now() - t); stats.ua = navigator.userAgent; stats.caps = caps;
   try { await fetch('/__results', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(stats) }); } catch (_) {}
 })();
-window.__vqpaint = { get grid() { return grid; }, stats, strokes, caps, get ready() { return ready; }, get mode() { return mode; }, get modelsLoaded() { return modelsLoaded; }, ensureBrush, releaseBrush, get safeMode() { return safeMode; }, get name() { return myName; }, get decodeTimes() { return []; }, engine, canPaintHere, frameStats: () => reveal.frameStats(), paintRegion, paintAt, lassoPaint, peers, get room() { return room; },
+window.__vqpaint = { get grid() { return grid; }, stats, strokes, caps, get ready() { return ready; }, get mode() { return mode; }, get modelsLoaded() { return modelsLoaded; }, ensureBrush, releaseBrush, get safeMode() { return safeMode; }, get name() { return myName; }, get decodeTimes() { return []; }, engine, canPaintHere, frameStats: () => frameStats(false), paintRegion, paintAt, lassoPaint, peers, get room() { return room; },
   get painting() { return painting; }, othersPainting, myRequests, ensurePainter: ensureBrush, setEffortSeconds(s) { testSeconds = s; }, setPrompt(p) { pendingText = p; }, tapPaint, get queue() { return queue; }, reveal, beginWrite, strokeAt, react, mergeAt, autoPlace, get fresh() { return fresh; }, showMine, listRecent, get settings() { return roomSettings; }, scheduleSnapshot, sheets, importHighlights, pasteNotes, finishMeeting, makePostcard, exportPrint, showList, postSettings, enqueueStroke, get menu() { return menu; }, actions, showAllNotes, hoverAt, saveSheet, optionsSheet, strokesAt, notes, get view() { return view.view; }, get layers() { return layers; }, setHelpers(v) { helpersOn = v; }, startReply, openNote, get replyTo() { return replyTo; }, threadOf, maskTouches: (a, b) => maskTouches(a, b), lassoMask: (pts) => lassoMask(pts, grid.w, grid.h), readPhoto, get lang() { return lang; } };
