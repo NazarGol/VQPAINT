@@ -212,7 +212,7 @@ const peerName = (id) => (id === room?.id ? myName : peers.get(id)?.name || t('s
 // ---------- write first: a tap on empty space is where the next note lands; the ink is alive from that moment ----------
 const MAX_R = lowMem ? 10 : 12;                                     // radius in tokens (hold grows up to this)
 /** the default drop radius in tokens: on a phone the settled stroke should span ~40 % of the screen width (a settled stroke is ≈ 4.5 radii wide), on desktop 4.5 tokens as before */
-function baseR() { if (!isPhone) return 4.5; const pct = (CONFIG.ink && CONFIG.ink.strokePct) || 0.4, z = view.view.zoom || 16, w = view.size.w || 400; return Math.max(2.2, Math.min(8, (pct * w) / z / 4.5)); }
+function baseR() { if (!isPhone) return 4.5; const pct = (CONFIG.ink && CONFIG.ink.strokePct) || 0.4, z = view.view.zoom || 16, w = view.size.w || 400; return Math.max(2.0, Math.min(8, (pct * w) / z / 4.8)); }   // a settled viscous stroke (lobes + drips) is ≈ 4.8 drop radii wide
 const BASE_R = 4.5;   // kept for callers that place notes without a tap
 const dropRect = (d) => ({ x: d.x - d.size, y: d.y - d.size, w: d.size * 2, h: d.size * 2 });
 let held = null;                                                      // the drop growing under a held finger, before the tap completes

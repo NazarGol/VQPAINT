@@ -80,8 +80,8 @@ const sheet2 = await P.evaluate(() => { const el = document.querySelector('.note
 check(sheet2 && Math.abs(sheet2.bottom - dev.viewport.height) < 4 && !sheet2.covers, `the open note is a bottom sheet (${sheet2 && sheet2.h} px tall) and the stroke sits above it (stroke bottom ${sheet2 && sheet2.strokeBottom}, sheet top ${sheet2 && sheet2.top})`);
 const stripes = await P.evaluate(() => window.__vqpaint.strokes.map((s) => { const l = window.__vqpaint.layers.get(s.id); return l && l.stripes ? l.stripes.rows : 0; }));
 check(stripes.every((r) => r < 2), `no rows of white dashes in the painted layer (dash rows: ${stripes.join(',')}; the stripe bug shows dozens)`);
-const widthPct = await P.evaluate(() => { const s = window.__vqpaint.strokes[0]; const a = window.__vqpaintView.anchorFor(s.crop); return Math.round((a.right - a.left) / innerWidth * 100); });
-check(widthPct >= 30 && widthPct <= 75, `the stroke's crop spans ${widthPct} % of the screen width (default size from the screen)`);
+const widthPct = await P.evaluate(() => { const v = window.__vqpaint, s = v.strokes[0]; v.strokeAt(-1000, -1000); const m = s._mask; return Math.round(m.w * v.view.zoom / innerWidth * 100); });
+check(widthPct >= 25 && widthPct <= 70, `the stroke's ink spans ${widthPct} % of the screen width (default size from the screen)`);
 await P.screenshot({ path: path.join(outDir, `phone_${deviceName.replace(/\s+/g, '_')}_note.png`) });
 await tap(box.x + 30, box.y + box.height - 120); await P.waitForTimeout(400);
 check(await P.evaluate(() => !document.querySelector('.note.done.open')), 'tap elsewhere closes it');
