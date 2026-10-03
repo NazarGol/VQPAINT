@@ -11,29 +11,48 @@ It was built for [VQPAINT](https://github.com/NazarGol/VQPAINT), a collaborative
 | model | does | size | speed (M1 Pro, WebGL2) |
 |---|---|---|---|
 | **tiny decoder** (`lib/tinydec.js`) | `vqgan_imagenet_f16_16384` tokens → RGB, distilled from the original decoder (3 MB instead of 89 MB) | 3.1 MB (variant B 3.0 MB) | 256 px in 7–15 ms |
-| **token scorer** (`lib/tinyscorer.js`) | a batch of token grids → MobileCLIP-S0 image embeddings, no decode | 5.2 MB | ~2 000 scored candidates/s |
-| **tiny text encoder** (`engine/text.js`) | CLIP token ids → the same embedding space, distilled from the MobileCLIP-S0 text tower | 6.6 MB | 15–90 ms per note, in a Worker |
+| **MobileCLIP-S0 image tower** (`lib/clipvision.js`) | the real CLIP image encoder as 118 shader ops, converted from the ONNX graph (`research/tiny/export_clip_vision.py`) | 21.7 MB fp16 | 13 ms per 256 px image (cosine 0.9995+ vs ONNX Runtime) |
+| **token scorer** (`lib/tinyscorer.js`) | a batch of token grids → approximate CLIP embeddings; used only as a pre-filter | 5.2 MB | ~2 000 grids/s |
+| **tiny text encoder** (`engine/text.js`) | CLIP token ids → the MobileCLIP text space, distilled (cosine 0.955 to the real tower) | 9.3 MB | 15–90 ms per note, in a Worker |
 
-The search (`engine/search.js`) is a hill-climb in token space: mutate the best grid (bank patches, palette samples, neighbour
-copies, block moves, swaps), score 32 candidates in one GPU batch, keep the best, decode only the preview every 300 ms.
+The search (`engine/search.js`) is a hill-climb in token space scored by **real CLIP on the tiny decoder's output** (decode →
+GPU resize → CLIP → cosine, no readback; ~50 evaluations/s on an M1). With `mode: 'prefilter'` the token scorer ranks 32
+mutations per generation and real CLIP judges the best 4. Token-only scoring is available but not recommended: a hill-climb
+exploits the approximation (`research/results/search_modes_8s_m1.png`).
 
-## Numbers
+## Numbers (Apple M1 Pro emulation; real phones: see DEVICES.md for the checklist)
 
-_(filled from the final report: peak memory per profile, tries/s, download, seconds per stroke, quality gate, scorer-vs-CLIP correlation)_
+| | ONNX Runtime path (VQPAINT before) | tiny-vqgan |
+|---|---|---|
+| download to paint | 108 MB | 42 MB (decoder 3 + CLIP 22 + text 9 + scorer 5 + palette/bank 3) |
+| real-CLIP evaluations per second, desktop | 4–6 | 40–50 |
+| 10 prompts × 8 s, real CLIP through the original VQGAN decoder | 0.174 | 0.179 (pre-filter) / 0.159 (CLIP only) |
+| tiny decoder vs original (held-out grids) | — | L1 0.044, LPIPS 0.28, PSNR 25.1, CLIP cosine 0.79 |
+| iPhone 11 WebKit profile, painting peak above an empty tab | 1 777 MB | ~375 MB WebContent + ~95 MB GPU process (download path dominates; see research/PROGRESS.md) |
 
 ## Usage
 
 ```js
 import { Engine } from './engine/engine.js';
-const engine = await Engine.load({ base: 'https://…/models/' });          // tiny/, palette/, bank/, mobileclip_s0/tokenizer.json under base
+const engine = await Engine.load({ base: 'https://…/models/' });          // tiny/*.bin+json, palette/, bank/, mobileclip_s0/tokenizer.json under base
 const [target] = await engine.encodeTexts(['a red forest at night']);      // Float32Array(512), unit length (Worker)
 const grid = { w: 64, h: 64, tokens: new Int32Array(64 * 64).fill(6328) }; // VQGAN token grid (6328 = the "blank" tile)
 const mask = { x: 20, y: 20, w: 8, h: 8, cells: new Uint8Array(64).fill(1) }; // cells to paint, row-major inside the box
-const res = await engine.paintStroke({ grid, mask, target, seconds: 8, onPreview: (p) => ctx.putImageData(new ImageData(p.image.rgba, p.image.w, p.image.h), p.crop.x * 16, p.crop.y * 16) });
+const res = await engine.paintStroke({ grid, mask, target, seconds: 8, mode: 'prefilter', onPreview: (p) => ctx.putImageData(new ImageData(p.image.rgba, p.image.w, p.image.h), p.crop.x * 16, p.crop.y * 16) });
 // res.tokens (crop tokens, written back into grid), res.crop {x,y,w,h}, res.image {rgba,w,h}, res.score, res.steps
 const img = engine.decode(res.tokens, res.crop.h, res.crop.w);              // {rgba, w, h} at 16 px per token
 engine.release();
 ```
+
+## Files you need
+
+The weights are not in this repository (see the licence note). Put them under `models/tiny/`: `tiny_decoder_A.{bin,json}`
+(+ `_B`), `clip_vision.{bin,json}` (`research/tiny/export_clip_vision.py` makes it from the Xenova MobileCLIP-S0 ONNX file),
+`tiny_text_M.{bin,json}`, `tiny_scorer_S.{bin,json}`, plus VQPAINT's `palette/`, `bank/` and `mobileclip_s0/tokenizer.json`.
+Then run `research/tiny_manifest.sh`: it writes `models/tiny/manifest.json` (file → content hash); the engine fetches it fresh and
+requests every file as `name?v=<hash>`, so a retrained model reaches every device by itself and old cached copies are evicted.
+Tests: `npm install` then `node research/test_tinydec.mjs --page test_clipvision.html --browser all` (and `test_tinydec`,
+`test_tinyscorer`, `test_tinytext`, `test_engine`), `research/test_matrix.sh` for the five-profile matrix.
 
 ## Retraining
 
@@ -54,4 +73,4 @@ under ~30 MB, 256 px preview fast enough for a live fog → clear effect.
   tone can differ and the glitchiest textures are softened (see the side-by-side sheet).
 - The scorer approximates CLIP; the search can exploit its errors on long runs. Keep strokes to seconds, not minutes.
 - No photo encoder: turning a photo into tokens still needs the full VQGAN encoder.
-- Licences: see `LICENSES.md` — the scorer and text encoder are research-only derivatives of Apple MobileCLIP.
+- Licences: see `NOTICE.md` — the CLIP image tower, the scorer and the text encoder are (derivatives of) Apple MobileCLIP-S0, research use only; the decoder derives from the CompVis VQGAN ImageNet weights. Code is MIT.

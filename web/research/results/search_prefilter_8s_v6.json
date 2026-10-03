@@ -1,0 +1,206 @@
+{
+ "ok": true,
+ "rows": [
+  {
+   "prompt": "a face",
+   "crop": "11x11",
+   "A": {
+    "real": 0.25887339207676086,
+    "tries": 58,
+    "sec": 8.0975
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.25100301350805426,
+     "own": 0.2828007638454437,
+     "tries": 384,
+     "clipEvals": 384,
+     "tokenEvals": 3048,
+     "sec": 8.014900000095368
+    }
+   }
+  },
+  {
+   "prompt": "a red forest",
+   "crop": "14x12",
+   "A": {
+    "real": 0.21249876617364566,
+    "tries": 47,
+    "sec": 8.115300000071526
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.18782219958741636,
+     "own": 0.20716270804405212,
+     "tries": 384,
+     "clipEvals": 384,
+     "tokenEvals": 3048,
+     "sec": 8.013
+    }
+   }
+  },
+  {
+   "prompt": "the sea at night",
+   "crop": "15x17",
+   "A": {
+    "real": 0.1768035166204145,
+    "tries": 32,
+    "sec": 8.132600000023842
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.19458564870412218,
+     "own": 0.2632926106452942,
+     "tries": 340,
+     "clipEvals": 340,
+     "tokenEvals": 2696,
+     "sec": 8.029799999952317
+    }
+   }
+  },
+  {
+   "prompt": "a city street",
+   "crop": "12x11",
+   "A": {
+    "real": 0.19324984687790472,
+    "tries": 55,
+    "sec": 8.138200000047684
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.17407905755069536,
+     "own": 0.24668528139591217,
+     "tries": 388,
+     "clipEvals": 388,
+     "tokenEvals": 3080,
+     "sec": 8.083
+    }
+   }
+  },
+  {
+   "prompt": "green hills under a blue sky",
+   "crop": "13x13",
+   "A": {
+    "real": 0.11680343410656817,
+    "tries": 44,
+    "sec": 8.078100000023841
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.09733530979374733,
+     "own": 0.14841528236865997,
+     "tries": 380,
+     "clipEvals": 380,
+     "tokenEvals": 3016,
+     "sec": 8.066299999952316
+    }
+   }
+  },
+  {
+   "prompt": "a cat",
+   "crop": "16x15",
+   "A": {
+    "real": 0.1800390151476586,
+    "tries": 35,
+    "sec": 8.010800000071525
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.20161804853264179,
+     "own": 0.25050997734069824,
+     "tries": 352,
+     "clipEvals": 352,
+     "tokenEvals": 2792,
+     "sec": 8.039299999952316
+    }
+   }
+  },
+  {
+   "prompt": "a lighthouse in a storm",
+   "crop": "11x12",
+   "A": {
+    "real": 0.19541378890305433,
+    "tries": 56,
+    "sec": 8.133399999976158
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.14560329645177322,
+     "own": 0.2368081510066986,
+     "tries": 388,
+     "clipEvals": 388,
+     "tokenEvals": 3080,
+     "sec": 8.056399999976158
+    }
+   }
+  },
+  {
+   "prompt": "a bowl of oranges",
+   "crop": "14x14",
+   "A": {
+    "real": 0.19801110678463532,
+    "tries": 41,
+    "sec": 8.068199999928474
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.20730695845492078,
+     "own": 0.2804528474807739,
+     "tries": 376,
+     "clipEvals": 376,
+     "tokenEvals": 2984,
+     "sec": 8.077200000047684
+    }
+   }
+  },
+  {
+   "prompt": "snow on a mountain",
+   "crop": "16x15",
+   "A": {
+    "real": 0.1504538858592328,
+    "tries": 36,
+    "sec": 8.199399999976158
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.12109478778135781,
+     "own": 0.21188068389892578,
+     "tries": 352,
+     "clipEvals": 352,
+     "tokenEvals": 2792,
+     "sec": 8.042700000047684
+    }
+   }
+  },
+  {
+   "prompt": "a crowded market",
+   "crop": "10x12",
+   "A": {
+    "real": 0.15997789372424634,
+    "tries": 62,
+    "sec": 8.127800000071526
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.19579249972680582,
+     "own": 0.2564583122730255,
+     "tries": 384,
+     "clipEvals": 384,
+     "tokenEvals": 3048,
+     "sec": 8.013100000023842
+    }
+   }
+  }
+ ],
+ "summary": {
+  "meanRealA": 0.18421246462741211,
+  "meanSecA": 8.110130000019073,
+  "prefilter": {
+   "meanReal": 0.1776240820091535,
+   "wins": 4,
+   "meanSec": 8.043570000004769,
+   "meanTries": 372.8,
+   "ownMinusReal": 0.060822579820794934
+  }
+ }
+}
