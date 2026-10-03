@@ -99,7 +99,7 @@ export class LayerCache {
   setDecoder(d) { this.decoder = d; }
   has(id) { return this.map.has(id); }
   touch(id) { const l = this.map.get(id); if (l) { this.map.delete(id); this.map.set(id, l); } return l; }
-  trim() { while (this.map.size > this.max) { const [id, l] = this.map.entries().next().value; l.bitmap.close?.(); this.map.delete(id); } }
+  trim() { let dropped = false; while (this.map.size > this.max) { const [id, l] = this.map.entries().next().value; l.bitmap.close?.(); this.map.delete(id); dropped = true; } if (dropped) this.onDrop?.(); }   // onDrop: the scene must stop referencing closed bitmaps
   clear() { for (const l of this.map.values()) l.bitmap.close?.(); this.map.clear(); }
   /** layer from a preview image (JPEG without alpha) composed with the lasso alpha: no model needed */
   async fromPreview(note, blob) {

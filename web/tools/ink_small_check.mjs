@@ -25,7 +25,8 @@ const r = await page.evaluate(async ([nSeeds]) => {
       const d = new InkDrop(off, { x: c.W / 2, y: c.W / 2, params: { size: c.size }, seed: seed * 7919 + 13, now, duration: 6, haptics: false, grid: c.grid, rect: { x: 0, y: 0, w: c.W, h: c.W } });
       const steps = Math.ceil(d.p.duration * 30) + 2; for (let i = 0; i < steps; i++) d.step(now + (i + 1) * 33.4, 1 / 30); d.holdUntil = 0; d.step(now + (steps + 1) * 33.4, 1 / 30);
       off.resize(c.W, c.W, c.grid / c.W); off.clear(); d.draw(now + (steps + 2) * 33.4, { mode: 2, offset: [0, 0], scissor: false });
-      const m = off.readMask(); let a = 0; for (let k = 0; k < m.data.length; k++) if (m.data[k] >= 0.5) a++; d.free();
+      const m = off.readMask(); let a = 0; for (let k = 0; k < m.data.length; k++) if (m.data[k] >= 0.5) a++;
+      if (a < 20) (out.empty ||= []).push({ seed: d.seed, area: a, json: d.toJSON(), gen: JSON.stringify(d.p.gen).slice(0, 600) }); d.free();
       areas.push(a);
     }
     const rc = c.size / c.W * c.grid, disc = Math.PI * rc * rc, rel = areas.map((a) => a / disc).sort((x, y) => x - y);
@@ -33,5 +34,6 @@ const r = await page.evaluate(async ([nSeeds]) => {
   }
   off.destroy(); return out;
 }, [nSeeds]);
+if (r.empty) { for (const e of r.empty) console.log('EMPTY seed', e.seed, 'area', e.area, JSON.stringify(e.json), e.gen); delete r.empty; }
 for (const [k, v] of Object.entries(r)) console.log(`${k}: drop radius ${v.rCells} cells (disc ${v.disc} cells); settled area as % of the disc over ${nSeeds} seeds: min ${v.min}, p10 ${v.p10}, median ${v.median}, max ${v.max}; starved (< 15 %): ${v.starved}; smallest = ~${v.tokensMin} tokens`);
 await browser.close(); server.close();

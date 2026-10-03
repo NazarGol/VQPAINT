@@ -77,6 +77,7 @@ let roomSettings = {};                                   // kind (book / meeting
 const tgMode = params.get('tg') === '1';                 // opened inside Telegram's Mini App webview
 let painting = null, pendingDrop = null, viewFitted = false, userMoved = false, replyTo = null;   // pendingDrop: where the next note lands; replyTo: the note it answers
 const queue = [];                                        // notes written while another stroke paints
+Engine.pace = isPhone ? { budgetMs: +(params.get('gpubudget') || 7), frameMs: 16.7 } : null;   // phones: the search holds the GPU ≤ 7 ms per 16.7 ms frame; the ink and the page get the rest
 const reveal = new RevealManager({ F, params: CONFIG.ink || {} });   // the procedural ink reveal (settings from config, tuned on app/effects.html)
 const hiddenLayers = new Set();                          // notes whose reveal is still spreading: their cached layer waits underneath
 let stirring = null;                                     // reveal id the finger is stirring
@@ -212,7 +213,7 @@ const peerName = (id) => (id === room?.id ? myName : peers.get(id)?.name || t('s
 // ---------- write first: a tap on empty space is where the next note lands; the ink is alive from that moment ----------
 const MAX_R = lowMem ? 10 : 12;                                     // radius in tokens (hold grows up to this)
 /** the default drop radius in tokens: on a phone the settled stroke should span ~40 % of the screen width (a settled stroke is ≈ 4.5 radii wide), on desktop 4.5 tokens as before */
-function baseR() { if (!isPhone) return 4.5; const pct = (CONFIG.ink && CONFIG.ink.strokePct) || 0.4, z = view.view.zoom || 16, w = view.size.w || 400; return Math.max(2.0, Math.min(8, (pct * w) / z / 4.8)); }   // a settled viscous stroke (lobes + drips) is ≈ 4.8 drop radii wide
+function baseR() { if (!isPhone) return 4.5; const pct = (CONFIG.ink && CONFIG.ink.strokePct) || 0.4, z = view.view.zoom || 16, w = view.size.w || 400; return Math.max(2.0, Math.min(8, (pct * w) / z / 5.5)); }   // a settled stroke is ≈ 5.5 drop radii wide (spikes and extra bodies reach far)
 const BASE_R = 4.5;   // kept for callers that place notes without a tap
 const dropRect = (d) => ({ x: d.x - d.size, y: d.y - d.size, w: d.size * 2, h: d.size * 2 });
 let held = null;                                                      // the drop growing under a held finger, before the tap completes
@@ -254,7 +255,7 @@ function inkMask(drop) {
   const exact = drop.pendingId ? reveal.paramsOf(drop.pendingId) : null;   // the live drop's (drifted, grown) shape, not just its seed
   if (exact) drop.size = Math.max(drop.size, exact.size / F / INK_K);
   drop.crop ||= dropCrop(drop.x, drop.y, drop.size);                         // the live drop and the presim must share one sim rect
-  const floor = Math.max(6, Math.round(0.8 * Math.PI * (drop.size * INK_K) ** 2));   // a shape under 0.8× the drop's own disc starved at cell resolution (the median settles at ~5×): try the next seed
+  const floor = Math.max(6, Math.round(0.2 * Math.PI * (drop.size * INK_K) ** 2));   // a shape under 0.2× the drop's own disc is a starved seed (the median is ~0.5×): try the next seed
   let seed = drop.seed, ex = exact;
   for (let attempt = 0; attempt < 4; attempt++) {
     try { m = reveal.presim({ cx: drop.x, cy: drop.y, size: drop.size * INK_K, seed, duration: 6, exact: ex, crop: drop.crop }); } catch (e) { console.warn('presim', e); m = null; break; }
@@ -558,7 +559,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
       if (merges.length) { res.tokens = readRegion(grid, res.crop); res.image = await decoder.decode(res.tokens, res.crop.h, res.crop.w); reveal.setImage(jobId, res.image); }
     } catch (e) { console.warn('merge', e); }
     const secs = (performance.now() - t0) / 1000;
-    stats.strokes++; stats.strokeSeconds.push(secs); stats.lastTries = res.steps; stats.lastStatus = `${res.steps} tries in ${secs.toFixed(1)}s`; rlog({ t: 'stroke', tries: res.steps, sec: +secs.toFixed(1), score: +(res.score || 0).toFixed(3), crop: `${res.crop.w}x${res.crop.h}`, decodeMs: stats.fullDecodeMs });
+    stats.strokes++; stats.strokeSeconds.push(secs); stats.lastTries = res.steps; stats.lastPace = res.pace || null; stats.lastStatus = `${res.steps} tries in ${secs.toFixed(1)}s`; rlog({ t: 'stroke', tries: res.steps, pace: res.pace ? `${res.pace.chunks}×${Math.round(res.pace.gpuMs / Math.max(1, res.pace.chunks))}ms gpu, idle ${res.pace.idleMs}ms, max ${res.pace.maxChunk}ms, budget ${res.pace.budgetMs}` : undefined, sec: +secs.toFixed(1), score: +(res.score || 0).toFixed(3), crop: `${res.crop.w}x${res.crop.h}`, decodeMs: stats.fullDecodeMs });
     const anon = !!meta.anon;
     const note = { id: Math.random().toString(36).slice(2, 10), text, author: anon ? '' : author, color, time: Date.now(), mask: maskToString(finalMask), crop: res.crop, tokens: encodeTokens(res.tokens), path: path || undefined, realism, parent: parent || undefined, photo: photo ? (photo.thumb || thumbOf(await dataUrlToImage(photo.data))) : undefined,
       lang: noteLang && noteLang !== 'en' ? noteLang : undefined, text_en: textEn || undefined, blot: blotRes ? blotRes.blot : undefined, merges: merges.length ? merges : undefined, cells: blotRes && blotRes.cellBits ? packCells(blotRes.cellBits) : undefined, cpt: blotRes && blotRes.cellBits ? blotRes.cpt : undefined, chapter: meta.chapter || undefined, day: meta.day || undefined, source: meta.source || undefined, anon: anon || undefined };
@@ -839,7 +840,7 @@ async function boot() {
   blankToken = CONFIG.blankToken;                                     // nothing is downloaded for viewing; the palette (4 MB) comes with the brush
   if (fresh) { grid = { w: CONFIG.gridW, h: CONFIG.gridH, tokens: new Int32Array(CONFIG.gridW * CONFIG.gridH).fill(blankToken) }; roomBlank = blankToken; roombar.setConnected?.(false); }
   else connect();
-  layers = new LayerCache(null, { max: lowMem ? 24 : 80 });
+  layers = new LayerCache(null, { max: lowMem ? 24 : 80 }); layers.onDrop = () => updateScene();
   stats.loadMs = Math.round(performance.now() - t0);
   ready = true; updateScene();
   sessionStorage.setItem('vqpaint.boot', 'ok');

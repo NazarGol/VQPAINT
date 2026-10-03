@@ -2,9 +2,9 @@
 
 ## 3 things to look at on your phone
 https://nazargol.github.io/VQPAINT/ (a fresh painting)
-1. Tap and wait a second: a heavy drop should settle in with one soft ring, then breathe very slowly while you type (one slow pulse when you finish a word, no flicker).
-2. Tap **paint**: it should spread like honey — slow start, steady flow, a slight overshoot that pulls back — with no popping cells. Drag a finger across it while it spreads: a thick thread follows the finger and pulls back after you lift.
-3. After it settles, pan and pinch for a few seconds and put the phone down; I read your frame times from the remote log.
+1. Tap: the shape snaps in with a glitch. Type a few words slowly: each finished word should mutate the shape (new spikes, symmetry or a flip).
+2. Tap **paint**: an explosion into the final form, then it freezes. During the painting (the search runs ~15 s) pan and pinch: this is the moment that lagged before — tell me if it still stutters.
+3. Drag a finger across a stroke while it is still painting: it warps toward the finger and springs back. Then put the phone down; I read the frame times and the engine pacing from the remote log.
 
 ## Telegram bot (one-time, ~3 minutes)
 1. In Telegram open @BotFather → `/newbot` → name it → copy the token.

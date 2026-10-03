@@ -2,6 +2,7 @@
 // now answered from the worker. Facades: engine.decoder.decode, engine.clip.embedText/embedImages, engine.painter.paint.
 import { writeRegion } from '../decoder.js';
 export class Engine {
+  static pace = null;   // { budgetMs, frameMs }: the search holds the GPU for at most budgetMs per frameMs (phones)
   constructor({ light = null } = {}) { this.worker = null; this.pending = new Map(); this.seq = 0; this.ready = false; this.broken = null; this.gpu = false; this.speed = null; this.onProgressCb = null; this.lightCfg = light; this.light = !!light; }
   start() {
     if (this.worker) return;
@@ -24,7 +25,8 @@ export class Engine {
   /** can this browser host the light engine in a worker? (OffscreenCanvas with WebGL2 inside workers: Chrome, Firefox, Safari 17+) */
   static canHostLight() { try { if (typeof OffscreenCanvas === 'undefined') return false; const c = new OffscreenCanvas(1, 1); const gl = c.getContext('webgl2'); if (!gl) return false; gl.getExtension('WEBGL_lose_context')?.loseContext(); return true; } catch { return false; } }
   /** Painter.paint with the same options; grid tokens are copied in and the crop written back on every progress and at the end */
-  async paint({ grid, mask, target, parent = null, photo = null, signal = null, onProgress = null, ...opts }) {
+  async paint({ grid, mask, target, parent = null, photo = null, signal = null, onProgress = null, ...opts0 }) {
+    const opts = { ...opts0, pace: opts0.pace === undefined ? Engine.pace : opts0.pace };   // Engine.pace: the GPU budget on phones (set by the page)
     const id = ++this.seq;
     const job = { gridW: grid.w, gridH: grid.h, tokens: grid.tokens.slice(), mask, target, parent, photo, opts };
     const p = new Promise((res, rej) => { this.pending.set(id, { res, rej, onProgress: (pr) => { if (pr.tokens && pr.crop) writeRegion(grid, pr.crop, pr.tokens); onProgress?.({ ...pr, changed: [] }); } }); this.worker.postMessage({ op: 'paint', job, id }, [job.tokens.buffer]); });

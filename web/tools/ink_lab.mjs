@@ -12,7 +12,7 @@ const errors = [];
 const ctx = await browser.newContext({ viewport: { width: 420, height: 800 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true });
 const page = await ctx.newPage(); page.on('pageerror', (e) => errors.push(e.message)); page.on('console', (m) => { if (m.type() === 'error' && !/404/.test(m.text())) errors.push(m.text().slice(0, 200)); });
 const q = args.settings ? '&' + new URLSearchParams(JSON.parse(args.settings)).toString() : '';
-await page.goto(`${base}/app/effects.html?speed=0.6${q}`); await page.waitForTimeout(400); await page.evaluate(() => localStorage.clear());
+await page.goto(`${base}/app/effects.html?grid=40&speed=0.6${q}`); await page.waitForTimeout(400); await page.evaluate(() => localStorage.clear());
 const cdp = await ctx.newCDPSession(page); const x = 210, y = 380;
 await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] }); await page.waitForTimeout(220); await page.screenshot({ path: path.join(out, '1_impact.png') });
 for (let i = 1; i <= 12; i++) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + i * 9, y: y - i * 6 }] }); await page.waitForTimeout(40); }
@@ -24,7 +24,7 @@ await page.screenshot({ path: path.join(out, '4_settled.png') });
 console.log('phone:', await page.evaluate(() => document.getElementById('fps').textContent));
 // the ×30 grid (wide) and circularity of 50
 const wide = await (await browser.newContext({ viewport: { width: 1200, height: 760 }, deviceScaleFactor: 2 })).newPage(); wide.on('pageerror', (e) => errors.push(e.message));
-await wide.goto(`${base}/app/effects.html?${q.slice(1)}`); await wide.waitForTimeout(400); await wide.evaluate(() => localStorage.clear());
+await wide.goto(`${base}/app/effects.html?grid=40&${q.slice(1)}`); await wide.waitForTimeout(400); await wide.evaluate(() => localStorage.clear());
 await wide.evaluate(() => { document.querySelector('.ui.bottom-centre').style.display = 'none'; document.getElementById('hint').style.display = 'none'; });
 await wide.evaluate(() => document.getElementById('grid').click()); await wide.waitForTimeout(1500); await wide.waitForFunction(() => window.__ink.drops.length === 0, null, { timeout: 60000 }); await wide.waitForTimeout(300);
 await wide.screenshot({ path: path.join(out, 'grid30.png') });

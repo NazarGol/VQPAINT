@@ -78,7 +78,7 @@ export function mountCanvas(stageEl, { onTap, onHoldStart, onHold, onHoldEnd, on
     else ctx.clearRect(0, 0, W, H);
     full = false;
     ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-    const draw = (bitmap, crop, pixel = false) => { const [sx, sy] = view.toScreen(crop.x, crop.y); ctx.imageSmoothingEnabled = !pixel; ctx.drawImage(bitmap, sx, sy, crop.w * z, crop.h * z); };   // pixel ink: nearest-neighbour, cells stay crisp
+    const draw = (bitmap, crop, pixel = false) => { if (!bitmap || bitmap.width === 0) return; const [sx, sy] = view.toScreen(crop.x, crop.y); ctx.imageSmoothingEnabled = !pixel; try { ctx.drawImage(bitmap, sx, sy, crop.w * z, crop.h * z); } catch (_) { full = true; } };   // pixel ink: nearest-neighbour; a bitmap closed by the cache trim (Firefox throws) is skipped and the scene redrawn
     const visible = (crop) => { if (!intersects(r, crop)) return false; if (!clipRects) return true; const [sx, sy] = view.toScreen(crop.x, crop.y), w = crop.w * z, h = crop.h * z; return clipRects.some((q) => sx < q.x + q.w && sx + w > q.x && sy < q.y + q.h && sy + h > q.y); };
     for (const l of state.layers) if (visible(l.crop)) draw(l.bitmap, l.crop, l.pixel);
     ctx.imageSmoothingEnabled = true;

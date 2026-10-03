@@ -99,3 +99,10 @@ Full painting pack = 108 MB (was 204 MB). Realism 0.6 default = 14 s search on d
 - Lab replaced: viscosity · lobes · drift · smoothing · growth rate · overshoot · breathing · fade · drip (+ size, weirdness, cells per token, phone width, copy settings).
 - Video `app/shots/viscous_phone.webm` (tap → writing → paint → drag), grid `app/shots/ink/grid30.png`; perf numbers in DECISIONS.
 - Tests: flow, phone (stroke ≈ 40 % of the width, bottom sheet, no dash rows), lab 61 fps.
+
+## 2026-10-03 — round 12: lag (engine time-slicing) + wild ink
+- Real-phone log read: Android Chrome p95 66 ms during painting, Firefox Android 33–154 ms; closed-bitmap error fixed.
+- Engine search paced on phones (GPU ≤ 7 ms per frame; decode and CLIP as separate chunks); pace stats in the log.
+- Ink = pure (seed, time, position) shader: superformula bodies, kaleidoscope, spiral, warp, saw edge, holes, cuts; per-word mutation, glitch burst, explosive paint, finger warp; frozen after settle.
+- Lab: chaos + ingredient sliders, next seed, ×40 grid (`?grid=40`). Video `app/shots/wild_phone.webm`, grid `app/shots/ink/grid30.png`.
+- Tools: `tools/gpu_cost.mjs` (ink GPU ms), `tools/video_wild.mjs`. Tests: flow, phone (pacing line), Firefox smoke, step1, kinds — all green.

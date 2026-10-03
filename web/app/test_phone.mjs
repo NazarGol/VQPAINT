@@ -85,6 +85,7 @@ check(widthPct >= 25 && widthPct <= 70, `the stroke's ink spans ${widthPct} % of
 await P.screenshot({ path: path.join(outDir, `phone_${deviceName.replace(/\s+/g, '_')}_note.png`) });
 await tap(box.x + 30, box.y + box.height - 120); await P.waitForTimeout(400);
 check(await P.evaluate(() => !document.querySelector('.note.done.open')), 'tap elsewhere closes it');
+const pace = await P.evaluate(() => window.__vqpaint.stats.lastPace); if (pace) console.log(`engine pacing (phone): ${pace.chunks} GPU chunks, ${Math.round(pace.gpuMs / Math.max(1, pace.chunks))} ms each, max ${pace.maxChunk} ms, idle ${pace.idleMs} ms, budget ${pace.budgetMs} ms per frame`);
 const fr = await P.evaluate(() => (window.__vqpaint.frameStats ? window.__vqpaint.frameStats() : null));
 if (fr) console.log(`frames (phone profile, ink animating + engine): p50 ${fr.p50} ms, p95 ${fr.p95} ms, max ${fr.max} ms over ${fr.n} frames`);
 // one-finger pan with momentum
