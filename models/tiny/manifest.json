@@ -1,0 +1,18 @@
+{
+  "clip_vision.bin": "e725f66c",
+  "clip_vision.json": "025829c7",
+  "clip_vision_i8.bin": "b72b3e97",
+  "clip_vision_i8.json": "9758d261",
+  "tiny_decoder_A.bin": "bc9e5257",
+  "tiny_decoder_A.json": "54aa8787",
+  "tiny_decoder_B.bin": "cd4a9ad8",
+  "tiny_decoder_B.json": "e6fe5396",
+  "tiny_scorer_M.bin": "786e9aa5",
+  "tiny_scorer_M.json": "2c25859a",
+  "tiny_scorer_S.bin": "7865e26d",
+  "tiny_scorer_S.json": "2536be95",
+  "tiny_text_M.bin": "41256bc1",
+  "tiny_text_M.json": "6b6d8a09",
+  "tiny_text_S.bin": "f1286c67",
+  "tiny_text_S.json": "67fd131e"
+}
