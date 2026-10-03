@@ -6,7 +6,7 @@ set -e
 HERE=$(cd "$(dirname "$0")" && pwd); WEB=$(cd "$HERE/.." && pwd); ROOT=$(cd "$WEB/.." && pwd); PAGES="$ROOT/.gh-pages"; LIVE="https://nazargol.github.io/VQPAINT"
 [ -d "$PAGES/.git" ] && git -C "$PAGES" fetch -q --depth 1 origin gh-pages 2>/dev/null && git -C "$PAGES" reset -q --hard origin/gh-pages
 prev=$(git -C "$PAGES" rev-parse HEAD 2>/dev/null || true); echo "previous gh-pages (live): ${prev:-none}"
-(cd "$WEB" && ./deploy_pages.sh) || { echo "deploy failed"; exit 1; }
+"$HERE/tiny_manifest.sh" >/dev/null; (cd "$WEB" && ./deploy_pages.sh) || { echo "deploy failed"; exit 1; }
 new=$(git -C "$PAGES" rev-parse HEAD); want=$(git -C "$ROOT" rev-parse --short HEAD); echo "pushed gh-pages $new (app $want)"
 for i in $(seq 1 40); do v=$(curl -s "$LIVE/VERSION.txt" || true); case "$v" in *"$want"*) break;; esac; sleep 10; done
 echo "live: $v"; case "$v" in *"$want"*) ;; *) echo "Pages did not publish within 400 s"; [ "$1" = "--no-rollback" ] || { git -C "$PAGES" reset -q --hard "$prev"; git -C "$PAGES" push -q -f origin gh-pages; echo "ROLLED BACK to $prev"; }; exit 1;; esac

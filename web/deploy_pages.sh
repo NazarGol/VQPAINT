@@ -20,7 +20,7 @@ rm -rf app lib engine index.html
 cp -R "$WEB/app" "$WEB/lib" "$WEB/engine" "$WEB/index.html" .
 rm -rf app/test_out app/shots
 # model files (copy only if missing or different size, so the checkout stays cheap)
-sync_file() { mkdir -p "$(dirname "$2")"; if [ ! -f "$2" ] || [ "$(stat -f%z "$1")" != "$(stat -f%z "$2")" ]; then cp "$1" "$2"; fi; }
+sync_file() { mkdir -p "$(dirname "$2")"; if [ ! -f "$2" ] || ! cmp -s "$1" "$2"; then cp "$1" "$2"; fi; }
 sync_file "$WEB/models/decoder_fp16.onnx" models/decoder_fp16.onnx
 for f in decoder.onnx decoder.bin decoder.json clip_vision.onnx clip_vision.bin clip_vision.json clip_text.onnx clip_text.bin clip_text.json; do sync_file "$WEB/models/pack/$f" "models/pack/$f"; done
 sync_file "$WEB/models/decoder_int8.onnx" models/decoder_int8.onnx
@@ -32,7 +32,7 @@ for f in bank.json bank_tokens_4.u16 bank_tokens_6.u16 bank_tokens_8.u16 bank_to
 for f in encoder.onnx encoder.bin encoder.json; do sync_file "$WEB/models/pack/$f" "models/pack/$f"; done     # photo encoder (loaded only when a note has a photo)
 sync_file "$WEB/models/encoder_int8.onnx" models/encoder_int8.onnx
 for f in metaphors.json metaphors.f16; do sync_file "$WEB/models/metaphors/$f" "models/metaphors/$f"; done
-for n in tiny_decoder_A tiny_decoder_B clip_vision clip_vision_i8 tiny_text_M tiny_text_S tiny_scorer_S; do for ext in bin json; do [ -f "$WEB/models/tiny/$n.$ext" ] && sync_file "$WEB/models/tiny/$n.$ext" "models/tiny/$n.$ext"; done; done   # light engine
+for n in tiny_decoder_A tiny_decoder_B clip_vision clip_vision_i8 tiny_text_M tiny_text_S tiny_scorer_S; do for ext in bin json; do [ -f "$WEB/models/tiny/$n.$ext" ] && sync_file "$WEB/models/tiny/$n.$ext" "models/tiny/$n.$ext"; done; done; sync_file "$WEB/models/tiny/manifest.json" models/tiny/manifest.json   # light engine (+ content hashes for cache busting)
 touch .nojekyll
 echo "vqpaint $(git -C "$REPO_ROOT" rev-parse --short HEAD) $(date -u +%FT%TZ)" > VERSION.txt
 git add -A
