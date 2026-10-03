@@ -5,6 +5,7 @@ import { F, expandRegion, readRegion } from '../lib/decoder.js';
 import { Engine } from '../lib/engine/client.js';
 import { LightEngine } from '../lib/engine/light.js';
 import { mountDebugLine, memoryInfo } from './debugline.js';
+import { installRemoteLog, rlog } from '../lib/rlog.js';
 import { maskCells, maskToString, maskFromString, maskFromCells, maskHas, maskTouches, noisyMask, discMask } from '../lib/mask.js';
 import { t, lang, setLang } from './i18n.js';
 import { lassoMask } from '../lib/lasso.js';
@@ -50,13 +51,13 @@ let helpersOn = params.get('helpers') ? params.get('helpers') === '1' : true;
 const caps = { paint: false, speed: null, gpu: false, lite, helper: false };
 // crash loop guard: if the last visit never reached 'ok' (Safari reloaded the tab), start in low-memory safe mode (viewing only)
 const lastBoot = sessionStorage.getItem('vqpaint.boot');
-const crashedLastTime = lastBoot === 'loading' || lastBoot === 'painting';
+const crashedLastTime = lastBoot === 'painting';   // a reload while the brush was loading or painting; a visit that only viewed never counts
 if (crashedLastTime) localStorage.setItem('vqpaint.crashes', String((+localStorage.getItem('vqpaint.crashes') || 0) + 1));
 if (params.get('reset') === '1') localStorage.setItem('vqpaint.crashes', '0');
 const crashes = +localStorage.getItem('vqpaint.crashes') || 0;
 let safeMode = params.get('safe') === '1' || (crashedLastTime && crashes >= 2);   // light engine: one crash -> lightest mode, two -> the note waits for a computer
 const lightest = params.get('light') === '1' || (crashes >= 1 && !safeMode);
-sessionStorage.setItem('vqpaint.boot', 'loading');
+sessionStorage.setItem('vqpaint.boot', 'view');
 const lowMem = isPhone || safeMode || params.get('lowmem') === '1';
 let useTiny = params.get('engine') !== 'ort';   // the light engine (tiny decoder + MobileCLIP as WebGL2 shaders, no ONNX Runtime) is the default on every device; ?engine=ort forces the ONNX worker   // release models after every stroke, small caches, 1 wasm thread
 
@@ -64,7 +65,9 @@ let useTiny = params.get('engine') !== 'ort';   // the light engine (tiny decode
 let grid = null;                  // {w, h, tokens} from the room (256x256 by default), the search context
 let roomBlank = 0;                // the room's blank token (set by its creator)
 let ready = false, room = null, ep = 'webgpu', decoder = null, clip = null, painter = null, blankToken = 0, layers = null, modelsLoaded = false, mode = 'view';
-let engine = new Engine();                              // the models and the search live in a worker; the page only animates
+const logUrl = params.get('log') === '0' ? null : `${CONFIG.roomsUrl}/room/${roomId}/log`;
+installRemoteLog({ url: logUrl, tag: 'page' }); rlog({ t: 'boot', crashes, lastBoot, lightest, safeMode, lowMem, isPhone });
+let engine = new Engine(), lightCfg = null;                              // the models and the search live in a worker; the page only animates
 const deviceMemory = navigator.deviceMemory || 0;         // Chrome/Android: 0.25…8 (power of 2, rounded down); Safari: undefined
 /** can this device paint on its own without risking its memory? phones only with ≥ 8 GB reported (Android) or on iOS in non-safe mode */
 function canPaintHere() { if (forceNoPaint || safeMode || engine.broken) return false; if (useTiny) return true; if (!lowMem) return true; if (!caps.gpu) return false; if (deviceMemory) return deviceMemory >= 8; return isIOS; }
@@ -540,7 +543,7 @@ async function paintMask(mask, text, { author = myName, color = myColor, forId =
       if (merges.length) { res.tokens = readRegion(grid, res.crop); res.image = await decoder.decode(res.tokens, res.crop.h, res.crop.w); reveal.setImage(jobId, res.image); }
     } catch (e) { console.warn('merge', e); }
     const secs = (performance.now() - t0) / 1000;
-    stats.strokes++; stats.strokeSeconds.push(secs); stats.lastTries = res.steps; stats.lastStatus = `${res.steps} tries in ${secs.toFixed(1)}s`;
+    stats.strokes++; stats.strokeSeconds.push(secs); stats.lastTries = res.steps; stats.lastStatus = `${res.steps} tries in ${secs.toFixed(1)}s`; rlog({ t: 'stroke', tries: res.steps, sec: +secs.toFixed(1), score: +(res.score || 0).toFixed(3), crop: `${res.crop.w}x${res.crop.h}`, decodeMs: stats.fullDecodeMs });
     const anon = !!meta.anon;
     const note = { id: Math.random().toString(36).slice(2, 10), text, author: anon ? '' : author, color, time: Date.now(), mask: maskToString(finalMask), crop: res.crop, tokens: encodeTokens(res.tokens), path: path || undefined, realism, parent: parent || undefined, photo: photo ? (photo.thumb || thumbOf(await dataUrlToImage(photo.data))) : undefined,
       lang: noteLang && noteLang !== 'en' ? noteLang : undefined, text_en: textEn || undefined, blot: blotRes ? blotRes.blot : undefined, merges: merges.length ? merges : undefined, cells: blotRes && blotRes.cellBits ? packCells(blotRes.cellBits) : undefined, cpt: blotRes && blotRes.cellBits ? blotRes.cpt : undefined, chapter: meta.chapter || undefined, day: meta.day || undefined, source: meta.source || undefined, anon: anon || undefined };
@@ -765,14 +768,26 @@ function ensureBrush() {
   ensuring ||= (async () => {
     mode = 'brush'; sessionStorage.setItem('vqpaint.boot', 'painting');
     loading.set(t('load.brush', { pct: 0 })); setStage('engine');
-    const r = await engine.init({ modelBase: M, modelFallback: M === CONFIG.modelBase ? CONFIG.modelFallback : null, ortBase: params.get('ort') || CONFIG.ortBase, entry: params.get('entry') || null, lowMem, gpuWanted: caps.gpu, plain, clipCpu, textGpu: params.get('textgpu') === '1', opt: params.get('opt') || null, bankName: /^[a-z_]+$/.test(params.get('bank') || '') ? params.get('bank') : 'bank', blankToken },
+    const initEngine = () => engine.init({ logUrl, modelBase: M, modelFallback: M === CONFIG.modelBase ? CONFIG.modelFallback : null, ortBase: params.get('ort') || CONFIG.ortBase, entry: params.get('entry') || null, lowMem, gpuWanted: caps.gpu, plain, clipCpu, textGpu: params.get('textgpu') === '1', opt: params.get('opt') || null, bankName: /^[a-z_]+$/.test(params.get('bank') || '') ? params.get('bank') : 'bank', blankToken },
       (p) => { if (p.stage === 'download') { stats.cached = p.cached; stats.modelBytes = p.loaded; loading.set(t(p.cached ? 'load.brush' : 'load.brushFirst', { pct: Math.min(99, Math.round(p.loaded / p.total * 100)) })); } else setStage(p.stage); });
+    let r;
+    try { r = await initEngine(); }
+    catch (e) {   // the light engine in a worker failed (OffscreenCanvas/WebGL2 quirks or a lost error): once more on the page thread, then a clear message
+      rlog({ t: 'brush', step: 'init-failed', engine: stats.engine, error: String(e && e.message).slice(0, 300) });
+      if (useTiny && stats.engine === 'tiny-worker') { try { engine.terminate(); } catch (_) {} engine = new LightEngine(lightCfg); stats.engine = 'tiny'; loading.set(t('load.brush', { pct: 0 })); r = await initEngine(); }
+      else throw e;
+    }
+    rlog({ t: 'brush', step: 'ready', engine: stats.engine, variant: r.variant, speed: r.speed, ep: r.ep });
     decoder = engine.decoder; clip = engine.clip; painter = engine.painter; ep = r.ep; caps.speed = stats.fullDecodeMs = r.speed; if (r.variant) stats.engineVariant = r.variant;
     layers.setDecoder(decoder); beacon('decoder-ready'); beacon('clip-ready');
     setStage('brush-ready');
     modelsLoaded = true; caps.paint = true; room?.setCaps(caps);
     loading.hide(); sessionStorage.setItem('vqpaint.boot', 'ok');
-  })().finally(() => { ensuring = null; });
+  })().catch((e) => {   // never a pill stuck at a number: hide it, say what happened, and do not count this as a crash
+    loading.hide(); sessionStorage.setItem('vqpaint.boot', 'error'); mode = 'view';
+    const msg = /WebGL2/i.test(String(e && e.message)) ? t('status.noWebgl') : t('status.brushFailed', { error: String(e && e.message).slice(0, 120) });
+    setStatus(msg, 10000); rlog({ t: 'brush', step: 'failed', error: String(e && e.message).slice(0, 300) }); throw e;
+  }).finally(() => { ensuring = null; });
   return ensuring;
 }
 /** Free the sessions and GPU buffers (phones do this after every stroke; Cache Storage keeps the downloads). */
@@ -788,11 +803,11 @@ async function boot() {
   if (tgMode) { try { const sc = document.createElement('script'); sc.src = 'https://telegram.org/js/telegram-web-app.js'; sc.onload = () => { try { const wa = window.Telegram?.WebApp; wa?.ready(); wa?.expand(); if (wa?.initDataUnsafe?.user && !localStorage.getItem('vqpaint.name')) { const u = wa.initDataUnsafe.user; myName = (u.first_name || u.username || myName).slice(0, 24); localStorage.setItem('vqpaint.name', myName); } } catch (_) {} }; document.head.appendChild(sc); } catch (_) {} }
   const gpu = params.get('nogpu') === '1' ? null : await webgpuInfo();
   beacon('gpu', { gpu }); caps.gpu = !!gpu;
-  const lightCfg = lightest ? { mode: 'clip', clip: 'clip_vision_i8', scorer: null, text: 'S' } : { mode: params.get('mode') || 'prefilter' };
+  lightCfg = lightest ? { mode: 'clip', clip: 'clip_vision_i8', scorer: null, text: 'S' } : { mode: params.get('mode') || 'prefilter' };
   const workerLight = useTiny && params.get('lightworker') !== '0' && Engine.canHostLight();   // the light engine in a worker when the browser allows (page frames stay free); on the page thread otherwise (iOS 15/16)
   if (useTiny && workerLight) { engine = new Engine({ light: lightCfg }); stats.engine = 'tiny-worker'; stats.engineMode = lightest ? 'lightest (int8 CLIP, no scorer)' : (params.get('mode') || 'prefilter'); }
   else if (useTiny) { engine = new LightEngine(lightCfg); stats.engine = 'tiny'; stats.engineMode = lightest ? 'lightest (int8 CLIP, no scorer)' : (params.get('mode') || 'prefilter'); }
-  mountDebugLine($('roombar'), () => { const secs = stats.strokeSeconds[stats.strokeSeconds.length - 1]; return { engine: (stats.engine || 'ort') + (stats.engineVariant ? ' ' + stats.engineVariant : ''), mode: stats.engineMode || ep || '-', crashes: stats.crashes ?? 0, 'last stroke': secs ? `${stats.lastTries} tries in ${secs.toFixed(1)} s (${(stats.lastTries / secs).toFixed(1)}/s)` : '-', 'decode ms': stats.fullDecodeMs ?? '-', memory: memoryInfo() }; });
+  mountDebugLine($('roombar'), () => { const secs = stats.strokeSeconds[stats.strokeSeconds.length - 1]; return { engine: (stats.engine || 'ort') + (stats.engineVariant ? ' ' + stats.engineVariant : ''), mode: stats.engineMode || ep || '-', crashes, 'last stroke': secs ? `${stats.lastTries} tries in ${secs.toFixed(1)} s (${(stats.lastTries / secs).toFixed(1)}/s)` : '-', 'decode ms': stats.fullDecodeMs ?? '-', memory: memoryInfo() }; });
   if (!gpu && !lowMem && !forceNoPaint) setStatus(t('msg.noGpuShort'), 7000);   // a quiet line, never a box over the canvas
   ep = gpu ? 'webgpu' : 'wasm';
   caps.helper = (useTiny || !!gpu) && !lowMem && !forceNoPaint && helpersOn;   // a desktop with WebGPU can paint for phones (loads models when it claims)

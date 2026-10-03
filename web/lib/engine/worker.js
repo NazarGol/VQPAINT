@@ -19,6 +19,7 @@ const PRE = new RegExp("'s|'t|'re|'ve|'m|'ll|'d|\\p{L}+|\\p{N}|[^\\s\\p{L}\\p{N}
 const estTokenizer = { tokenize: (str) => { const out = []; for (const m of str.toLowerCase().matchAll(PRE)) { const n = Math.max(1, Math.ceil(m[0].length / 4)); for (let i = 0; i < n; i++) out.push(m[0]); } return out; } };
 async function initLight(o, id) {
   cfg = o; const { Engine: LightCore, fetchLowMem } = await import('../../engine/engine.js');
+  if (o.logUrl && !globalThis.__rlog) { try { const { installRemoteLog } = await import('../rlog.js'); installRemoteLog({ url: o.logUrl, tag: 'worker' }); } catch (_) {} }
   const base = o.modelBase, total = 38 * 2 ** 20, seen = {}, cachedSeen = {};
   const onP = (p) => { seen[p.url] = p.loaded; cachedSeen[p.url] = !!p.cached; const loaded = Object.values(seen).reduce((a, b) => a + b, 0); post({ id, progress: { stage: 'download', loaded, total, cached: Object.values(cachedSeen).every(Boolean) } }); };
   post({ id, progress: { stage: 'engine' } });

@@ -118,10 +118,10 @@ export default {
     const url = new URL(req.url);
     if (url.pathname === '/health') return json({ ok: true });
     if (url.pathname.startsWith('/tg/')) return telegram(req, env, url);
-    const m = url.pathname.match(/^\/room\/([^/]+)\/(ws|state|settings|snapshot|enqueue|preview\/[a-z0-9]{4,16})$/);
+    const m = url.pathname.match(/^\/room\/([^/]+)\/(ws|state|settings|snapshot|enqueue|log|preview\/[a-z0-9]{4,16})$/);
     if (m) {
       if (!ROOM_ID_RE.test(m[1])) return json({ error: 'bad room id, expected [a-z0-9-]{4,32}' }, 400);
-      const postOk = m[2].startsWith('preview/') || ['settings', 'snapshot', 'enqueue'].includes(m[2]);
+      const postOk = m[2].startsWith('preview/') || ['settings', 'snapshot', 'enqueue', 'log'].includes(m[2]);
       if (req.method !== 'GET' && !(req.method === 'POST' && postOk)) return json({ error: 'method not allowed' }, 405);
       const stub = env.ROOMS.get(env.ROOMS.idFromName(m[1]));
       return stub.fetch(req);
@@ -220,6 +220,22 @@ export class Room {
     const rows = this.sql().exec('SELECT type, data FROM previews WHERE id = ?', noteId).toArray();
     if (!rows.length) return json({ error: 'no preview' }, 404);
     return new Response(rows[0].data, { headers: { 'Content-Type': rows[0].type, 'Cache-Control': 'public, max-age=31536000, immutable', 'Access-Control-Allow-Origin': '*' } });
+  }
+  /** Remote device log: POST a JSON array of small entries (loader stages, engine facts, errors; nothing personal); GET ?n=300 reads the newest. 7 days, 3000 rows per room. */
+  async log(req) {
+    try { this.sql().exec('CREATE TABLE IF NOT EXISTS logs (seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, json TEXT)'); } catch (e) { return json({ error: 'no sql' }, 500); }
+    const url = new URL(req.url);
+    if (req.method === 'POST') {
+      let body; try { body = await req.json(); } catch { return json({ error: 'bad json' }, 400); }
+      const entries = (Array.isArray(body) ? body : [body]).slice(0, 50); const now = Date.now(); let n = 0;
+      for (const e of entries) { const line = JSON.stringify(e).slice(0, 2000); this.sql().exec('INSERT INTO logs (ts, json) VALUES (?, ?)', now, line); n++; }
+      this.sql().exec('DELETE FROM logs WHERE ts < ?', now - 7 * 24 * 3600 * 1000);
+      this.sql().exec('DELETE FROM logs WHERE seq NOT IN (SELECT seq FROM logs ORDER BY seq DESC LIMIT 3000)');
+      return json({ ok: true, n });
+    }
+    const n = Math.min(2000, Math.max(1, +url.searchParams.get('n') || 300));
+    const rows = this.sql().exec('SELECT ts, json FROM logs ORDER BY seq DESC LIMIT ?', n).toArray().reverse();
+    return json({ room: this.id || null, n: rows.length, entries: rows.map((r) => { try { return { at: r.ts, ...JSON.parse(r.json) }; } catch { return { at: r.ts, raw: r.json }; } }) });
   }
   saveRequests() { this.ctx.storage.put('requests', [...this.requests.values()]).catch((e) => console.error('requests save', e)); }
   /** room settings: kind (book / meeting / diary / group), title, author, chapters, anon, private, tz */
@@ -320,12 +336,13 @@ export class Room {
 
   async fetch(req) {
     const url = new URL(req.url);
-    const m = url.pathname.match(/^\/room\/([^/]+)\/(ws|state|settings|snapshot|enqueue|preview\/[a-z0-9]{4,16})$/);
+    const m = url.pathname.match(/^\/room\/([^/]+)\/(ws|state|settings|snapshot|enqueue|log|preview\/[a-z0-9]{4,16})$/);
     const kind = m ? m[2] : null;
     if (kind && kind.startsWith('preview/')) return this.preview(req, kind.slice(8));
     if (kind === 'settings') return this.settings(req);
     if (kind === 'snapshot') return this.snapshot(req);
     if (kind === 'enqueue') return this.enqueue(req);
+    if (kind === 'log') return this.log(req);
 
     if (kind === 'state') {
       if (!this.tokens) return json({ error: 'room does not exist yet' }, 404);
