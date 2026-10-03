@@ -22,9 +22,10 @@ const t0 = Date.now(); await page.goto(url); await page.waitForFunction(() => wi
 await page.evaluate((s) => { window.__vqpaint.setEffortSeconds(s); return window.__vqpaint.ensureBrush(); }, seconds);
 await page.waitForFunction(() => window.__vqpaint.modelsLoaded, null, { timeout: +(args.timeout || 120000) * 3 });
 const load = await page.evaluate(() => ({ stage: window.__vqpaint.stats.stage, engine: window.__vqpaint.stats.engine, bytes: Math.round(window.__vqpaint.stats.modelBytes / 2 ** 10), mode: window.__vqpaint.mode, decodeMs: window.__vqpaint.stats.fullDecodeMs }));
-console.log(`ready+brush in ${((Date.now() - t0) / 1000).toFixed(1)}s`, JSON.stringify(load));
+console.log(`ready+brush in ${((Date.now() - t0) / 1000).toFixed(1)}s room ${roomId}`, JSON.stringify(load));
 const out = [];
-for (let i = 0; i < 2; i++) {
+const nStrokes = +(args.strokes || 2);
+for (let i = 0; i < nStrokes; i++) {
   const t1 = Date.now();
   // the no-modes UI: tap → write → paint (the ink drop is simulated, then the note goes through the queue to the engine)
   const n0 = await page.evaluate(() => window.__vqpaint.strokes.length);
@@ -33,6 +34,6 @@ for (let i = 0; i < 2; i++) {
   const r = await page.evaluate(() => { const v = window.__vqpaint, s = v.strokes[v.strokes.length - 1]; return { n: v.strokes.length, tries: v.stats.lastTries, hasTokens: !!s.tokens, hasPath: !!(s.path || s.drop), preview: s._preview, crop: s.crop, layer: v.layers.has(s.id), mode: v.mode, engine: v.stats.engine, decodeTimes: v.decodeTimes.slice(-3).map((x) => Math.round(x)) }; });
   out.push(r); console.log(`stroke ${i + 1}: ${((Date.now() - t1) / 1000).toFixed(1)}s`, JSON.stringify(r));
 }
-const ok = out.length === 2 && out.every((r) => r.hasTokens && r.tries > 20 && r.layer) && String(load.engine).startsWith('tiny');
+const ok = out.length === nStrokes && out.every((r) => r.hasTokens && r.tries > 20 && r.layer) && String(load.engine).startsWith('tiny');
 console.log(ok ? 'PASS' : 'FAIL', errors.length ? 'errors: ' + errors.slice(0, 5).join(' | ') : 'no page errors');
 await browser.close(); server.close(); process.exit(ok ? 0 : 1);
