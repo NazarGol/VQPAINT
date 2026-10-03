@@ -15,7 +15,11 @@
   --font-weight-medium: 500;
   --line-height: 1.4;
   --radius: 10px;
-  --pill-padding: 6px 10px;
+  --pill-padding: 0 12px;
+  --pill-height: 36px;            /* visible pill height */
+  --pill-font: 15px;              /* text in pills, menu rows and action sheets */
+  --touch: 44px;                  /* touch target (invisible padding around 36 px pills) */
+  --menu-row: 40px;               /* one menu row; rows touch, so each is a full-height target */
   --tool-size: 40px;
   --dot-size: 8px;
   --space-1: 4px;

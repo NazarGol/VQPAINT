@@ -3,14 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<title>VQPAINT</title>
+<title>untitled</title>
+<meta name="theme-color" content="#404040">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<script>
+  // the site is the canvas: a fresh painting id when none is given (the room exists on the server only once the first note is written)
+  if (!/[?&]r=/.test(location.search)) { const A = 'abcdefghijklmnopqrstuvwxyz0123456789', b = new Uint8Array(8); crypto.getRandomValues(b); let id = ''; for (const x of b) id += A[x % 36]; const u = new URL(location.href); u.searchParams.set('r', id); u.searchParams.set('fresh', '1'); history.replaceState(null, '', u.href); }
+</script>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" media="print" onload="this.media='all'">
 </head>
 <body>
 <div class="stage" id="stage"></div>
 <div id="roombar"></div>
 <div id="menu-root"></div>
-<div id="tools"></div>
+<div id="hint" class="canvas-hint" hidden></div>
 <div id="loading"></div>
 <script type="module" src="room.js"></script>
 </body>

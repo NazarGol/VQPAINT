@@ -29,7 +29,7 @@ const roomId = 'shot-' + Math.random().toString(36).slice(2, 8);
 const browser = browserName === 'webkit' ? await webkit.launch({ headless: true }) : await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
 const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
 page.on('pageerror', (e) => console.error('[pageerror]', e.message));
-await page.goto(`http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/`);
+await page.goto(`http://127.0.0.1:${port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&models=pages&name=tester`);
 await page.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready, null, { timeout: 180000 });
 await page.evaluate((s) => window.__vqpaint.setEffortSeconds(s), effort);
 const out = path.join(root, 'app', 'shots'); fs.mkdirSync(out, { recursive: true });

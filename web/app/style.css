@@ -1,4 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap");
 @import url("tokens.css");
 /* Layout and components. Only tokens are used for colour, type, spacing, radius. No borders, no shadows. */
 * { box-sizing: border-box; }
@@ -6,7 +5,8 @@
 html, body { margin: 0; height: 100%; background: var(--color-bg); color: var(--color-text-on-bg); font: var(--font-weight) var(--font-size)/var(--line-height) var(--font-family); }
 button, input, textarea { font: inherit; color: var(--color-text); border: 0; outline: 0; }
 a { color: inherit; }
-.pill { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--pill-padding); border-radius: var(--radius); background: var(--color-pill); color: var(--color-text); white-space: nowrap; cursor: default; }
+.pill { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--pill-padding); min-height: var(--pill-height); font-size: var(--pill-font); line-height: 1.2; border-radius: var(--radius); background: var(--color-pill); color: var(--color-text); white-space: nowrap; cursor: default; position: relative; }
+button.pill::before { content: ''; position: absolute; inset: calc((var(--pill-height) - var(--touch)) / 2) 0; }   /* invisible padding: the touch area is 44 px tall while the pill stays 36 px */
 button.pill { cursor: pointer; transition: background var(--transition); }
 button.pill:disabled { opacity: 0.5; cursor: default; }
 .pill.active { background: var(--color-pill-active); }
@@ -26,9 +26,10 @@ button.pill:disabled { opacity: 0.5; cursor: default; }
 .tool { width: var(--tool-size); height: var(--tool-size); padding: 0; justify-content: center; }
 .tool svg { width: 20px; height: 20px; display: block; }
 .menu { position: relative; }
-.menu .items { position: absolute; right: 0; top: calc(100% + var(--space-2)); display: flex; flex-direction: column; gap: var(--space-1); background: var(--color-pill); border-radius: var(--radius); padding: var(--space-1); min-width: 180px; }
+.menu .items { position: absolute; right: 0; top: calc(100% + var(--space-2)); display: flex; flex-direction: column; gap: 0; background: var(--color-pill); border-radius: var(--radius); padding: var(--space-1); min-width: 196px; }
 .menu .items[hidden] { display: none; }
-.menu .items button { text-align: left; background: transparent; padding: var(--pill-padding); border-radius: var(--radius); cursor: pointer; }
+.menu .items button { text-align: left; background: transparent; padding: 0 12px; min-height: var(--menu-row); font-size: var(--pill-font); line-height: 1.2; white-space: nowrap; border-radius: var(--radius); cursor: pointer; }   /* one line each; the row height is the touch area */
+.menu .items .row { display: flex; gap: 0; } .menu .items .row button { flex: 1; } .menu .items .row button + button { text-align: right; }
 .menu .items button:hover, .menu .items button.on { background: var(--color-pill-active); }
 /* note boxes attached to shapes */
 .note { position: absolute; z-index: var(--z-note); max-width: var(--note-max-width); border-radius: var(--radius); padding: var(--pill-padding); background: var(--color-pill-active); color: var(--color-text); }
@@ -60,3 +61,94 @@ button.pill:disabled { opacity: 0.5; cursor: default; }
 .stage canvas.world { position: absolute; inset: 0; touch-action: none; }
 .note .slider { display: flex; align-items: center; gap: var(--space-2); font-size: var(--font-size-small); margin-top: var(--space-1); }
 .note .slider input { flex: 1; accent-color: var(--color-pill-done); }
+
+/* threads (replies), photos in notes, language */
+.note .text { white-space: pre-wrap; }
+.note .quiet { opacity: 0.7; }
+.note .link { background: none; border: 0; padding: 0; font: inherit; font-size: var(--font-size-small); color: inherit; text-decoration: underline; cursor: pointer; opacity: 0.85; }
+.note .link:hover { opacity: 1; }
+.note .thread-parent, .note .reply { cursor: pointer; }
+.note .thread-parent { margin-bottom: var(--space-1); }
+.note .replies { margin-top: var(--space-2); padding-left: var(--space-3); border-left: 2px solid rgba(255, 255, 255, 0.25); }
+.note .reply { margin-top: var(--space-1); font-size: var(--font-size-small); white-space: normal; }
+.note .reply .dot { width: 8px; height: 8px; margin-right: 4px; }
+.note .thumb { display: block; max-width: 120px; max-height: 120px; border-radius: calc(var(--radius) / 2); margin: var(--space-1) 0; }
+.note .photo-row { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-1); }
+.note .photo-row img { max-width: 72px; max-height: 72px; border-radius: calc(var(--radius) / 2); }
+.note.done.open .replies { white-space: normal; }
+
+/* ---------- calm, instant, soft (round 6) ---------- */
+:root { --ease: cubic-bezier(0.2, 0.8, 0.2, 1); --motion: 180ms; --blur: blur(14px); }
+@media (prefers-reduced-motion: reduce) { :root { --motion: 0ms; } }
+.pill, button.pill, .note, .menu .items, .message { -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+.pill { background: rgba(227, 208, 230, 0.86); transition: transform var(--motion) var(--ease), background var(--motion) var(--ease), opacity var(--motion) var(--ease); }
+button.pill:active, .menu .items button:active, .note .link:active { transform: scale(0.95); background: var(--color-pill-active); }
+.pill.done, .note.done { background: rgba(133, 123, 132, 0.9); }
+.note.editing { background: rgba(214, 165, 220, 0.94); }
+.note { opacity: 0; transform: translateY(6px); transition: opacity var(--motion) var(--ease), transform var(--motion) var(--ease); }
+.note.in { opacity: 1; transform: none; }
+.note .actions { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+.note .actions .hint { flex: 1; margin: 0; }
+.note .actions .pill.go { background: var(--color-text); color: var(--color-pill); margin-left: auto; }
+.note .actions .pill.ghost { background: rgba(255, 255, 255, 0.45); }
+.menu .items { background: rgba(227, 208, 230, 0.92); }
+.menu .items button { transition: background var(--motion) var(--ease), transform var(--motion) var(--ease); }
+/* the only hint: empty canvas */
+.canvas-hint { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--color-text-on-bg); opacity: 0.75; text-align: center; pointer-events: none; z-index: var(--z-ui); transition: opacity 300ms var(--ease); font-size: 16px; }
+.canvas-hint[hidden] { display: block !important; opacity: 0; }
+/* loading = soft shimmer in our colours, never a spinner */
+[data-load], [data-status] { background: linear-gradient(100deg, rgba(227, 208, 230, 0.75) 0%, rgba(244, 238, 245, 0.95) 45%, rgba(227, 208, 230, 0.75) 90%); background-size: 240% 100%; animation: shimmer 1.6s linear infinite; }
+@keyframes shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) { [data-load], [data-status] { animation: none; } }
+/* first-visit name */
+.message .ask { margin-bottom: var(--space-3); font-weight: var(--font-weight-medium); }
+.message input { width: 100%; font-size: 16px; padding: 10px 12px; border-radius: var(--radius); background: rgba(255, 255, 255, 0.6); margin-bottom: var(--space-3); min-height: 44px; }
+.message .pill.go { background: var(--color-text); color: var(--color-pill); padding: 0 18px; }
+/* phones: 16 px text (no iOS zoom), 44 px targets, the writer is a bottom sheet above the keyboard */
+@media (pointer: coarse) {
+  :root { --font-size: 16px; --font-size-small: 13px; --pill-padding: 0 14px; --radius: 14px; }
+  .note textarea, .note input { font-size: 16px; }
+  .note.editing.sheet { position: fixed; left: 0; right: 0; bottom: 0; top: auto; max-width: none; border-radius: 16px 16px 0 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform 220ms var(--ease), opacity 220ms var(--ease); opacity: 1; max-height: 70vh; overflow: auto; }
+  .note.editing.sheet .actions { margin-top: 6px; }
+  .note.editing.sheet.in { transform: translateY(0); }
+  .note.editing.sheet textarea { width: 100%; }
+  .note.done.open { max-width: min(var(--note-max-width), calc(100vw - 24px)); }
+  .note.done.open.sheet { position: fixed; left: 0; right: 0; bottom: 0; top: auto; max-width: none; border-radius: 16px 16px 0 0; padding: 12px 14px calc(12px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform 220ms var(--ease); max-height: 42vh; overflow: auto; white-space: normal; }
+  .note.done.open.sheet.in { transform: translateY(0); }
+  .ui.top-left .pill[data-room] { max-width: 42vw; overflow: hidden; text-overflow: ellipsis; }
+}
+/* merges and reactions */
+.note .merge .text + .meta { margin: 2px 0; }
+.note .reacts { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+.note .reacts .pill.react { min-height: 36px; padding: 0 12px; font-size: 18px; background: rgba(255, 255, 255, 0.25); }
+.note .reacts .pill.react:disabled { opacity: 0.4; }
+@media (pointer: coarse) { .note .reacts .pill.react { min-height: 44px; min-width: 44px; } }
+/* panels: setup, notes list, calendar, import, postcard */
+.panel { position: absolute; z-index: var(--z-overlay); left: 50%; top: 50%; transform: translate(-50%, -46%); width: min(440px, calc(100vw - 24px)); max-height: 80vh; overflow: auto; background: rgba(227, 208, 230, 0.96); color: var(--color-text); border-radius: 18px; padding: 14px 16px; opacity: 0; transition: opacity var(--motion) var(--ease), transform var(--motion) var(--ease); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+.panel.in { opacity: 1; transform: translate(-50%, -50%); }
+.panel.bottom { left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 82vh; border-radius: 18px 18px 0 0; transform: translateY(100%); padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
+.panel.bottom.in { transform: translateY(0); }
+.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
+.panel-title { font-weight: var(--font-weight-medium); }
+.panel .field { display: block; margin: var(--space-2) 0; } .panel .field span { display: block; font-size: var(--font-size-small); opacity: 0.75; margin-bottom: 2px; }
+.panel input[type=text], .sheet textarea, .sheet select { width: 100%; font-size: 16px; padding: 10px 12px; border-radius: var(--radius); background: rgba(255, 255, 255, 0.6); min-height: 44px; font-family: inherit; }
+.panel textarea { resize: vertical; }
+.panel .row { display: flex; gap: var(--space-2); align-items: center; margin-top: var(--space-2); flex-wrap: wrap; } .panel .row.end { justify-content: flex-end; }
+.panel .pill.go { background: var(--color-text); color: var(--color-pill); padding: 0 18px; } .panel .pill.ghost { background: rgba(255, 255, 255, 0.45); }
+.panel .check { display: flex; gap: var(--space-2); align-items: center; min-height: 36px; }
+.panel .item { padding: 8px 6px; border-radius: 10px; cursor: pointer; white-space: normal; } .panel .item:active { background: var(--color-pill-active); }
+.panel .group { font-weight: var(--font-weight-medium); margin: var(--space-3) 0 var(--space-1); opacity: 0.8; }
+.panel .cal-head { display: flex; justify-content: space-between; align-items: center; margin: var(--space-1) 0; }
+.panel .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; } .panel .day { min-height: 40px; border-radius: 10px; background: rgba(255, 255, 255, 0.35); font: inherit; } .panel .day.has { background: var(--color-pill-done); color: var(--color-text-on-done); } .panel .day:active { transform: scale(0.95); }
+.panel .daylist { margin-top: var(--space-2); }
+.menu .items .divider { height: 1px; background: rgba(0, 0, 0, 0.12); margin: 4px 6px; }
+.note .chapter { display: block; width: 100%; font-size: 16px; padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.5); margin-bottom: var(--space-2); min-height: 40px; font-family: inherit; }
+.note .sign { display: flex; gap: var(--space-2); align-items: center; font-size: var(--font-size-small); margin-bottom: var(--space-1); }
+/* my paintings list; the name field in the first note box */
+.panel .mine { display: flex; gap: var(--space-3); align-items: center; }
+.panel .mine img, .panel .mine .nothumb { width: 64px; height: 48px; object-fit: cover; border-radius: 8px; background: rgba(0, 0, 0, 0.15); flex: none; }
+.panel .mine-list { margin-top: var(--space-2); }
+.note input.name { display: block; width: 100%; font-size: 16px; padding: 6px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.5); margin-bottom: 6px; min-height: 36px; font-family: inherit; }
+/* action sheets (save…, room options…): one line per action, 44 px rows */
+.panel .acts { display: flex; flex-direction: column; } .panel .act { text-align: left; background: transparent; padding: 0 8px; min-height: var(--touch); font-size: var(--pill-font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 10px; cursor: pointer; } .panel .act:active { background: var(--color-pill-active); } .panel .act:disabled { opacity: 0.5; }
+#conn[hidden] { display: none; }

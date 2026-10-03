@@ -1,0 +1,206 @@
+{
+ "ok": true,
+ "rows": [
+  {
+   "prompt": "a face",
+   "crop": "11x11",
+   "A": {
+    "real": 0.26157081813329924,
+    "tries": 57,
+    "sec": 8.131699999928474
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.2698563170220368,
+     "own": 0.2847030460834503,
+     "tries": 384,
+     "clipEvals": 384,
+     "tokenEvals": 3048,
+     "sec": 8.043699999928474
+    }
+   }
+  },
+  {
+   "prompt": "a red forest",
+   "crop": "14x12",
+   "A": {
+    "real": 0.15358656066306317,
+    "tries": 46,
+    "sec": 8.000699999928475
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.16030300438937464,
+     "own": 0.1811225861310959,
+     "tries": 380,
+     "clipEvals": 380,
+     "tokenEvals": 3016,
+     "sec": 8.044899999976158
+    }
+   }
+  },
+  {
+   "prompt": "the sea at night",
+   "crop": "15x17",
+   "A": {
+    "real": 0.21877549509363337,
+    "tries": 32,
+    "sec": 8.152
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.1816381526547749,
+     "own": 0.25685691833496094,
+     "tries": 336,
+     "clipEvals": 336,
+     "tokenEvals": 2664,
+     "sec": 8.044699999928474
+    }
+   }
+  },
+  {
+   "prompt": "a city street",
+   "crop": "12x11",
+   "A": {
+    "real": 0.1899259370797851,
+    "tries": 54,
+    "sec": 8.017100000023841
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.1509667441581231,
+     "own": 0.24610409140586853,
+     "tries": 380,
+     "clipEvals": 380,
+     "tokenEvals": 3016,
+     "sec": 8.01
+    }
+   }
+  },
+  {
+   "prompt": "green hills under a blue sky",
+   "crop": "13x13",
+   "A": {
+    "real": 0.12814491764739117,
+    "tries": 44,
+    "sec": 8.059599999904632
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.10119576038125189,
+     "own": 0.15804892778396606,
+     "tries": 372,
+     "clipEvals": 372,
+     "tokenEvals": 2952,
+     "sec": 8.031899999976158
+    }
+   }
+  },
+  {
+   "prompt": "a cat",
+   "crop": "16x15",
+   "A": {
+    "real": 0.21339265495811785,
+    "tries": 35,
+    "sec": 8.147600000023841
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.19206782523162633,
+     "own": 0.24837616086006165,
+     "tries": 352,
+     "clipEvals": 352,
+     "tokenEvals": 2792,
+     "sec": 8.061600000023843
+    }
+   }
+  },
+  {
+   "prompt": "a lighthouse in a storm",
+   "crop": "11x12",
+   "A": {
+    "real": 0.18749615111401793,
+    "tries": 54,
+    "sec": 8.058900000095367
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.09002682576852829,
+     "own": 0.2194647192955017,
+     "tries": 384,
+     "clipEvals": 384,
+     "tokenEvals": 3048,
+     "sec": 8.053
+    }
+   }
+  },
+  {
+   "prompt": "a bowl of oranges",
+   "crop": "14x14",
+   "A": {
+    "real": 0.18566021020588133,
+    "tries": 41,
+    "sec": 8.190899999976159
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.13914506765188567,
+     "own": 0.24084098637104034,
+     "tries": 368,
+     "clipEvals": 368,
+     "tokenEvals": 2920,
+     "sec": 8.0235
+    }
+   }
+  },
+  {
+   "prompt": "snow on a mountain",
+   "crop": "16x15",
+   "A": {
+    "real": 0.21239047776008863,
+    "tries": 35,
+    "sec": 8.063799999952316
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.13276583202593523,
+     "own": 0.21680524945259094,
+     "tries": 352,
+     "clipEvals": 352,
+     "tokenEvals": 2792,
+     "sec": 8.038799999952316
+    }
+   }
+  },
+  {
+   "prompt": "a crowded market",
+   "crop": "10x12",
+   "A": {
+    "real": 0.19961692448692397,
+    "tries": 60,
+    "sec": 8.095100000023843
+   },
+   "modes": {
+    "prefilter": {
+     "real": 0.13167360354677138,
+     "own": 0.22254109382629395,
+     "tries": 388,
+     "clipEvals": 388,
+     "tokenEvals": 3080,
+     "sec": 8.049299999952316
+    }
+   }
+  }
+ ],
+ "summary": {
+  "meanRealA": 0.19505601471422016,
+  "meanSecA": 8.091739999985695,
+  "prefilter": {
+   "meanReal": 0.15496391328303086,
+   "wins": 2,
+   "meanSec": 8.040139999973773,
+   "meanTries": 369.6,
+   "ownMinusReal": 0.07252246467145221
+  }
+ }
+}

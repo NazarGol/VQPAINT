@@ -38,7 +38,7 @@ function toWsBase(url) {
 
 export function connectRoom(opts = {}) {
   const { url, roomId, name = 'anon', color, w, h, blank = null, caps = null, onState, onSet, onCursor, onJoin, onLeave, onStatus,
-          onNote, onNoteDelete, onPaintRequest, onPaintAssigned, onPaintDone, onPaintStart, onPaintEnd } = opts;
+          onNote, onNoteDelete, onPaintRequest, onPaintAssigned, onPaintDone, onPaintStart, onPaintEnd, onSettings } = opts;
   let myCaps = caps;
   if (!url) throw new Error('connectRoom: url is required');
   if (!roomId) throw new Error('connectRoom: roomId is required');
@@ -67,7 +67,8 @@ export function connectRoom(opts = {}) {
   };
   const setStatus = (s) => { if (s !== status) { status = s; emit(onStatus, s); } };
   const isOpen = () => !!ws && ws.readyState === WebSocket.OPEN;
-  const send = (obj) => { if (!isOpen()) return false; ws.send(JSON.stringify(obj)); return true; };
+  const outbox = [];              // messages sent before the socket is open (a fresh room's first note): delivered right after hello
+  const send = (obj) => { if (!isOpen()) { if (obj.t !== 'cursor') { outbox.push(obj); if (outbox.length > 64) outbox.shift(); } return false; } ws.send(JSON.stringify(obj)); return true; };
 
   function handle(raw) {
     let m;
@@ -82,7 +83,7 @@ export function connectRoom(opts = {}) {
         let tokens;
         if (Array.isArray(m.rle)) { tokens = new Int32Array(m.w * m.h); let k = 0; for (let i = 0; i < m.rle.length; i += 2) { const v = m.rle[i], n = m.rle[i + 1]; tokens.fill(v, k, k + n); k += n; } }
         else tokens = Int32Array.from(m.tokens || []);
-        emit(onState, { id, w: m.w, h: m.h, v: m.v, blank: m.blank | 0, tokens, peers, notes: m.notes || [], requests: m.requests || [] });
+        emit(onState, { id, w: m.w, h: m.h, v: m.v, blank: m.blank | 0, tokens, peers, notes: m.notes || [], requests: m.requests || [], settings: m.settings || {}, active: m.active || 0, archiveSoon: !!m.archiveSoon, archiveAt: m.archiveAt || 0 });
         break;
       }
       case 'set':
@@ -108,8 +109,9 @@ export function connectRoom(opts = {}) {
       case 'paint_request': emit(onPaintRequest, m.req); break;          // {id, text, mask, author, color, from}
       case 'paint_assigned': emit(onPaintAssigned, { id: m.id, by: m.by, for: m.for }); break;
       case 'paint_done': emit(onPaintDone, { id: m.id, ok: m.ok !== false }); break;
-      case 'paint_start': emit(onPaintStart, { id: m.id, by: m.by, for: m.for || null, mask: m.mask, text: m.text }); break;
+      case 'paint_start': emit(onPaintStart, { id: m.id, by: m.by, for: m.for || null, mask: m.mask, text: m.text, blot: m.blot || null, path: m.path || null }); break;
       case 'paint_end': emit(onPaintEnd, { id: m.id, by: m.by }); break;
+      case 'settings': emit(onSettings, m.settings || {}); break;
       case 'peer': if (m.peer && m.peer.id) { const q = peers.get(m.peer.id); if (q) Object.assign(q, m.peer); else peers.set(m.peer.id, m.peer); } break;
       default:
         break; // pong etc.
@@ -131,6 +133,7 @@ export function connectRoom(opts = {}) {
       if (sock !== ws) return;
       setStatus('open');
       sock.send(JSON.stringify({ t: 'hello', name: String(name).slice(0, 24), color, caps: myCaps || undefined }));
+      while (outbox.length) sock.send(JSON.stringify(outbox.shift()));
       flushQueue();
     };
     sock.onmessage = (ev) => { if (sock === ws && typeof ev.data === 'string') handle(ev.data); };

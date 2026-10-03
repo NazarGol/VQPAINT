@@ -2,20 +2,23 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>VQPAINT</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>untitled</title>
+<meta name="theme-color" content="#404040">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<script>
+  // the site is the canvas: a fresh painting id when none is given (the room exists on the server only once the first note is written)
+  if (!/[?&]r=/.test(location.search)) { const A = 'abcdefghijklmnopqrstuvwxyz0123456789', b = new Uint8Array(8); crypto.getRandomValues(b); let id = ''; for (const x of b) id += A[x % 36]; const u = new URL(location.href); u.searchParams.set('r', id); u.searchParams.set('fresh', '1'); history.replaceState(null, '', u.href); }
+</script>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" media="print" onload="this.media='all'">
 </head>
 <body>
-<div class="home">
-  <span class="pill title">VQPAINT</span>
-  <span class="quiet" style="text-align:center;max-width:320px">A group writes notes. Each note becomes a stroke of one shared painting, generated in your own browser.</span>
-  <div id="gpu-notice" class="pill" hidden style="max-width:320px;white-space:normal;text-align:center"></div>
-  <div class="row"><input id="name" type="text" placeholder="your name (optional)"></div>
-  <div class="row"><button id="create" class="pill active">create a room</button></div>
-  <div class="row"><input id="join-id" type="text" placeholder="paste an invite link or room id"><button id="join" class="pill">join</button></div>
-  <span class="quiet" style="text-align:center;max-width:320px">First visit downloads about 90 MB to watch and 200 MB to paint; kept in the browser cache. Chrome, Edge or Safari 26+. <a href="https://github.com/NazarGol/VQPAINT/tree/web-spikes/web">source</a></span>
-</div>
-<script type="module" src="landing.js"></script>
+<div class="stage" id="stage"></div>
+<div id="roombar"></div>
+<div id="menu-root"></div>
+<div id="hint" class="canvas-hint" hidden></div>
+<div id="loading"></div>
+<script type="module" src="room.js"></script>
 </body>
 </html>

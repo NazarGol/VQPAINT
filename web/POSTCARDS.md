@@ -1,0 +1,17 @@
+# Print-and-mail postcards (research, 2026-10-01 — nothing built, nothing paid)
+
+Goal: a user picks a month, the app makes the A6 postcard PDF (done, `lib/export.js` `exportPostcard`), and a service prints it and mails it to a friend in Ukraine or Ireland. Prices below are the services' published list prices as of today; the exact per-card cost for a destination comes from each service's quote endpoint and must be re-checked before building.
+
+| Service | What it does | Price per card (print + postage) | Delivery | API | Notes |
+|---|---|---|---|---|---|
+| **Prodigi** (UK) | Print-on-demand, "classic postcard" 10×15 cm 350 gsm gloss, designed to be sent direct to the recipient; worldwide | print from **£0.40** (−15% with Prodigi Pro) + shipping/postage per order (quote endpoint gives the exact figure; typically a few pounds for a letter-size international item) | Royal Mail international: Ireland ~3–7 days; Ukraine working but with **5–21 day delays**, no service to occupied east/Crimea | REST v4, quotes, orders, webhooks; pay by card (Stripe-backed account) | The back carries address + their postage mark; our back design must leave that area free. Single cards fine. |
+| **Stannp** (UK/US) | Direct-mail API: print + stamp + post | credits: UK 1 credit, rest of world 2 credits, **~£0.65–0.85 per credit** → Ireland/Ukraine ≈ **£1.30–1.70 all-in**; US side 4×6 from $0.80 | UK next day; Europe ~3–5 days; Ukraine subject to Royal Mail delays above | REST (RapidAPI listing too), prepaid credits by card | Built for mailing campaigns but accepts single cards; A6/A5. Cheapest all-in. Ukraine availability must be confirmed with them (they route via Royal Mail). |
+| **MyPostcard** (DE) | Consumer app/API: print, stamp, mail worldwide | **$2.29–3.49** all-in | Germany 1–2 days, rest of Europe 3–5, rest of world up to 14 | Has a (less public) API; pay per card by card | Simplest, pricier, most consumer-friendly; quality fine for photo postcards. |
+| Post it yourself | export the PDF, print at home / a copy shop, stamp it | Ireland postcard stamp €3.50 (Europe rate); Ukraine international postcard ≈ UAH 50–70 (~$1–1.5) | normal post | — | Zero integration; the app already produces the print-ready file. |
+
+Payment options for a "send a postcard" button:
+- **Telegram Stars**: since 2026 Stars may be used for physical goods too (earlier only digital). A Stars invoice from the bot (`sendInvoice` with currency `XTR`) is the lowest-friction path inside Telegram; Telegram keeps a share and pays out in TON/fiat with delay. Price in Stars ≈ price in USD × 50–65 Stars.
+- **Stripe** through the Bot Payments API (a provider token from BotFather) or a plain Stripe Checkout link opened from the app; cards, Apple/Google Pay; 1.5 % + €0.25 EU cards. Works outside Telegram too (the browser app).
+- Recommendation: start with **Stannp** (cheapest, API, EU + Ukraine via Royal Mail) and Stripe Checkout; Prodigi as the fallback if Stannp will not route to Ukraine. Charge ≈ €4 per card (Ireland) / €5 (Ukraine) to cover print, postage, Stripe fees and failed deliveries, or let people print at home for free.
+
+Sources: Prodigi classic postcards and shipping FAQ (prodigi.com), Prodigi Print API v4 reference, Stannp API postcard mailing page, Royal Mail international incident bulletin (Ukraine delays 5–21 days), MyPostcard prices and international postage blog, An Post standard post rates, Ukrposhta tariffs, Telegram Stars / Bot Payments documentation and 2026 Mini App payment guides.

@@ -46,10 +46,33 @@ prompt ──MobileCLIP text──► text embedding
   (with device capabilities), `state` (tokens + notes + open helper requests), `set` (cells, last-writer-wins),
   `cursor`, `note` / `note_delete`, `paint_request` / `paint_claim` / `paint_done` (helpers),
   `paint_start` / `paint_end` (who paints what), `join`, `leave`. Free plan. Client: `lib/room.js`.
-- **Painting bank** (not yet built): `export/paintings/` has a Kaggle/Colab notebook that generates thousands of
-  VQGAN+CLIP paintings with the old engine; `make_bank.py --images-dir` turns them into the bank. See NEEDS_NAZAR.md.
-- **Models are served from the gh-pages branch** (same origin, each file < 100 MB) and kept in Cache Storage
-  after the first visit. Move to Hugging Face with `export/upload_hf.sh` once a token exists (NEEDS_NAZAR.md).
+- **Painting bank**: `export/paintings/` has a Kaggle notebook that generates thousands of VQGAN+CLIP paintings with
+  the old engine (1500 made on Kaggle, 2026-10-01); `make_bank.py --images-dir … --no-coco --max-faces 500` turned them into
+  the current bank (1500 paintings + 500 faces, 2.2 MB). The old COCO+CelebA bank is kept as `bank_photos` (`?bank=bank_photos`).
+- **Replies** (`parent` on a note): the reply's lasso must touch the parent's shape (`maskTouches`); the painter seeds
+  blocks from the parent's crop tokens at the same world position (edge tokens for cells outside it). Open notes show
+  the thread; the PDF indents replies under their parent (`lib/export.js` `threadOrder`).
+- **Photos** (`lib/photo.js`, `lib/encoder.js`): resized in the browser to a 256 px square; the VQGAN encoder
+  (`export/export_encoder.py`, packed 32 MB, int8 QDQ for CPU) is loaded when a note has a photo and released after
+  encoding; its tokens seed the shape and the photo's CLIP embedding is mixed into the target. Only tokens and a
+  128 px thumbnail leave the device (a no-paint device sends the 256 px JPEG to its helper).
+- **Ukrainian** (`app/i18n.js`, `lib/translate.js`): UI in English/Ukrainian (switch in the ⋯ menu); Ukrainian notes
+  are translated in-browser (`Xenova/opus-mt-uk-en` via transformers.js, lazily, desktop only) just for CLIP; the
+  original text is what is shown, synced and exported. The PDF embeds NotoSans when text is outside Latin.
+- **Metaphor bank** (`export/make_metaphors.py`, `lib/metaphors.js`): 225 short visual prompts with offline CLIP
+  text embeddings; the 3 nearest are blended into every note's target (strongly for practical notes, weakly for
+  visual ones). `?metaphors=0` disables it.
+- **Ink** (`lib/effects/ink.js`): each stroke is a small GPU fluid simulation seeded by the note (lobes, tendrils,
+  satellites, holes, twin bodies, stretch, roughness); its pre-simulated shape is what the engine paints, the settled dye
+  is the mask. Lab with sliders: `app/effects.html`. Merges (`merges` on a note) and reactions 🔥🧊🌱 are extra searches
+  on the stroke's cells. Room kinds (book / meeting / diary / group) live in the room's settings; imports in
+  `lib/import.js`; print sizes and the A6 postcard in `lib/export.js`.
+- **Telegram** (`rooms/src/worker.js`, `rooms/tg_setup.sh`): the bot only receives commands; `/paint` as a reply queues
+  that message for the room; `/show` and a weekly cron post the snapshot browsers upload; `/diary` + `/remind` for one
+  person. One `TgDirectory` Durable Object maps chats to rooms. Research on print-and-mail: `POSTCARDS.md`.
+- **Models are served from Hugging Face** (`noi3noi3/vqpaint-web`, CORS ok) with the same files on the gh-pages
+  branch as an automatic fallback (`lib/models.js` `setModelMirror`; `?models=pages` forces it), and kept in Cache
+  Storage after the first visit.
 
 ## Numbers (Apple M1 Pro, 32 GB)
 
@@ -110,7 +133,8 @@ git clone --depth 1 https://github.com/CompVis/taming-transformers.git web/expor
 
 ## Deploy
 
-- Site: `web/deploy_pages.sh` builds a temp dir (app, lib, model files) and force-pushes it to `gh-pages`.
+- Site: `web/deploy_pages.sh` syncs app, lib and model files into the persistent `.gh-pages` checkout and pushes (incremental).
+- Models: `python -c` snippet in `export/upload_hf.sh` / `huggingface_hub` `create_commit` to `noi3noi3/vqpaint-web` (token in `~/.config/vqpaint/hf_token`).
 - Rooms: `cd web/rooms && npx wrangler deploy` (wrangler must be logged in). URL goes in `app/config.js`.
 
 ## UI
@@ -125,7 +149,7 @@ Weight-only int8 packs rebuilt to fp16 in the browser (`lib/pack.js`, `export/pa
 
 ## Layout
 
-- `app/` — the app: `index.html` (home), `room.html` + `room.js` (orchestrator), `components/`, `tokens.css`, `style.css`, `config.js`, tests `test_app.mjs` / `test_phone.mjs`, `shots/` (screenshots, before/after).
+- `app/` — the app: `index.html` (home), `room.html` + `room.js` (orchestrator), `components/`, `tokens.css`, `style.css`, `config.js`, tests `test_app.mjs` / `test_phone.mjs` / `test_flow.mjs` / `test_step1.mjs` / `test_queue.mjs` / `test_kinds.mjs` / `test_replies.mjs` / `test_photo.mjs` / `test_lang.mjs`, `i18n.js`, `effects.html` (ink lab), `shots/` (screenshots, before/after).
 - `lib/` — `decoder.js`, `clip.js`, `clip_tokenizer.js`, `palette.js`, `bank.js`, `search.js` (the painter), `mask.js` (blob masks, alpha maps), `text.js` (chunking + blending), `room.js` (room client), `models.js` (loading + cache + ORT queue), `image.js`.
 - `rooms/` — Cloudflare Worker + Durable Object, protocol test.
 - `export/` — Python scripts that build the ONNX decoder (fp16 + int8), palette and bank; `paintings/` = the painting generator notebook.
@@ -141,3 +165,18 @@ Weight-only int8 packs rebuilt to fp16 in the browser (`lib/pack.js`, `export/pa
 - CLIP rewards artefacts; strokes are rough by design.
 - The bank reproduces (lossy) versions of COCO/CelebA photos as seeds. Research use.
 - GitHub Pages bandwidth is a soft 100 GB/month: roughly 500 first visits.
+
+## Light engine (default on every device, no ONNX Runtime)
+
+Every device paints with the light engine (`lib/engine/light.js`, same facade as the ORT engine worker; `?engine=ort` forces the old ONNX path).
+Three models converted or distilled on Kaggle run as WebGL2 shader passes or plain JS (`web/research/` has the training code, notebooks and tests;
+the engine itself lives in https://github.com/NazarGol/tiny-vqgan and is vendored here, see `engine/VENDOR.md`):
+
+- `lib/tinydec.js` — tiny VQGAN decoder (3.1 MB; variant B for slow GPUs): tokens → RGB, 256 px in ~10 ms on an M1;
+- `lib/clipvision.js` — the real MobileCLIP-S0 image tower as 118 shader ops (21.7 MB fp16, cosine 0.9995+ vs ONNX Runtime, 13 ms per image): real CLIP scores the tiny decoder's output;
+- `lib/tinyscorer.js` — token scorer (5.2 MB) as a pre-filter: ranks 32 mutations, real CLIP judges the best 4;
+- `engine/text.js` — distilled MobileCLIP text tower (9.3 MB) in a Worker.
+
+Fallbacks: a tab that crashed once starts in the lightest mode (int8 CLIP, no scorer); twice, the note waits for a computer. Debug line: tap the room bar 5 times
+(engine, mode, crashes, last stroke tries and seconds, decode ms, memory). Everything needed to paint is ~42 MB (lightest: 33 MB). Licence note: the CLIP
+tower and the text/token models derive from Apple MobileCLIP-S0 (research use only, see `research/LICENSES.md`). Minimum devices and checks: `DEVICES.md`.

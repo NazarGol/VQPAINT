@@ -24,36 +24,46 @@ export async function webgpuInfo() {
  * Fetch a binary file, reporting progress, and keep a copy in Cache Storage so the
  * second visit does not download it again (works for cross-origin CORS responses too).
  */
+// Optional mirror: when a URL under `primary` fails (network error, 4xx/5xx), the same path is fetched under `fallback`.
+let mirror = null;
+export function setModelMirror(primary, fallback) { mirror = primary && fallback && primary !== fallback ? { primary, fallback } : null; }
+const mirrored = (url) => (mirror && url.startsWith(mirror.primary)) ? mirror.fallback + url.slice(mirror.primary.length) : null;
+
 export async function fetchCached(url, { onProgress, cacheName = 'vqpaint-models-v1' } = {}) {
   let cache = null;
+  const alt = mirrored(url);
   try {
     cache = await caches.open(cacheName);
-    const hit = await cache.match(url);
+    const hit = (await cache.match(url)) || (alt && await cache.match(alt));   // a copy fetched from the mirror counts too
     if (hit) {
       const buf = await hit.arrayBuffer();
       onProgress?.({ url, loaded: buf.byteLength, total: buf.byteLength, cached: true });
       return buf;
     }
   } catch (e) { console.warn('Cache Storage unavailable:', e && e.message); cache = null; }
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`fetch ${url}: ${resp.status}`);
+  let resp;
+  try { resp = await fetch(url); if (!resp.ok) throw new Error(`fetch ${url}: ${resp.status}`); }
+  catch (e) {
+    if (!alt) throw e;
+    console.warn('model host failed, using the fallback host:', e && e.message);
+    url = alt; resp = await fetch(url);
+    if (!resp.ok) throw new Error(`fetch ${url}: ${resp.status}`);
+  }
   const total = +resp.headers.get('content-length') || 0;
+  // store a clone in Cache Storage first (the browser streams it to disk), then read the body once into a single preallocated buffer
+  if (cache) { try { cache.put(url, resp.clone()).catch((e) => console.warn('could not cache', url, e && e.message)); } catch (e) { console.warn('could not cache', url, e && e.message); } }
   const reader = resp.body.getReader();
-  const chunks = [];
-  let loaded = 0;
+  let buf = total ? new Uint8Array(total) : null, loaded = 0, chunks = buf ? null : [];
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    chunks.push(value);
+    if (buf) { if (loaded + value.length > buf.length) { const bigger = new Uint8Array(Math.max(buf.length * 2, loaded + value.length)); bigger.set(buf.subarray(0, loaded)); buf = bigger; } buf.set(value, loaded); }
+    else chunks.push(value);
     loaded += value.length;
     onProgress?.({ url, loaded, total, cached: false });
   }
-  const buf = new Uint8Array(loaded);
-  let off = 0;
-  for (const c of chunks) { buf.set(c, off); off += c.length; }
-  if (cache) {
-    try { await cache.put(url, new Response(buf, { headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(loaded) } })); } catch (e) { console.warn('could not cache', url, e && e.message); }
-  }
+  if (!buf) { buf = new Uint8Array(loaded); let off = 0; for (const c of chunks) { buf.set(c, off); off += c.length; } chunks = null; }
+  else if (loaded !== buf.length) buf = buf.slice(0, loaded);
   return buf.buffer;
 }
 

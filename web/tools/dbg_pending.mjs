@@ -1,0 +1,24 @@
+import http from 'node:http'; import fs from 'node:fs'; import path from 'node:path';
+import { chromium } from 'playwright';
+const root = '/Users/noi3/VQPAINT/web';
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json', '.wasm': 'application/wasm', '.css': 'text/css', '.png': 'image/png' };
+const server = http.createServer((req, res) => { const p = path.join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname)); if (!p.startsWith(root) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end(); } res.writeHead(200, { 'Content-Type': MIME[path.extname(p)] || 'application/octet-stream', 'Cache-Control': 'no-store' }); fs.createReadStream(p).pipe(res); });
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const url = `http://127.0.0.1:${server.address().port}/app/room.html?r=dbg-${Math.random().toString(36).slice(2, 8)}&ort=/node_modules/onnxruntime-web/dist/&models=pages&name=Ann&helpers=0`;
+const browser = await chromium.launch({ channel: 'chromium', headless: true, args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--use-angle=metal'] });
+const dead = setTimeout(async () => { console.log('DEADLINE'); await browser.close().catch(() => {}); process.exit(2); }, 300000);
+const A = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+A.on('pageerror', (e) => console.log('[pageerror]', e.message)); A.on('console', (m) => { if (m.type() === 'error' && !/onnxruntime|404/.test(m.text())) console.log('[console]', m.text().slice(0, 200)); });
+await A.goto(url); await A.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready && window.__vqpaint.grid, null, { timeout: 120000 });
+await A.evaluate(() => window.__vqpaint.setEffortSeconds(3));
+const box = await A.locator('#canvas').boundingBox(); await A.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+await A.waitForSelector('.note.editing [data-note-input]'); await A.waitForTimeout(1200);
+const p1 = await A.evaluate(() => { const v = window.__vqpaint, id = window.__vqpaintPending.pendingId; const it = v.reveal.items.get(id); return { pending: it && it.drop.pending, size: it && it.drop.p.size, active: v.reveal.active }; });
+console.log('pending drop after 1.2 s:', JSON.stringify(p1));
+await A.type('.note.editing [data-note-input]', 'a lighthouse at night', { delay: 60 }); await A.waitForTimeout(800);
+await A.screenshot({ path: '/Users/noi3/VQPAINT/web/app/test_out/pending_typed.png' });
+await A.click('.note.editing [data-paint]');
+for (let i = 0; i < 40; i++) { await A.waitForTimeout(2000); const st = await A.evaluate(() => { const v = window.__vqpaint; const ids = [...v.reveal.items.keys()]; return { stage: v.stats.stage, ids, areas: ids.map((id) => v.reveal.areaOf(id)), pending: ids.map((id) => v.reveal.items.get(id).drop.pending), n: v.strokes.length, painting: !!v.painting }; }); console.log(i * 2 + 's', JSON.stringify(st)); if (st.n === 1 && !st.painting) break; }
+console.log('blot:', JSON.stringify(await A.evaluate(() => window.__vqpaint.stats.lastBlot)), 'path:', await A.evaluate(() => (window.__vqpaint.strokes[0].path || []).length));
+await A.waitForTimeout(800); await A.screenshot({ path: '/Users/noi3/VQPAINT/web/app/test_out/pending_painted.png' });
+clearTimeout(dead); await browser.close(); server.close();

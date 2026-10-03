@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#404040">
+<title>wild ink lab</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  html, body { overflow: hidden; height: 100%; overscroll-behavior: none; -webkit-user-select: none; user-select: none; }
+  #fx { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+  #baked { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; display: block; }
+  .ui { gap: 6px; } .ui.bottom-centre { bottom: calc(14px + env(safe-area-inset-bottom)); }
+  .pill, button.pill { font-size: 16px; min-height: 44px; padding: 0 14px; border-radius: 14px; background: rgba(227, 208, 230, 0.86); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); transition: transform 0.12s ease, background 0.15s ease; }
+  button.pill:active { transform: scale(0.95); background: var(--color-pill-active); }
+  #sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 8; background: rgba(227, 208, 230, 0.94); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border-radius: 18px 18px 0 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); color: var(--color-text); font-size: 15px; transform: translateY(100%); transition: transform 0.22s cubic-bezier(.2,.8,.2,1); max-height: 78vh; overflow: auto; }
+  #sheet.open { transform: translateY(0); }
+  #sheet label { display: grid; grid-template-columns: 104px 1fr 44px; align-items: center; gap: 10px; min-height: 36px; }
+  #sheet input[type=range] { width: 100%; accent-color: #857B84; height: 36px; margin: 0; }
+  #sheet .val { text-align: right; font-variant-numeric: tabular-nums; opacity: 0.75; font-size: 13px; }
+  #sheet .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+  #json { width: 100%; font: 13px/1.4 ui-monospace, Menlo, monospace; background: rgba(255,255,255,0.5); border-radius: 10px; padding: 8px; margin-top: 10px; min-height: 44px; resize: none; color: #1A1A1A; -webkit-user-select: text; user-select: text; }
+  #hint { position: fixed; left: 50%; bottom: calc(80px + env(safe-area-inset-bottom)); transform: translateX(-50%); color: var(--color-text-on-bg); font-size: 16px; opacity: 0.8; transition: opacity 0.3s; pointer-events: none; white-space: nowrap; }
+  #fps { position: fixed; right: 12px; top: 12px; color: var(--color-text-on-bg); font-size: 12px; opacity: 0.55; pointer-events: none; font-variant-numeric: tabular-nums; }
+  #stats { position: fixed; left: 12px; top: 12px; color: var(--color-text-on-bg); font-size: 13px; opacity: 0.85; pointer-events: none; white-space: pre; }
+  @media (prefers-reduced-motion: reduce) { #sheet { transition: none; } }
+</style>
+</head>
+<body>
+<canvas id="baked"></canvas>
+<canvas id="fx"></canvas>
+<div id="stats"></div>
+<div class="ui bottom-centre"><button class="pill" id="next" title="a new seed">next seed</button><button class="pill" id="grid" title="random strokes">×grid</button><button class="pill" id="measure" title="circularity of 50 strokes">measure</button><button class="pill" id="clear">clear</button><button class="pill" id="tune">tune</button></div>
+<div id="hint">tap and hold: a waiting drop · release: it spreads · drag to stir</div>
+<div id="fps"></div>
+<div id="sheet">
+  <div id="sliders"></div>
+  <div class="row"><button class="pill" id="copy">copy settings</button><button class="pill" id="close">done</button></div>
+  <textarea id="json" readonly rows="2"></textarea>
+</div>
+<script type="module" src="effects.js"></script>
+</body>
+</html>

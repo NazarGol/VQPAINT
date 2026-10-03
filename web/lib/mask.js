@@ -63,6 +63,16 @@ export function maskFromString(s) {
   for (let i = 0; i < hex.length; i++) { const v = parseInt(hex[i], 16); for (let b = 0; b < 4; b++) if (v & (1 << b) && i * 4 + b < cells.length) { cells[i * 4 + b] = 1; count++; } }
   return { x, y, w, h, cells, count };
 }
+/** true when a cell of `a` is inside `b` or 8-adjacent to one of its cells (a reply must touch its parent) */
+export function maskTouches(a, b) {
+  if (a.x > b.x + b.w || b.x > a.x + a.w || a.y > b.y + b.h || b.y > a.y + a.h) return false;   // boxes further than one cell apart
+  for (let yy = 0; yy < a.h; yy++) for (let xx = 0; xx < a.w; xx++) {
+    if (!a.cells[yy * a.w + xx]) continue;
+    const gx = a.x + xx, gy = a.y + yy;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (maskHas(b, gx + dx, gy + dy)) return true;
+  }
+  return false;
+}
 export function maskHas(m, gx, gy) { const xx = gx - m.x, yy = gy - m.y; return xx >= 0 && yy >= 0 && xx < m.w && yy < m.h && !!m.cells[yy * m.w + xx]; }
 
 /**
@@ -86,4 +96,13 @@ export function alphaMap(crop, mask, F = 16, feather = 16, ring = 0.5, ringAt = 
     for (let x = 0; x < W; x++) { const fx = x / S, x0 = Math.floor(fx), wx = fx - x0, x1 = Math.min(gw - 1, x0 + 1);
       out[y * W + x] = (coarse[y0 * gw + x0] * (1 - wx) + coarse[y0 * gw + x1] * wx) * (1 - wy) + (coarse[y1 * gw + x0] * (1 - wx) + coarse[y1 * gw + x1] * wx) * wy; } }
   return out;
+}
+
+/** a disc of radius r (tokens, may be fractional) around (cx, cy), clipped to the grid: the search region of a tapped note */
+export function discMask(cx, cy, r, gridW, gridH) {
+  const x0 = Math.max(0, Math.floor(cx - r)), y0 = Math.max(0, Math.floor(cy - r)), x1 = Math.min(gridW, Math.ceil(cx + r)), y1 = Math.min(gridH, Math.ceil(cy + r));
+  const w = Math.max(0, x1 - x0), h = Math.max(0, y1 - y0), cells = new Uint8Array(w * h); let count = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const dx = x0 + x + 0.5 - cx, dy = y0 + y + 0.5 - cy; if (dx * dx + dy * dy <= (r + 0.15) * (r + 0.15)) { cells[y * w + x] = 1; count++; } }
+  if (!count && w && h) { cells[Math.floor(h / 2) * w + Math.floor(w / 2)] = 1; count = 1; }
+  return { x: x0, y: y0, w, h, cells, count };
 }
