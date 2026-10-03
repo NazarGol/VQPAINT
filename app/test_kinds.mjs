@@ -40,7 +40,7 @@ if (only.includes('book')) {
   await P.evaluate(() => window.__vqpaint.showList()); await P.waitForSelector('.panel .group', { timeout: 5000 });
   check((await P.evaluate(() => [...document.querySelectorAll('.panel .group')].map((g) => g.textContent))).join('|').includes('Chapter 2'), 'book: notes list grouped by chapter');
   await P.screenshot({ path: path.join(outDir, 'kinds_book_list.png') }); await P.evaluate(() => window.__vqpaint.sheets.close());
-  const pdf = await download(P, () => P.evaluate(() => window.__vqpaint.menu.items.find((i) => i.id === 'pdf').onClick()));
+  const pdf = await download(P, () => P.evaluate(() => window.__vqpaint.actions.pdf()));
   check(fs.statSync(pdf).size > 20000 && /Chapter 2/.test(fs.readFileSync(pdf, 'latin1').replace(/[^\x20-\x7E]/g, '')) === false || fs.statSync(pdf).size > 20000, `book: grouped PDF exported (${(fs.statSync(pdf).size / 1024).toFixed(0)} KB)`);
   const print = await download(P, () => P.evaluate(() => window.__vqpaint.exportPrint('bookplate')));
   const sz = pngSize(fs.readFileSync(print)); check(sz.w === 1181 && sz.h === 1772, `book: bookplate PNG is ${sz.w}×${sz.h} (10×15 cm at 300 dpi)`);

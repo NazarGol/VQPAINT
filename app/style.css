@@ -5,7 +5,8 @@
 html, body { margin: 0; height: 100%; background: var(--color-bg); color: var(--color-text-on-bg); font: var(--font-weight) var(--font-size)/var(--line-height) var(--font-family); }
 button, input, textarea { font: inherit; color: var(--color-text); border: 0; outline: 0; }
 a { color: inherit; }
-.pill { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--pill-padding); border-radius: var(--radius); background: var(--color-pill); color: var(--color-text); white-space: nowrap; cursor: default; }
+.pill { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--pill-padding); min-height: var(--pill-height); font-size: var(--pill-font); line-height: 1.2; border-radius: var(--radius); background: var(--color-pill); color: var(--color-text); white-space: nowrap; cursor: default; position: relative; }
+button.pill::before { content: ''; position: absolute; inset: calc((var(--pill-height) - var(--touch)) / 2) 0; }   /* invisible padding: the touch area is 44 px tall while the pill stays 36 px */
 button.pill { cursor: pointer; transition: background var(--transition); }
 button.pill:disabled { opacity: 0.5; cursor: default; }
 .pill.active { background: var(--color-pill-active); }
@@ -25,9 +26,10 @@ button.pill:disabled { opacity: 0.5; cursor: default; }
 .tool { width: var(--tool-size); height: var(--tool-size); padding: 0; justify-content: center; }
 .tool svg { width: 20px; height: 20px; display: block; }
 .menu { position: relative; }
-.menu .items { position: absolute; right: 0; top: calc(100% + var(--space-2)); display: flex; flex-direction: column; gap: var(--space-1); background: var(--color-pill); border-radius: var(--radius); padding: var(--space-1); min-width: 180px; }
+.menu .items { position: absolute; right: 0; top: calc(100% + var(--space-2)); display: flex; flex-direction: column; gap: 0; background: var(--color-pill); border-radius: var(--radius); padding: var(--space-1); min-width: 196px; }
 .menu .items[hidden] { display: none; }
-.menu .items button { text-align: left; background: transparent; padding: var(--pill-padding); border-radius: var(--radius); cursor: pointer; }
+.menu .items button { text-align: left; background: transparent; padding: 0 12px; min-height: var(--menu-row); font-size: var(--pill-font); line-height: 1.2; white-space: nowrap; border-radius: var(--radius); cursor: pointer; }   /* one line each; the row height is the touch area */
+.menu .items .row { display: flex; gap: 0; } .menu .items .row button { flex: 1; } .menu .items .row button + button { text-align: right; }
 .menu .items button:hover, .menu .items button.on { background: var(--color-pill-active); }
 /* note boxes attached to shapes */
 .note { position: absolute; z-index: var(--z-note); max-width: var(--note-max-width); border-radius: var(--radius); padding: var(--pill-padding); background: var(--color-pill-active); color: var(--color-text); }
@@ -101,14 +103,13 @@ button.pill:active, .menu .items button:active, .note .link:active { transform: 
 /* first-visit name */
 .message .ask { margin-bottom: var(--space-3); font-weight: var(--font-weight-medium); }
 .message input { width: 100%; font-size: 16px; padding: 10px 12px; border-radius: var(--radius); background: rgba(255, 255, 255, 0.6); margin-bottom: var(--space-3); min-height: 44px; }
-.message .pill.go { background: var(--color-text); color: var(--color-pill); min-height: 44px; padding: 0 18px; }
+.message .pill.go { background: var(--color-text); color: var(--color-pill); padding: 0 18px; }
 /* phones: 16 px text (no iOS zoom), 44 px targets, the writer is a bottom sheet above the keyboard */
 @media (pointer: coarse) {
-  :root { --font-size: 16px; --font-size-small: 14px; --pill-padding: 0 14px; --radius: 14px; }
-  .pill, button.pill, .menu .items button { min-height: 44px; font-size: 16px; }
+  :root { --font-size: 16px; --font-size-small: 13px; --pill-padding: 0 14px; --radius: 14px; }
   .note textarea, .note input { font-size: 16px; }
-  .note .actions .pill { min-height: 44px; }
-  .note.editing.sheet { position: fixed; left: 0; right: 0; bottom: 0; top: auto; max-width: none; border-radius: 18px 18px 0 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform 220ms var(--ease), opacity 220ms var(--ease); opacity: 1; max-height: 70vh; overflow: auto; }
+  .note.editing.sheet { position: fixed; left: 0; right: 0; bottom: 0; top: auto; max-width: none; border-radius: 16px 16px 0 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform 220ms var(--ease), opacity 220ms var(--ease); opacity: 1; max-height: 70vh; overflow: auto; }
+  .note.editing.sheet .actions { margin-top: 6px; }
   .note.editing.sheet.in { transform: translateY(0); }
   .note.editing.sheet textarea { width: 100%; }
   .note.done.open { max-width: min(var(--note-max-width), calc(100vw - 24px)); }
@@ -131,7 +132,7 @@ button.pill:active, .menu .items button:active, .note .link:active { transform: 
 .panel input[type=text], .sheet textarea, .sheet select { width: 100%; font-size: 16px; padding: 10px 12px; border-radius: var(--radius); background: rgba(255, 255, 255, 0.6); min-height: 44px; font-family: inherit; }
 .panel textarea { resize: vertical; }
 .panel .row { display: flex; gap: var(--space-2); align-items: center; margin-top: var(--space-2); flex-wrap: wrap; } .panel .row.end { justify-content: flex-end; }
-.panel .pill.go { background: var(--color-text); color: var(--color-pill); min-height: 44px; padding: 0 18px; } .panel .pill.ghost { background: rgba(255, 255, 255, 0.45); min-height: 44px; }
+.panel .pill.go { background: var(--color-text); color: var(--color-pill); padding: 0 18px; } .panel .pill.ghost { background: rgba(255, 255, 255, 0.45); }
 .panel .check { display: flex; gap: var(--space-2); align-items: center; min-height: 36px; }
 .panel .item { padding: 8px 6px; border-radius: 10px; cursor: pointer; white-space: normal; } .panel .item:active { background: var(--color-pill-active); }
 .panel .group { font-weight: var(--font-weight-medium); margin: var(--space-3) 0 var(--space-1); opacity: 0.8; }
@@ -145,5 +146,7 @@ button.pill:active, .menu .items button:active, .note .link:active { transform: 
 .panel .mine { display: flex; gap: var(--space-3); align-items: center; }
 .panel .mine img, .panel .mine .nothumb { width: 64px; height: 48px; object-fit: cover; border-radius: 8px; background: rgba(0, 0, 0, 0.15); flex: none; }
 .panel .mine-list { margin-top: var(--space-2); }
-.note input.name { display: block; width: 100%; font-size: 16px; padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.5); margin-bottom: var(--space-2); min-height: 40px; font-family: inherit; }
+.note input.name { display: block; width: 100%; font-size: 16px; padding: 6px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.5); margin-bottom: 6px; min-height: 36px; font-family: inherit; }
+/* action sheets (save…, room options…): one line per action, 44 px rows */
+.panel .acts { display: flex; flex-direction: column; } .panel .act { text-align: left; background: transparent; padding: 0 8px; min-height: var(--touch); font-size: var(--pill-font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 10px; cursor: pointer; } .panel .act:active { background: var(--color-pill-active); } .panel .act:disabled { opacity: 0.5; }
 #conn[hidden] { display: none; }
