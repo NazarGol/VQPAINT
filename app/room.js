@@ -52,11 +52,12 @@ const caps = { paint: false, speed: null, gpu: false, lite, helper: false };
 // crash loop guard: if the last visit never reached 'ok' (Safari reloaded the tab), start in low-memory safe mode (viewing only)
 const lastBoot = sessionStorage.getItem('vqpaint.boot');
 const crashedLastTime = lastBoot === 'painting';   // a reload while the brush was loading or painting; a visit that only viewed never counts
-if (crashedLastTime) localStorage.setItem('vqpaint.crashes', String((+localStorage.getItem('vqpaint.crashes') || 0) + 1));
-if (params.get('reset') === '1') localStorage.setItem('vqpaint.crashes', '0');
-const crashes = +localStorage.getItem('vqpaint.crashes') || 0;
-let safeMode = params.get('safe') === '1' || (crashedLastTime && crashes >= 2);   // light engine: one crash -> lightest mode, two -> the note waits for a computer
-const lightest = params.get('light') === '1' || (crashes >= 1 && !safeMode);
+const CRASH_KEY = 'vqpaint.crashes.v2';   // versioned: counters from before the loader fix are ignored
+if (crashedLastTime) localStorage.setItem(CRASH_KEY, String((+localStorage.getItem(CRASH_KEY) || 0) + 1));
+if (params.get('reset') === '1') localStorage.setItem(CRASH_KEY, '0');
+const crashes = +localStorage.getItem(CRASH_KEY) || 0;
+let safeMode = params.get('safe') === '1';   // light engine: a crash -> lightest mode (+ a calm 'try anyway'); waiting for a computer only when even the lightest mode cannot load
+const lightest = params.get('light') === '1' || crashes >= 1;
 sessionStorage.setItem('vqpaint.boot', 'view');
 const lowMem = isPhone || safeMode || params.get('lowmem') === '1';
 let useTiny = params.get('engine') !== 'ort';   // the light engine (tiny decoder + MobileCLIP as WebGL2 shaders, no ONNX Runtime) is the default on every device; ?engine=ort forces the ONNX worker   // release models after every stroke, small caches, 1 wasm thread
@@ -67,10 +68,10 @@ let roomBlank = 0;                // the room's blank token (set by its creator)
 let ready = false, room = null, ep = 'webgpu', decoder = null, clip = null, painter = null, blankToken = 0, layers = null, modelsLoaded = false, mode = 'view';
 const logUrl = params.get('log') === '0' ? null : `${CONFIG.roomsUrl}/room/${roomId}/log`;
 installRemoteLog({ url: logUrl, tag: 'page' }); rlog({ t: 'boot', crashes, lastBoot, lightest, safeMode, lowMem, isPhone });
-let engine = new Engine(), lightCfg = null;                              // the models and the search live in a worker; the page only animates
+let engine = new Engine(), lightCfg = null, brushFailed = false;                              // the models and the search live in a worker; the page only animates
 const deviceMemory = navigator.deviceMemory || 0;         // Chrome/Android: 0.25…8 (power of 2, rounded down); Safari: undefined
 /** can this device paint on its own without risking its memory? phones only with ≥ 8 GB reported (Android) or on iOS in non-safe mode */
-function canPaintHere() { if (forceNoPaint || safeMode || engine.broken) return false; if (useTiny) return true; if (!lowMem) return true; if (!caps.gpu) return false; if (deviceMemory) return deviceMemory >= 8; return isIOS; }
+function canPaintHere() { if (forceNoPaint || safeMode || engine.broken || brushFailed) return false; if (useTiny) return true; if (!lowMem) return true; if (!caps.gpu) return false; if (deviceMemory) return deviceMemory >= 8; return isIOS; }
 const isIOS = /iP(hone|ad|od)/.test(navigator.platform) || (navigator.userAgent.includes('Mac') && navigator.maxTouchPoints > 1);
 let roomSettings = {};                                   // kind (book / meeting / diary / group), title, author, chapters, anon, private
 const tgMode = params.get('tg') === '1';                 // opened inside Telegram's Mini App webview
@@ -786,7 +787,9 @@ function ensureBrush() {
   })().catch((e) => {   // never a pill stuck at a number: hide it, say what happened, and do not count this as a crash
     loading.hide(); sessionStorage.setItem('vqpaint.boot', 'error'); mode = 'view';
     const msg = /WebGL2/i.test(String(e && e.message)) ? t('status.noWebgl') : t('status.brushFailed', { error: String(e && e.message).slice(0, 120) });
-    setStatus(msg, 10000); rlog({ t: 'brush', step: 'failed', error: String(e && e.message).slice(0, 300) }); throw e;
+    setStatus(msg, 10000); rlog({ t: 'brush', step: 'failed', error: String(e && e.message).slice(0, 300) });
+    brushFailed = true; try { toast.message(`${msg}<br><br><button class="pill" data-try>${t('msg.tryAnyway')}</button>`); const m = document.querySelector('[data-message]'); m.querySelector('[data-try]').onclick = () => { m.hidden = true; brushFailed = false; engine.broken = null; ensureBrush().catch(() => {}); }; } catch (_) {}
+    throw e;
   }).finally(() => { ensuring = null; });
   return ensuring;
 }
@@ -829,7 +832,8 @@ async function boot() {
   if (grid && !strokes.length) loading.hide();
   if (!fresh) rememberRoom(roomId, { title: roomSettings.title || '' });
   beacon('view-ready', { ms: stats.loadMs });
-  if (!lowMem && !forceNoPaint && params.get('preload') === '1') await ensureBrush();
+  const conn = navigator.connection || {}; const saveData = !!conn.saveData || /(^|-)2g$/.test(conn.effectiveType || '');
+  if (!forceNoPaint && !safeMode && params.get('preload') !== '0' && !saveData) setTimeout(() => { if (!painter && !ensuring) ensureBrush().catch(() => {}); }, 1200);   // the brush loads in the background so the first stroke starts right away (not on data saver / 2G)
   claimNextRequest();
 }
 /** room settings arrived (state or a change): kind, title, chapters, anonymity, privacy */
