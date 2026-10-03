@@ -93,3 +93,9 @@ Full painting pack = 108 MB (was 204 MB). Realism 0.6 default = 14 s search on d
 - Perf: cached style/rect reads, partial repaints, 15 fps waiting drops; frame + stripe entries in the remote log; `tools/perf_phone.mjs` (4× CPU throttle), `tools/stripe_probe.mjs`, `tools/shots_r10.mjs`.
 - Lab: sliders for min piece, max hole, satellites, satellite min, edge dither width, phone stroke width.
 - Tests: flow (stripe check), phone (bottom sheet, size, stripes), firefox smoke, step1, kinds.
+
+## 2026-10-03 — round 11: viscous ink (metaballs + cellular automaton)
+- Fluid sim removed; lobes drift like a lava lamp, the edge anneals on the cell grid, thick drips, honey spread with overshoot, breathing while written, a pulse per word, a thread toward a dragging finger, deterministic per seed.
+- Lab replaced: viscosity · lobes · drift · smoothing · growth rate · overshoot · breathing · fade · drip (+ size, weirdness, cells per token, phone width, copy settings).
+- Video `app/shots/viscous_phone.webm` (tap → writing → paint → drag), grid `app/shots/ink/grid30.png`; perf numbers in DECISIONS.
+- Tests: flow, phone (stroke ≈ 40 % of the width, bottom sheet, no dash rows), lab 61 fps.

@@ -112,7 +112,7 @@ export function mountCanvas(stageEl, { onTap, onHoldStart, onHold, onHoldEnd, on
     workMs.push(performance.now() - t0); if (workMs.length > 900) workMs.shift();
     if (reveal && lastFrame) reveal.frameTime(now - lastFrame);
     lastFrame = animating ? now : 0;
-    if (animating) { if (reveal && reveal.pendingOnly && !hl && !overlay) requestSlow(); else requestRender(); }
+    if (animating) requestRender();   // the automaton ticks slowly, the fades run every frame: 60 fps while anything is alive (draw work < 1 ms)
   }
   /** the overlay label under a stage point, while the overlay shows */
   const labelAt = (pt) => { if (!overlay) return null; for (const it of overlay.items) if (it.rect && pt.x >= it.rect.x && pt.y >= it.rect.y && pt.x <= it.rect.x + it.rect.w && pt.y <= it.rect.y + it.rect.h) return it.id; return null; };
