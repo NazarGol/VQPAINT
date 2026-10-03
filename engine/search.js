@@ -33,7 +33,7 @@ export class TokenPainter {
    */
   async paint({ grid, mask, target, seconds = 10, margin = 2, batch = 32, seeds = 8, bankTop = 24, sources = 4, patch = 4, growEdge = 0.8, mutation = 0.08, anneal = 0.003, bankPatch = 0.30,
                 temperature = 0.03, topK = 512, blankToken = -1, parent = null, parentMix = 0.5, photo = null, photoMix = 0.6, onProgress, progressEvery = 300, signal,
-                mode = 'token', clipBatch = 4, prefilterTop = 4, poolBudget = 32 * 2 ** 20 }) {
+                mode = 'token', clipBatch = 4, prefilterTop = 4, poolBudget = 32 * 2 ** 20 , ...opts }) {
     if (mode !== 'token' && !this.clip) throw new Error('mode ' + mode + ' needs the CLIP image tower');
     if (mode === 'prefilter' && !this.scorer) mode = 'clip';
     const t0 = performance.now();
@@ -71,6 +71,11 @@ export class TokenPainter {
     };
     const whileHidden = async () => { while (typeof document !== 'undefined' && document.visibilityState === 'hidden' && !(signal && signal.aborted)) await new Promise((r) => setTimeout(r, 250)); };
     const yieldUI = () => new Promise((r) => setTimeout(r, 0));
+    // GPU budget (phones): every evaluation ends in a readback, so its wall time ≈ its GPU time; after each one the engine idles
+    // long enough that it holds the GPU for at most budgetMs out of every frameMs — the page's frames get the rest
+    const pace = opts.pace && opts.pace.budgetMs > 0 ? { budgetMs: opts.pace.budgetMs, frameMs: opts.pace.frameMs || 16.7, chunks: 0, gpuMs: 0, idleMs: 0, maxChunk: 0 } : null;
+    const paced = async (fn) => { if (!pace) return fn(); const t1 = performance.now(); const r = fn(); const g = performance.now() - t1; pace.chunks++; pace.gpuMs += g; pace.maxChunk = Math.max(pace.maxChunk, g);
+      const idle = Math.min(400, g * (pace.frameMs / pace.budgetMs - 1)); if (idle > 1) { pace.idleMs += idle; await new Promise((res) => setTimeout(res, idle)); } return r; };
 
     const mosaic = () => {
       const cand = base.slice(), bw = Math.ceil(region.w / patch), bh = Math.ceil(region.h / patch);
@@ -111,14 +116,17 @@ export class TokenPainter {
     // real CLIP on the tiny decoder's output (rect crop, resized to 256 like the app's full path); tries = real CLIP evaluations
     let clipEvals = 0, tokenEvals = 0;
     const clipScore = (cand) => { const d = this.decoder.decodeToTexture(cand, crop.h, crop.w); this.clip.setInput(d.tex, d.w, d.h); clipEvals++; return this.clip.score()[0]; };
-    const evaluate = (cands) => {   // -> Float32Array of scores for the candidates that were really evaluated, plus their indices
-      if (mode === 'token') { tokenEvals += cands.length; return { idx: cands.map((_, i) => i), scores: scoreBatch(cands) }; }
-      if (mode === 'clip') return { idx: cands.map((_, i) => i), scores: Float32Array.from(cands, clipScore) };
-      const pre = scoreBatch(cands); tokenEvals += cands.length;   // prefilter: top few by the token scorer, real CLIP decides
+    // paced: the decode and the CLIP tower are two GPU chunks (gl.finish makes the decode's wall time its GPU time), each followed by an idle gap
+    const clipScorePaced = async (cand) => { if (!pace) return clipScore(cand); const gl = this.decoder.gl; const d = await paced(() => { const r = this.decoder.decodeToTexture(cand, crop.h, crop.w); gl.finish(); return r; }); return paced(() => { this.clip.setInput(d.tex, d.w, d.h); clipEvals++; return this.clip.score()[0]; }); };
+    const evaluate = async (cands) => {   // -> Float32Array of scores for the candidates that were really evaluated, plus their indices
+      if (mode === 'token') { tokenEvals += cands.length; return { idx: cands.map((_, i) => i), scores: await paced(() => scoreBatch(cands)) }; }
+      if (mode === 'clip') { const scores = new Float32Array(cands.length); for (let i = 0; i < cands.length; i++) scores[i] = await clipScorePaced(cands[i]); return { idx: cands.map((_, i) => i), scores }; }
+      const pre = await paced(() => scoreBatch(cands)); tokenEvals += cands.length;   // prefilter: top few by the token scorer, real CLIP decides
       // slow GPUs (a real-CLIP evaluation over ~120 ms): judge 2 instead of 4 per generation, so the search still moves
       const top = this.clip.stats.lastMs > 120 ? Math.min(2, prefilterTop) : prefilterTop;
       const idx = Array.from(pre.keys()).sort((a, b) => pre[b] - pre[a]).slice(0, Math.min(top, cands.length));
-      return { idx, scores: Float32Array.from(idx, (i) => clipScore(cands[i])) };
+      const scores = new Float32Array(idx.length); for (let j = 0; j < idx.length; j++) scores[j] = await clipScorePaced(cands[idx[j]]);
+      return { idx, scores };
     };
     if (this.scorer) this.scorer.setTargets([target]);
     if (this.clip && mode !== 'token') this.clip.setTargets([target]);
@@ -126,11 +134,11 @@ export class TokenPainter {
     let best = null, bestScore = -Infinity, steps = 0, generations = 0, accepted = 0;
     const nSeeds = mode === 'clip' ? Math.min(seeds, 6) : Math.min(seeds, batch);
     const seedCands = []; for (let k = 0; k < nSeeds; k++) seedCands.push(mosaic());
-    const seedEval = evaluate(seedCands), seedScores = new Float32Array(seedCands.length).fill(-Infinity); seedEval.idx.forEach((i, j) => { seedScores[i] = seedEval.scores[j]; }); steps += seedEval.scores.length;
+    const seedEval = await evaluate(seedCands), seedScores = new Float32Array(seedCands.length).fill(-Infinity); seedEval.idx.forEach((i, j) => { seedScores[i] = seedEval.scores[j]; }); steps += seedEval.scores.length;
     for (let k = 0; k < seedCands.length; k++) if (seedScores[k] > bestScore) { bestScore = seedScores[k]; best = seedCands[k]; }
     const preview = (final = false) => {
       const img = this.decoder.decodeRGBA(best, crop.h, crop.w);
-      const res = { score: bestScore, steps, generations, accepted, elapsed: elapsed(), image: img, crop, tokens: best, changed: changedCells(best), final, mode, clipEvals, tokenEvals };
+      const res = { score: bestScore, steps, generations, accepted, elapsed: elapsed(), image: img, crop, tokens: best, changed: changedCells(best), final, mode, clipEvals, tokenEvals, pace: pace ? { chunks: pace.chunks, gpuMs: Math.round(pace.gpuMs), idleMs: Math.round(pace.idleMs), maxChunk: Math.round(pace.maxChunk), budgetMs: pace.budgetMs } : null };
       onProgress?.(res); return res;
     };
     let lastReport = 0, pausedMs = 0;
@@ -141,7 +149,7 @@ export class TokenPainter {
       const tp = performance.now(); await whileHidden(); pausedMs += performance.now() - tp;
       const progress = Math.min(1, elapsed() / seconds), rate = mutation * (1 - progress) + 0.01;
       for (let b = 0; b < genSize; b++) { const cand = best.slice(); mutate(cand, rate); cands[b] = cand; }
-      const ev = evaluate(cands); steps += ev.scores.length; generations++;
+      const ev = await evaluate(cands); steps += ev.scores.length; generations++;
       let bj = 0; for (let j = 1; j < ev.scores.length; j++) if (ev.scores[j] > ev.scores[bj]) bj = j;
       const bi = ev.idx[bj], sc = ev.scores[bj], temp = anneal * (1 - progress);
       if (sc > bestScore || Math.random() < Math.exp((sc - bestScore) / Math.max(temp, 1e-6))) { if (sc > bestScore) accepted++; best = cands[bi]; bestScore = sc; }
