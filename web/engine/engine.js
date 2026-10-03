@@ -7,6 +7,7 @@ import { ClipVisionGL } from '../lib/clipvision.js';
 import { Palette } from '../lib/palette.js';
 import { Bank } from '../lib/bank.js';
 import { fetchCached } from '../lib/models.js';
+import { TokenPainter } from './search.js';
 
 /** Model fetch that never hangs: tiny files from the mirror (GitHub Pages) first, per-attempt timeout with stall detection,
  *  3 attempts across the URLs, streaming byte progress, Cache Storage when it works (put after the download) and plain memory

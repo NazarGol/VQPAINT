@@ -767,7 +767,7 @@ function ensureBrush() {
   }
   ensuring ||= (async () => {
     mode = 'brush'; sessionStorage.setItem('vqpaint.boot', 'painting');
-    loading.set(t('load.brush', { pct: 0 })); setStage('engine');
+    loading.set(t('load.brush', { pct: 0 })); setStage('engine'); rlog({ t: 'brush', step: 'start', engine: stats.engine, mode: stats.engineMode });
     const initEngine = () => engine.init({ logUrl, modelBase: M, modelFallback: M === CONFIG.modelBase ? CONFIG.modelFallback : null, ortBase: params.get('ort') || CONFIG.ortBase, entry: params.get('entry') || null, lowMem, gpuWanted: caps.gpu, plain, clipCpu, textGpu: params.get('textgpu') === '1', opt: params.get('opt') || null, bankName: /^[a-z_]+$/.test(params.get('bank') || '') ? params.get('bank') : 'bank', blankToken },
       (p) => { if (p.stage === 'download') { stats.cached = p.cached; stats.modelBytes = p.loaded; loading.set(t(p.cached ? 'load.brush' : 'load.brushFirst', { pct: Math.min(99, Math.round(p.loaded / p.total * 100)) })); } else setStage(p.stage); });
     let r;
