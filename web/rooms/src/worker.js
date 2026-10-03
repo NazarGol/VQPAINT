@@ -124,8 +124,13 @@ export default {
       const postOk = m[2].startsWith('preview/') || ['settings', 'snapshot', 'enqueue', 'log'].includes(m[2]);
       if (req.method !== 'GET' && !(req.method === 'POST' && postOk)) return json({ error: 'method not allowed' }, 405);
       const stub = env.ROOMS.get(env.ROOMS.idFromName(m[1]));
+      if (m[2] === 'log' && req.method === 'POST' && env.LOGDIR) {   // also note the session in the global directory (room, time, device line)
+        try { const body = await req.clone().json(); const dev = (Array.isArray(body) ? body : [body]).find((e) => e && e.t === 'device'); const first = (Array.isArray(body) ? body : [body])[0] || {};
+          await env.LOGDIR.get(env.LOGDIR.idFromName('global')).fetch('https://logdir/note', { method: 'POST', body: JSON.stringify({ room: m[1], ts: Date.now(), ua: dev ? String(dev.ua || '').slice(0, 160) : undefined, gl: dev ? String(dev.gl || '').slice(0, 80) : undefined, c: first.c || '' }) }); } catch (_) {}
+      }
       return stub.fetch(req);
     }
+    if (url.pathname === '/logs/recent' && env.LOGDIR) return env.LOGDIR.get(env.LOGDIR.idFromName('global')).fetch(req);
     return json({ error: 'not found' }, 404);
   },
   /** cron: weekly painting posts to Telegram groups (Monday 09:00 UTC) and hourly diary reminders */
@@ -668,5 +673,25 @@ export class TgDirectory {
     if (op === 'set') { const rows = this.sql().exec('SELECT json FROM chats WHERE chat = ?', String(body.chat)).toArray(); const cur = rows.length ? JSON.parse(rows[0].json) : {}; const next = { ...cur, ...body }; this.sql().exec('INSERT OR REPLACE INTO chats (chat, json) VALUES (?, ?)', String(body.chat), JSON.stringify(next)); return json(next); }
     if (op === 'list') return json(this.sql().exec('SELECT json FROM chats').toArray().map((r) => JSON.parse(r.json)));
     return json({ error: 'not found' }, 404);
+  }
+}
+
+/** Global directory of remote-log sessions: the last 2000 (room, time, device) rows, 7 days. GET /logs/recent?n=100 lists them. */
+export class LogDirectory {
+  constructor(ctx, env) { this.ctx = ctx; this.env = env; }
+  sql() { return this.ctx.storage.sql; }
+  async fetch(req) {
+    try { this.sql().exec('CREATE TABLE IF NOT EXISTS sessions (seq INTEGER PRIMARY KEY AUTOINCREMENT, room TEXT, ts INTEGER, ua TEXT, gl TEXT, c TEXT)'); } catch (e) { return json({ error: 'no sql' }, 500); }
+    const url = new URL(req.url);
+    if (req.method === 'POST') {
+      let b; try { b = await req.json(); } catch { return json({ error: 'bad json' }, 400); }
+      const last = this.sql().exec('SELECT ts, ua FROM sessions WHERE room = ? ORDER BY seq DESC LIMIT 1', b.room).toArray()[0];
+      if (!last || b.ua || Date.now() - last.ts > 10 * 60 * 1000) this.sql().exec('INSERT INTO sessions (room, ts, ua, gl, c) VALUES (?, ?, ?, ?, ?)', b.room, b.ts, b.ua || (last && last.ua) || '', b.gl || '', b.c || '');
+      this.sql().exec('DELETE FROM sessions WHERE ts < ?', Date.now() - 7 * 24 * 3600 * 1000);
+      this.sql().exec('DELETE FROM sessions WHERE seq NOT IN (SELECT seq FROM sessions ORDER BY seq DESC LIMIT 2000)');
+      return json({ ok: true });
+    }
+    const n = Math.min(500, Math.max(1, +url.searchParams.get('n') || 100));
+    return json({ sessions: this.sql().exec('SELECT room, ts, ua, gl, c FROM sessions ORDER BY seq DESC LIMIT ?', n).toArray() });
   }
 }
