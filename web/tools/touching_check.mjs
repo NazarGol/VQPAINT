@@ -14,7 +14,7 @@ const runs = +(args.runs || 2);
 for (let run = 0; run < runs; run++) {
   const roomId = 'touch-' + Math.random().toString(36).slice(2, 8);
   const url = `http://127.0.0.1:${server.address().port}/app/room.html?r=${roomId}&ort=/node_modules/onnxruntime-web/dist/&models=pages&name=tester`;
-  const ctx = await browser.newContext(args.device ? { ...devices[args.device] } : { viewport: { width: 1100, height: 760 } }); const P = await ctx.newPage(); P.on('pageerror', (e) => console.log('PAGE ERROR', e.message));
+  const ctx = await browser.newContext(args.device ? { ...devices[args.device] } : { viewport: { width: 1100, height: 760 } }); const P = await ctx.newPage(); P.on('pageerror', (e) => console.log('PAGE ERROR', e.message)); P.on('console', (m) => { if (m.type() === 'warning' || m.type() === 'error') console.log('CONSOLE', m.type(), m.text().slice(0, 300)); });
   await P.goto(url); await P.waitForFunction(() => window.__vqpaint && window.__vqpaint.ready && window.__vqpaint.grid, null, { timeout: 180000 });
   await P.evaluate(() => window.__vqpaint.setEffortSeconds(2));
   const texts = ['the lake was freezing', 'but we swam anyway', 'a kettle on the stove at dawn'];

@@ -86,3 +86,10 @@ Full painting pack = 108 MB (was 204 MB). Realism 0.6 default = 14 s search on d
 - Fixed striped painter layers (cells unpacked at the wrong width) and the waiting drop collapsing under fast typing.
 - Tests: `test_flow` 20/20, `test_phone` Pixel 7 10/10, `firefox_smoke` ok (canvas 1.4 s, stroke via helper 16.2 s), rooms `npm test` 19/19, `test_step1`, `test_kinds --only book`. Tools: `tools/shots_r9.mjs` (phone screenshots + storage bytes), `tools/pending_room_check.mjs` (live-drop size through typing).
 - Shots: `app/shots/r9_*.png` (topbar, menu, save_sheet, options_sheet, note_sheet, zoom_drop_writing, zoom_settled, zoom_touching, highlight, zoom_highlight, all_notes, note_open), video `app/shots/tap_type_paint_phone.webm`.
+
+## 2026-10-03 — round 10: phone feedback (stripes, crumbs, size, lag)
+- Renderer: one GL canvas per frame, per-stroke textures, crop-resolution ink magnified nearest; flash per tick; neighbour rules + edge-only dither; `cleanCells` after the sim; no merge checker.
+- Phone: stroke size from the screen width, bottom-sheet notes above the stroke, forgiving taps.
+- Perf: cached style/rect reads, partial repaints, 15 fps waiting drops; frame + stripe entries in the remote log; `tools/perf_phone.mjs` (4× CPU throttle), `tools/stripe_probe.mjs`, `tools/shots_r10.mjs`.
+- Lab: sliders for min piece, max hole, satellites, satellite min, edge dither width, phone stroke width.
+- Tests: flow (stripe check), phone (bottom sheet, size, stripes), firefox smoke, step1, kinds.

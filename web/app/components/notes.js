@@ -13,6 +13,9 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onInput = n
     if (x + w > W - 8) x = a.left - w - 8;
     if (x < 8) { x = Math.max(8, Math.min(W - w - 8, a.left)); y = a.bottom + 8; }
     if (y + h > H - 8) y = Math.max(8, a.top - h - 8);
+    const hits = x < a.right && x + w > a.left && y < a.bottom && y + h > a.top;   // beside the stroke, never on top of it: slide to the nearest free side
+    if (hits) { const cands = [[a.right + 8, Math.max(8, Math.min(H - h - 8, a.top))], [a.left - w - 8, Math.max(8, Math.min(H - h - 8, a.top))], [Math.max(8, Math.min(W - w - 8, a.left)), a.bottom + 8], [Math.max(8, Math.min(W - w - 8, a.left)), a.top - h - 8]];
+      const ok = cands.find(([cx, cy]) => cx >= 8 && cy >= 8 && cx + w <= W - 8 && cy + h <= H - 8); if (ok) [x, y] = ok; else { const [cx, cy] = cands[2]; x = cx; y = Math.min(H - h - 8, cy); } }
     el.style.left = Math.round(x) + 'px'; el.style.top = Math.round(Math.max(8, y)) + 'px';
   }
   const grow = (ta) => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, innerHeight * 0.4) + 'px'; };
@@ -59,7 +62,7 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onInput = n
     /** open one note; opts.mergeWith: the other note where the tap landed on an overlap ("A × B") */
     open(note, anchor, { mergeWith = null } = {}) {
       api.close();
-      const el = document.createElement('div'); el.className = 'note done open'; el.style.pointerEvents = 'auto';
+      const el = document.createElement('div'); el.className = 'note done open' + (phone ? ' sheet' : ''); el.style.pointerEvents = 'auto';   // phones: a bottom sheet, never over the stroke
       const when = note.time ? new Date(note.time).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) : '';
       const th = threadOf ? threadOf(note) : { parent: null, replies: [] };
       const parentLine = th.parent ? `<div class="meta thread-parent" data-open="${escapeHtml(th.parent.id)}"><span class="dot" style="background:${escapeHtml(th.parent.color || '#888')}"></span>${t('note.inReplyTo', { name: who(th.parent) })} · <span class="quiet">${escapeHtml(brief(th.parent.text, 40))}</span></div>` : '';
@@ -74,12 +77,12 @@ export function mountNotes(stageEl, { anchorFor, onSubmit, onCancel, onInput = n
       if (onReply && !mergeWith) el.querySelector('[data-reply]').onclick = (e) => { e.stopPropagation(); onReply(note); };
       for (const b of el.querySelectorAll('[data-react]')) b.onclick = (e) => { e.stopPropagation(); if (b.disabled) return; b.disabled = true; onReact(note, b.dataset.react); };
       for (const r of el.querySelectorAll('[data-open]')) r.onclick = (e) => { e.stopPropagation(); onOpen?.(r.dataset.open); };
-      layer.appendChild(el); opened = { el, note, anchor }; place(el, anchor);
+      layer.appendChild(el); opened = { el, note, anchor }; if (!phone) place(el, anchor);
       requestAnimationFrame(() => el.classList.add('in'));
     },
     close() { if (opened) { opened.el.remove(); opened = null; } },
     get openedId() { return opened ? opened.note.id : null; },
-    reposition(anchorOf) { if (editing && !phone) { editing.anchor = anchorOf(editing) || editing.anchor; place(editing.el, editing.anchor); } if (opened) { opened.anchor = anchorOf(opened) || opened.anchor; place(opened.el, opened.anchor); } },
+    reposition(anchorOf) { if (editing && !phone) { editing.anchor = anchorOf(editing) || editing.anchor; place(editing.el, editing.anchor); } if (opened && !phone) { opened.anchor = anchorOf(opened) || opened.anchor; place(opened.el, opened.anchor); } },
     get current() { return { editing, opened }; },
   };
   return api;

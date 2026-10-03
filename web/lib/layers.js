@@ -25,8 +25,18 @@ export function unpackCells(b64, n) { const s = atob(b64), bits = new Uint8Array
 /** the stroke's alpha from its note (cells + cpt); merge zones (older strokes underneath) get a 50 % Bayer dither so both show in the shared cells */
 export function noteCellAlpha(note, crop = note.crop) {
   const cpt = note.cpt || 4, cw = crop.w * cpt, ch = crop.h * cpt, bits = unpackCells(note.cells, cw * ch);
-  if (note.merges) for (const m of note.merges) { const z = m._mask || (m._mask = maskFromString(m.cells)); for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) { if (!bits[y * cw + x]) continue; const gx = crop.x + Math.floor(x / cpt), gy = crop.y + Math.floor(y / cpt); if (gx >= z.x && gy >= z.y && gx < z.x + z.w && gy < z.y + z.h && z.cells[(gy - z.y) * z.w + gx - z.x] && ((x + y) & 1)) bits[y * cw + x] = 0; } }
+  if (false && note.merges) for (const m of note.merges) { const z = m._mask || (m._mask = maskFromString(m.cells)); for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) { if (!bits[y * cw + x]) continue; const gx = crop.x + Math.floor(x / cpt), gy = crop.y + Math.floor(y / cpt); if (gx >= z.x && gy >= z.y && gx < z.x + z.w && gy < z.y + z.h && z.cells[(gy - z.y) * z.w + gx - z.x] && ((x + y) & 1)) bits[y * cw + x] = 0; } }
   return cellAlphaImage(bits, cw, ch, F / cpt);
+}
+/**
+ * Rows of white dashes (the stripe bug): runs of ≥ 3 near-white pixels confined to one or two rows (the rows two above and
+ * two below are not white). Returns {rows, dashes}; a clean stroke has rows = 0.
+ */
+export function stripeRows(img) {
+  const { width: W, height: H, data: d } = img, white = (x, y) => { if (x < 0 || y < 0 || x >= W || y >= H) return false; const o = (y * W + x) * 4; return d[o + 3] > 0 && d[o] >= 230 && d[o + 1] >= 230 && d[o + 2] >= 230; };
+  let rows = 0, dashes = 0;
+  for (let y = 0; y < H; y++) { let x = 0, n = 0; while (x < W) { if (!white(x, y)) { x++; continue; } let e = x; while (e < W && white(e, y)) e++; const len = e - x, mid = x + (len >> 1); if (len >= 3 && !white(mid, y - 2) && !white(mid, y + 2)) n++; x = e; } if (n >= 2) { rows++; dashes += n; } }
+  return { rows, dashes };
 }
 /** cells on the outline of a stroke (filled with an empty 4-neighbour), as [cx, cy] in cell units of the crop */
 export function outlineCells(note, crop = note.crop) {
@@ -103,12 +113,12 @@ export class LayerCache {
     for (let i = 3, k = 0; i < px.data.length; i += 4, k += 4) px.data[i] = alpha.data[k];
     c.width = c.height = 0;
     const bitmap = await createImageBitmap(px);
-    const layer = { crop, bitmap, id: note.id, preview: true, pixel: !!note.cells };
+    const layer = { crop, bitmap, id: note.id, preview: true, pixel: !!note.cells, stripes: stripeRows(px) };
     this.map.set(note.id, layer); this.trim();
     return layer;
   }
   /** register a freshly painted stroke from its decoded image (no re-decode) */
-  async fromImage(note, crop, img, alpha) { const bitmap = await createImageBitmap(composeLayer(img, alpha)); const layer = { crop, bitmap, id: note.id, pixel: !!note.cells }; this.map.set(note.id, layer); this.trim(); return layer; }
+  async fromImage(note, crop, img, alpha) { const id2 = composeLayer(img, alpha), bitmap = await createImageBitmap(id2); const layer = { crop, bitmap, id: note.id, pixel: !!note.cells, stripes: stripeRows(id2) }; this.map.set(note.id, layer); this.trim(); return layer; }
   get(id) { return this.map.get(id) || null; }
   drop(id) { const l = this.map.get(id); if (l) { l.bitmap.close?.(); this.map.delete(id); } }
   /** note: {id, crop, tokens (b64), path?, mask}. gridTokens/gridW: fallback source for legacy notes. Returns {crop, bitmap}. */

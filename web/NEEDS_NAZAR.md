@@ -1,9 +1,10 @@
 # Needs Nazar
 
-## 3 quick phone checks (under 2 minutes, any phone)
-1. Open https://nazargol.github.io/VQPAINT/ — tap the canvas, write your name and a note, tap **paint**. The ink should land at once as a small pixel blob, stay while you type, then spread cell by cell and fill with the painting within ~15 s (the phone paints by itself now). A bright 2×2 pixel marks where you tapped.
-2. Rest a finger on the stroke: a 1-pixel outline appears and the rest dims; lift → the note opens. Hold the stroke for a moment: every note shows its outline and first words for 2 s; tap a label to open it.
-3. ⋯ → check it is 8 lines (undo · all notes · invite · my paintings · save… · replay · room options… · language | source) and that **save… → PNG** downloads. Tell me the phone model and anything that stuttered.
+## 3 quick phone checks (under 2 minutes, your Android)
+Open https://nazargol.github.io/VQPAINT/ (a fresh painting), then:
+1. Tap, write a note, tap **paint**: the stroke should be about 40 % of the screen wide, one solid body with bold lobes, no crumbs, no checkerboard, no white dashes while it spreads or after.
+2. Tap the stroke: the note opens as a bottom sheet and the stroke stays visible above it. Tap a second time next to the first stroke and paint: the two should touch without a checker patch.
+3. Pan and pinch for a few seconds, then put the phone down. I read the frame times and the dash-row count from the remote log myself (your session shows up as an Android line in the log directory).
 
 ## Telegram bot (one-time, ~3 minutes)
 1. In Telegram open @BotFather → `/newbot` → name it → copy the token.

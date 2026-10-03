@@ -1,7 +1,7 @@
 // Pixel ink lab: the app's ink with a slider per parameter (cells per token, dither, spread speed, flash, flicker, lobes,
 // tendrils, droplets, weirdness), a seed per stroke, hold for more ink, drag to stir, ×30 grid, circularity, copy settings.
 import { InkGL, InkDrop, DEFAULTS, drawParams, reduceMotion } from '../lib/effects/ink.js';
-import { traceContour } from '../lib/effects/contour.js';
+import { traceContour, cleanCells } from '../lib/effects/contour.js';
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const settings = { ...DEFAULTS };
@@ -14,7 +14,7 @@ let W = 0, H = 0, dpr = 1;
 const TOKEN = 16;   // px per token in the lab (the app's zoom at 16 px per token)
 function resize() { W = innerWidth; H = innerHeight; dpr = Math.min(3, devicePixelRatio || 1); ink.resize(W, H, dpr); baked.width = Math.round(W * dpr); baked.height = Math.round(H * dpr); baked.style.width = W + 'px'; baked.style.height = H + 'px'; fx.style.width = W + 'px'; fx.style.height = H + 'px'; bctx.imageSmoothingEnabled = false; }
 addEventListener('resize', resize); resize();
-const SLIDERS = [['cpt', 'cells per token', 2, 8, 2], ['dither', 'dither', 0, 1, 0.01], ['speed', 'spread speed', 0, 1, 0.01], ['flash', 'flash', 0, 1, 0.01], ['flicker', 'flicker', 0, 1, 0.01], ['size', 'size', 40, 260, 1], ['lobes', 'lobes', 1, 7, 1], ['tendrils', 'tendrils', 0, 1, 0.01], ['satellites', 'droplets', 0, 1, 0.01], ['holes', 'holes', 0, 1, 0.01], ['twin', 'twin + bridge', 0, 1, 0.01], ['stretch', 'stretch', 0, 1, 0.01], ['weird', 'weirdness', 0, 1, 0.01]];
+const SLIDERS = [['cpt', 'cells per token', 2, 8, 2], ['dither', 'dither', 0, 1, 0.01], ['speed', 'spread speed', 0, 1, 0.01], ['flash', 'flash', 0, 1, 0.01], ['flicker', 'flicker', 0, 1, 0.01], ['size', 'size', 40, 260, 1], ['lobes', 'lobes', 1, 7, 1], ['tendrils', 'tendrils', 0, 1, 0.01], ['satellites', 'droplets', 0, 1, 0.01], ['holes', 'holes', 0, 1, 0.01], ['twin', 'twin + bridge', 0, 1, 0.01], ['stretch', 'stretch', 0, 1, 0.01], ['weird', 'weirdness', 0, 1, 0.01], ['minPiece', 'cleanup: min piece (cells)', 0, 60, 1], ['maxHole', 'cleanup: fill holes up to (cells)', 0, 120, 1], ['sats', 'satellites: max count', 0, 6, 1], ['satMin', 'satellites: min size (cells)', 4, 40, 1], ['edgeDither', 'edge dither width (cells)', 0, 2, 1], ['strokePct', 'default stroke width on phone (of screen)', 0.2, 0.7, 0.05]];
 const fmt = (v) => (Number.isInteger(v) ? String(v) : (+v).toFixed(2));
 const json = () => JSON.stringify(settings);
 function save() { try { localStorage.setItem('vqpaint.ink', json()); } catch (_) {} $('json').value = json(); }
@@ -39,6 +39,7 @@ async function measure(n = 50, size = 70) {
   for (let i = 0; i < n; i++) {
     const d = new InkDrop(off, { x: S / 2, y: S / 2, params: { ...settings, size }, grid: N, rect: { x: 0, y: 0, w: S, h: S }, haptics: false }); fastForward(d);
     off.resize(S, S, N / S); off.clear(); d.draw(d.born + 99999, { mode: 2, offset: [0, 0], scissor: false }); const m = off.readMask(); d.free();
+    { const bits = new Uint8Array(N * N); for (let k = 0; k < N * N; k++) bits[k] = m.data[k] >= 0.5 ? 1 : 0; cleanCells(bits, N, N, cleanup()); for (let k = 0; k < N * N; k++) m.data[k] = bits[k]; }   // measured after the cleanup, like the app
     let area = 0; for (let k = 0; k < m.data.length; k++) if (m.data[k] >= 0.5) area++;
     const c = traceContour(m, 1); let per = 0; for (let k = 0; k < c.length; k++) { const a = c[k], b = c[(k + 1) % c.length]; per += Math.hypot(a[0] - b[0], a[1] - b[1]); }
     out.push({ seed: d.seed, tier: d.p.tier, area, per, circ: per > 0 ? 4 * Math.PI * area / (per * per) : 0, json: d.toJSON() });
@@ -54,7 +55,11 @@ fx.addEventListener('pointerdown', (ev) => { if (!ev.isPrimary) return; try { fx
 fx.addEventListener('pointermove', (ev) => { if (!active || !last) return; const dx = ev.clientX - last.x, dy = ev.clientY - last.y; if (Math.hypot(dx, dy) > 2) { active.stir(ev.clientX, ev.clientY, dx, dy); last = { x: ev.clientX, y: ev.clientY, t: performance.now() }; } });
 const up = () => { if (active) { const d = active; d.release(); const wait = Math.max(0, 900 - (performance.now() - last.t)); setTimeout(() => { if (!d.freed) d.burst(); }, wait); active = null; last = null; } };
 fx.addEventListener('pointerup', up); fx.addEventListener('pointercancel', up);
-function bake(d) { ink.clear(); d.draw(performance.now(), { mode: 0, color: d.dye, scissor: true }); bctx.drawImage(ink.canvas, 0, 0, baked.width, baked.height); d.free(); }
+const cleanup = () => ({ minPiece: settings.minPiece, maxHole: settings.maxHole, sats: settings.sats, satMin: settings.satMin });
+/** the settled bitmap after the cleanup (what the app stores), read at one GL px per cell */
+function settledBits(d) { const N = d.grid, r = d.rect; ink.resize(r.w, r.h, N / r.w); ink.clear(); d.draw(performance.now(), { mode: 2, offset: [r.x, r.y], scissor: false }); const m = ink.readMask(); ink.resize(W, H, dpr); const bits = new Uint8Array(N * N); for (let i = 0; i < N * N; i++) bits[i] = m.data[i] >= 0.5 ? 1 : 0; return { bits: cleanCells(bits, N, N, cleanup()), N }; }
+function bake(d) { const { bits, N } = settledBits(d), r = d.rect, cell = r.w / N * dpr; bctx.fillStyle = `rgb(${Math.round(d.dye[0] * 255)},${Math.round(d.dye[1] * 255)},${Math.round(d.dye[2] * 255)})`;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (bits[y * N + x]) bctx.fillRect(Math.round((r.x * dpr) + x * cell), Math.round((r.y * dpr) + y * cell), Math.ceil(cell), Math.ceil(cell)); d.free(); }
 let prev = performance.now(), frames = 0, fpsT = prev; const ft = [];
 function frame(now) {
   requestAnimationFrame(frame);

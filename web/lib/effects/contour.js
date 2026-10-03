@@ -53,3 +53,26 @@ export function blotPath(mask, F, crop, maxPts = 380) {
   while (out.length > maxPts && eps < 12) { eps *= 1.4; out = simplify(pts, eps); }
   return out.map(([x, y]) => [Math.round((crop.x + x / F) * 100) / 100, Math.round((crop.y + y / F) * 100) / 100]);
 }
+
+/**
+ * Clean a cell bitmap after the sim (in place, returns it): keep the main body, keep at most `sats` satellite pieces that
+ * are at least `satMin` cells and 3×3, drop every other piece under `minPiece` cells, fill enclosed holes up to `maxHole` cells.
+ */
+export function cleanCells(bits, cw, ch, { minPiece = 12, maxHole = 24, sats = 3, satMin = 9 } = {}) {
+  const n = cw * ch, label = new Int32Array(n).fill(-1), stack = new Int32Array(n);
+  const flood = (start, val, id) => { let sp = 0, size = 0, x0 = cw, y0 = ch, x1 = -1, y1 = -1, border = false; stack[sp++] = start; label[start] = id;
+    while (sp) { const i = stack[--sp]; size++; const x = i % cw, y = (i / cw) | 0; if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y; if (x === 0 || y === 0 || x === cw - 1 || y === ch - 1) border = true;
+      if (x > 0 && bits[i - 1] === val && label[i - 1] < 0) { label[i - 1] = id; stack[sp++] = i - 1; } if (x < cw - 1 && bits[i + 1] === val && label[i + 1] < 0) { label[i + 1] = id; stack[sp++] = i + 1; }
+      if (y > 0 && bits[i - cw] === val && label[i - cw] < 0) { label[i - cw] = id; stack[sp++] = i - cw; } if (y < ch - 1 && bits[i + cw] === val && label[i + cw] < 0) { label[i + cw] = id; stack[sp++] = i + cw; } }
+    return { id, size, w: x1 - x0 + 1, h: y1 - y0 + 1, border }; };
+  const pieces = []; for (let i = 0; i < n; i++) if (bits[i] && label[i] < 0) pieces.push(flood(i, 1, pieces.length));
+  if (!pieces.length) return bits;
+  pieces.sort((a, b) => b.size - a.size);
+  const keep = new Uint8Array(pieces.length); keep[pieces[0].id] = 1; let kept = 0;   // the main body always stays
+  for (let k = 1; k < pieces.length; k++) { const q = pieces[k]; if (kept < sats && q.size >= Math.max(satMin, minPiece) && q.w >= 3 && q.h >= 3) { keep[q.id] = 1; kept++; } }
+  for (let i = 0; i < n; i++) if (bits[i] && !keep[label[i]]) bits[i] = 0;
+  label.fill(-1); const holes = []; for (let i = 0; i < n; i++) if (!bits[i] && label[i] < 0) holes.push(flood(i, 0, holes.length));
+  const fill = new Uint8Array(holes.length); for (const h of holes) if (!h.border && h.size <= maxHole) fill[h.id] = 1;
+  for (let i = 0; i < n; i++) if (!bits[i] && fill[label[i]]) bits[i] = 1;
+  return bits;
+}

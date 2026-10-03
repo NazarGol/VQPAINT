@@ -10,7 +10,8 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 export function hashText(text) { let h = 0x811c9dc5; const s = String(text || ''); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return h >>> 0; }
 
 // ---- parameters: the sliders of the test page; `weird` shifts the per-stroke draw ----
-export const DEFAULTS = { size: 110, speed: 0.5, viscosity: 0.45, lobes: 3, lobeLength: 0.6, tendrils: 0.6, satellites: 0.5, holes: 0.3, twin: 0.25, stretch: 0.4, roughness: 0.5, weird: 0.5, cpt: 4, dither: 0.6, flash: 0.7, flicker: 0.5 };
+export const DEFAULTS = { size: 110, speed: 0.5, viscosity: 0.45, lobes: 3, lobeLength: 0.6, tendrils: 0.6, satellites: 0.5, holes: 0.3, twin: 0.25, stretch: 0.4, roughness: 0.5, weird: 0.5, cpt: 4, dither: 0.6, flash: 0.7, flicker: 0.5,
+  minPiece: 12, maxHole: 24, sats: 3, satMin: 9, edgeDither: 1, strokePct: 0.4 };   // cleanup after the sim (cells), dither band width (cells), default stroke width on phones (fraction of the screen)
 export const durationFor = (speed) => 0.9 + 11 * Math.pow(1 - clamp(speed, 0, 1), 1.5);
 /** draw one stroke's parameters from its seed around the slider values; ~70% weird, ~25% very weird, ~5% extreme */
 export function drawParams(seed, base = {}) {
@@ -32,7 +33,7 @@ export function drawParams(seed, base = {}) {
   const roughness = clamp(jitter(b.roughness, 0.5) * (0.9 + 0.3 * tier), 0, 1), roughFreq = 2 + 10 * rnd();
   const speed = clamp(jitter(b.speed, 0.3), 0, 1), viscosity = clamp(jitter(b.viscosity, 0.35), 0, 1);
   const swirl = (0.3 + 0.9 * rnd()) * (1 + 0.4 * tier), spin = rnd() < 0.5 ? -1 : 1, lobeAmp = 0.35 + 0.55 * rnd() * (0.7 + 0.3 * tier);
-  return { seed: seed >>> 0, tier, size: b.size * (0.8 + 0.4 * rnd()), cpt: b.cpt, dither: b.dither, flash: b.flash, flicker: b.flicker, lobes, angles, lens, lobeAmp, tend, sats, holes, twin, stretch, stretchA, roughness, roughFreq, speed, viscosity, swirl, spin, fseed: 3 + rnd() * 97, duration: durationFor(speed), lobeLength: clamp(jitter(b.lobeLength, 0.4), 0, 1) };
+  return { seed: seed >>> 0, tier, size: b.size * (0.8 + 0.4 * rnd()), cpt: b.cpt, dither: b.dither, flash: b.flash, flicker: b.flicker, minPiece: b.minPiece, maxHole: b.maxHole, sats: b.sats, satMin: b.satMin, edgeDither: b.edgeDither, lobes, angles, lens, lobeAmp, tend, sats, holes, twin, stretch, stretchA, roughness, roughFreq, speed, viscosity, swirl, spin, fseed: 3 + rnd() * 97, duration: durationFor(speed), lobeLength: clamp(jitter(b.lobeLength, 0.4), 0, 1) };
 }
 
 // ---- shaders (GLSL ES 1.0) ----
@@ -99,8 +100,8 @@ void main(){
 // render: PIXEL INK. The dye field is read at cell centres (cells per token = cpt, the sim grid is the cell grid), every cell
 // is filled or not — no blur, no anti-aliasing. A Bayer dither decides the cells in the band around the threshold, cells at the
 // edge flicker while the drop waits, newly reached cells flash while it spreads, cells dissolve by hash when a note is dropped.
-const FRAG_RENDER = `precision highp float; varying vec2 vUv; uniform sampler2D uDye, uTex; uniform vec2 uRes; uniform vec4 uRect;   // crop px rect of the sim grid (x,y,w,h)
-uniform float uThr, uSeed, uTime, uRipple, uPulse, uClarity, uAlpha, uN, uDither, uFlash, uFlicker, uTick, uDissolve, uPending, uBreath; uniform int uMode, uHoles; uniform vec3 uHolev[4]; uniform vec3 uColor; uniform vec4 uTexRect; uniform vec2 uCenter;
+const FRAG_RENDER = `precision highp float; varying vec2 vUv; uniform sampler2D uDye, uTex, uDyePrev; uniform vec2 uRes; uniform vec4 uRect;   // crop px rect of the sim grid (x,y,w,h)
+uniform float uThr, uSeed, uTime, uRipple, uPulse, uClarity, uAlpha, uN, uDither, uFlash, uFlicker, uTick, uDissolve, uPending, uBreath, uEdgeDither; uniform int uMode, uHoles; uniform vec3 uHolev[4]; uniform vec3 uColor; uniform vec4 uTexRect; uniform vec2 uCenter;
 float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 float bayer2(vec2 p){ p = mod(floor(p), 2.0); return (2.0 * p.x + 3.0 * p.y - 4.0 * p.x * p.y) / 4.0; }
 float bayer4(vec2 p){ return (bayer2(p) * 4.0 + bayer2(floor(p / 2.0))) / 5.0; }
@@ -109,17 +110,24 @@ void main(){
   vec2 g = (px - uRect.xy) / uRect.zw;                  // sim grid uv
   if (g.x < 0.0 || g.y < 0.0 || g.x >= 1.0 || g.y >= 1.0) discard;
   vec2 c = floor(g * uN); vec2 cc = (c + 0.5) / uN;    // the cell and its centre
-  float s = texture2D(uDye, cc).r;
-  for (int i = 0; i < 4; i++) { if (i >= uHoles) break; vec2 d = cc - uHolev[i].xy; s -= 0.9 * exp(-dot(d, d) / (uHolev[i].z * uHolev[i].z)); }
+  float s = texture2D(uDye, cc).r, sp = texture2D(uDyePrev, cc).r;
+  for (int i = 0; i < 4; i++) { if (i >= uHoles) break; vec2 d = cc - uHolev[i].xy; float h = 0.9 * exp(-dot(d, d) / (uHolev[i].z * uHolev[i].z)); s -= h; sp -= h; }
+  vec2 e = vec2(1.0 / uN, 0.0);                          // the four neighbour cells decide what is ink and where the edge is
+  float nL = texture2D(uDye, cc - e.xy).r, nR = texture2D(uDye, cc + e.xy).r, nU = texture2D(uDye, cc - e.yx).r, nD = texture2D(uDye, cc + e.yx).r;
+  float nf = step(uThr, nL) + step(uThr, nR) + step(uThr, nU) + step(uThr, nD);
+  float outer = 1.0 - step(uThr - 0.05, min(min(nL, nR), min(nU, nD)));   // a clearly empty neighbour: this cell is on the outer edge
+  if (uEdgeDither > 1.5) { float m2 = min(min(texture2D(uDye, cc - 2.0 * e.xy).r, texture2D(uDye, cc + 2.0 * e.xy).r), min(texture2D(uDye, cc - 2.0 * e.yx).r, texture2D(uDye, cc + 2.0 * e.yx).r)); outer = max(outer, 1.0 - step(uThr - 0.05, m2)); }
   float band = abs(s - uThr);
-  float thr = uThr + (bayer4(c) - 0.5) * uDither * 0.3;           // ordered dither along the edge
+  float thr = uThr + (bayer4(c) - 0.5) * uDither * 0.3 * (uEdgeDither > 0.5 ? outer : 0.0);   // ordered dither only in the band on the outer edge
   float fill = step(thr, s);
-  if (uPending > 0.5 && band < 0.16 && hash(c + uTick * 0.37 + uSeed) < uFlicker * 0.6) fill = 1.0 - fill;   // waiting: edge cells flicker
+  if (fill > 0.5 && nf < 2.0 && s < uThr + 0.2) fill = 0.0;   // an orphan cell or a checker cell is not ink
+  if (fill < 0.5 && nf >= 4.0) fill = 1.0;                    // a one-cell hole is not a hole
+  if (uPending > 0.5 && band < 0.16 && outer > 0.5 && hash(c + uTick * 0.37 + uSeed) < uFlicker * 0.6) fill = 1.0 - fill;   // waiting: edge cells flicker
   if (uDissolve > 0.0 && hash(c * 1.7 + uSeed) < uDissolve) fill = 0.0;                                      // dropped note: cells go out in steps
   // the impact ripple: a ring of cells, one cell wide, not part of the mask
   vec2 cCenter = floor((uCenter - uRect.xy) / uRect.zw * uN) + 0.5; float rr = (4.0 + 26.0 * (1.0 - pow(1.0 - uRipple, 3.0))) * uN / 108.0;
   float ring = (uRipple >= 0.0 && abs(length(c + 0.5 - cCenter) - rr) < 0.6) ? (1.0 - uRipple) : 0.0;
-  float flash = uBreath * uFlash * step(uThr, s) * (1.0 - smoothstep(0.0, 0.1, s - uThr)) * 0.9 + uPulse * 0.6;   // newly reached cells, and the settle flash
+  float flash = uBreath * uFlash * fill * (1.0 - step(uThr, sp)) * 0.9 + uPulse * 0.6;   // cells reached since the last tick, and the settle flash
   if (uMode == 2) { gl_FragColor = vec4(fill, fill, 0.0, 1.0); return; }
   if (fill < 0.5 && ring <= 0.0) discard;
   if (uMode == 1) { vec2 uv = (px - uTexRect.xy) / uTexRect.zw;
@@ -158,14 +166,16 @@ export class InkGL {
   freeTarget(x) { if (!x) return; this.gl.deleteTexture(x.t); this.gl.deleteFramebuffer(x.fb); }
   resize(w, h, scale = 1) { const c = this.canvas, pw = Math.max(1, Math.round(w * scale)), ph = Math.max(1, Math.round(h * scale)); if (c.width !== pw || c.height !== ph) { c.width = pw; c.height = ph; } this.w = w; this.h = h; this.scale = scale; }
   clear() { const gl = this.gl; gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, this.canvas.width, this.canvas.height); gl.disable(gl.SCISSOR_TEST); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); }
-  setTexture(img) {
-    const gl = this.gl; if (!this.tex) this.tex = gl.createTexture();
-    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.tex);
+  freeTexture(t) { if (t) try { this.gl.deleteTexture(t); } catch (_) {} }
+  /** upload an image into `tex` (created when null) and return it: one texture per live stroke */
+  setTexture(img, tex = null) {
+    const gl = this.gl; if (!tex) tex = gl.createTexture(); this.tex = tex;
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
     const pot = (n) => (n & (n - 1)) === 0;
     if (pot(img.width) && pot(img.height)) { gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); } else gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.activeTexture(gl.TEXTURE0);
+    gl.activeTexture(gl.TEXTURE0); return tex;
   }
   readMask() { const gl = this.gl, W = this.canvas.width, H = this.canvas.height, px = new Uint8Array(W * H * 4); gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px); const out = new Float32Array(W * H); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) out[(H - 1 - y) * W + x] = px[(y * W + x) * 4] / 255; return { data: out, w: W, h: H }; }
   destroy() { try { this.gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch (_) {} }
@@ -181,8 +191,8 @@ export class InkDrop {
     this.x = x; this.y = y;
     const reach = this.p.size * (1.9 + 0.5 * this.p.stretch + (this.p.twin ? this.p.twin.d * 0.5 : 0));
     this.rect = rect || { x: x - reach, y: y - reach, w: reach * 2, h: reach * 2 };
-    this.vel = [ink.makeTarget(grid), ink.makeTarget(grid)]; this.dyeT = [ink.makeTarget(grid), ink.makeTarget(grid)];
-    for (const d of this.dyeT) { this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, d.fb); this.gl.clearColor(0, 0, 0, 1); this.gl.clear(this.gl.COLOR_BUFFER_BIT); }
+    this.vel = [ink.makeTarget(grid), ink.makeTarget(grid)]; this.dyeT = [ink.makeTarget(grid), ink.makeTarget(grid)]; this.prevTick = ink.makeTarget(grid);
+    for (const d of [...this.dyeT, this.prevTick]) { this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, d.fb); this.gl.clearColor(0, 0, 0, 1); this.gl.clear(this.gl.COLOR_BUFFER_BIT); }
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
     this.simT = 0; this.last = now; this.settled = false; this.settledAt = null; this.held = false; this.holdUntil = null; this.finger = null; this.impulses = [];
     this.reduce = reduceMotion(); this.freed = false;
@@ -195,6 +205,8 @@ export class InkDrop {
     this.satState = P.sats.map((s) => ({ ...s, fired: false }));
     if (this.reduce) { for (let i = 0; i < 90; i++) this.step(this.born + (i + 1) * 33, 1 / 30); }   // reduce motion: the final blot, no spreading shown
   }
+  /** keep the dye of this moment: the render flashes the cells that fill between two ticks */
+  snapshotTick() { if (this.freed || !this.prevTick) return; const gl = this.gl, N = this.grid; gl.bindFramebuffer(gl.FRAMEBUFFER, this.dyeT[0].fb); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.prevTick.t); gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, N, N); gl.bindFramebuffer(gl.FRAMEBUFFER, null); }
   age(now) { return (now - this.born) / 1000; }
   progress(now) { return clamp(this.age(now) / this.p.duration, 0, 1); }
   grow(dt, maxSize = Infinity) { this.held = true; this.heldFor = (this.heldFor || 0) + dt; if (this.p.size < maxSize) { this.p.size = Math.min(maxSize, this.p.size * (1 + dt * 0.45)); this.r0 = this.p.size / this.rect.w * 0.55; } }   // hold = more ink and a bigger drop
@@ -241,6 +253,7 @@ export class InkDrop {
       const prog = this.pending ? 0 : this.progress(now), hz = this.pending ? 8 : 20 - 13 * Math.pow(prog, 0.7);
       this.acc = (this.acc || 0) + clamp((now - this.last) / 1000, 0, 0.25); this.last = now;
       if (this.acc < 1 / hz) return false;
+      this.snapshotTick();
       let done = false; const total = this.acc; this.acc = 0; const n = Math.ceil(total / 0.05);
       for (let i = 0; i < n; i++) done = this.step(now, total / n) || done;
       return done;
@@ -288,20 +301,22 @@ export class InkDrop {
     return false;
   }
   /** draw into the InkGL canvas (sized to the space the drop lives in, offset = its origin). mode 0 dye colour, 1 reveal, 2 raw mask */
-  draw(now, { mode = 0, color = [0.84, 0.65, 0.86], alpha = 1, texRect = null, clarity = 1, offset = [0, 0], scissor = true } = {}) {
+  draw(now, { mode = 0, color = [0.84, 0.65, 0.86], alpha = 1, texRect = null, clarity = 1, offset = [0, 0], scissor = true, tex = null } = {}) {
     const gl = this.gl, ink = this.ink, { p, u } = ink.render, k = ink.scale, P = this.p;
     gl.useProgram(p); gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, ink.canvas.width, ink.canvas.height);
     if (scissor) { const x0 = Math.max(0, Math.floor((this.rect.x - offset[0]) * k)), y0 = Math.max(0, Math.floor(ink.canvas.height - (this.rect.y + this.rect.h - offset[1]) * k)), x1 = Math.min(ink.canvas.width, Math.ceil((this.rect.x + this.rect.w - offset[0]) * k)), y1 = Math.min(ink.canvas.height, Math.ceil(ink.canvas.height - (this.rect.y - offset[1]) * k)); if (x1 <= x0 || y1 <= y0) return; gl.enable(gl.SCISSOR_TEST); gl.scissor(x0, y0, x1 - x0, y1 - y0); } else gl.disable(gl.SCISSOR_TEST);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.dyeT[0].t); gl.uniform1i(u.uDye, 0);
-    if (mode === 1 && ink.tex) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, ink.tex); gl.uniform1i(u.uTex, 1); gl.activeTexture(gl.TEXTURE0); }
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, (this.prevTick || this.dyeT[1]).t); gl.uniform1i(u.uDyePrev, 2);
+    const theTex = tex || ink.tex; if (mode === 1 && theTex) { gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, theTex); gl.uniform1i(u.uTex, 1); }
+    gl.activeTexture(gl.TEXTURE0);
     gl.uniform2f(u.uRes, ink.canvas.width, ink.canvas.height);
     gl.uniform4f(u.uRect, (this.rect.x - offset[0]) * k, (this.rect.y - offset[1]) * k, this.rect.w * k, this.rect.h * k);
     const t = this.age(now), pulse = this.settled ? Math.max(0, 1 - (now - this.settledAt) / 420) : 0;
     this.ripples = this.ripples.filter((r) => now - r.t < 500);
     const rip = this.ripples.length ? this.ripples[this.ripples.length - 1] : null;
     gl.uniform1f(u.uThr, 0.42); gl.uniform1f(u.uSeed, P.fseed); gl.uniform1f(u.uTime, t); gl.uniform1f(u.uN, this.grid);
-    gl.uniform1f(u.uDither, P.dither ?? 0.6); gl.uniform1f(u.uFlash, P.flash ?? 0.7); gl.uniform1f(u.uFlicker, P.flicker ?? 0.5); gl.uniform1f(u.uTick, Math.floor(now / 125));
+    gl.uniform1f(u.uDither, P.dither ?? 0.6); gl.uniform1f(u.uFlash, P.flash ?? 0.7); gl.uniform1f(u.uFlicker, P.flicker ?? 0.5); gl.uniform1f(u.uTick, Math.floor(now / 125) % 4096); gl.uniform1f(u.uEdgeDither, P.edgeDither ?? 1);
     gl.uniform1f(u.uDissolve, this.dissolve || 0); gl.uniform1f(u.uPending, this.pending ? 1 : 0); gl.uniform1f(u.uBreath, this.settled || this.pending ? 0 : 1);
     gl.uniform1f(u.uRipple, this.reduce ? -1 : rip ? (now - rip.t) / 500 : (t < 0.5 && !this.settled ? t / 0.5 : -1)); gl.uniform1f(u.uPulse, pulse); gl.uniform1f(u.uClarity, clarity); gl.uniform1f(u.uAlpha, alpha); gl.uniform1i(u.uMode, mode);
     gl.uniform1i(u.uHoles, P.holes.length); P.holes.forEach((h, i) => gl.uniform3f(u[`uHolev[${i}]`], this.c0[0] + h.x * this.r0 * 2.4, this.c0[1] + h.y * this.r0 * 2.4, h.r * this.r0 * 1.6));
@@ -311,11 +326,11 @@ export class InkDrop {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.disable(gl.BLEND); gl.disable(gl.SCISSOR_TEST);
   }
-  free() { if (this.freed) return; this.freed = true; for (const x of [...this.vel, ...this.dyeT]) this.ink.freeTarget(x); }
+  free() { if (this.freed) return; this.freed = true; for (const x of [...this.vel, ...this.dyeT, this.prevTick]) this.ink.freeTarget(x); this.prevTick = null; }
   /** after a WebGL context restore: new textures, the sim replayed to where it was (capped at 3 s of steps) */
   rebuild(now = performance.now()) {
     if (this.freed) return;
-    const ink = this.ink; this.vel = [ink.makeTarget(this.grid), ink.makeTarget(this.grid)]; this.dyeT = [ink.makeTarget(this.grid), ink.makeTarget(this.grid)];
+    const ink = this.ink; this.vel = [ink.makeTarget(this.grid), ink.makeTarget(this.grid)]; this.dyeT = [ink.makeTarget(this.grid), ink.makeTarget(this.grid)]; this.prevTick = ink.makeTarget(this.grid);
     for (const d of this.dyeT) { this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, d.fb); this.gl.clearColor(0, 0, 0, 1); this.gl.clear(this.gl.COLOR_BUFFER_BIT); } this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
     const age = Math.min(this.age(now), this.settled ? this.p.duration + 0.5 : 3), steps = Math.ceil(age * 30), wasSettled = this.settled; this.settled = false; this.born = now - age * 1000; this.last = this.born; for (const s of this.satState) s.fired = false;
     for (let i = 0; i < steps; i++) this.step(this.born + (i + 1) * 33.4, 1 / 30);
